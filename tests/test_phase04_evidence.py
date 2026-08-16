@@ -261,5 +261,10 @@ def test_sqlite_guards_keep_frozen_versions_evidence_and_accepted_claim_text_imm
                 "UPDATE claims SET proposition = 'changed' WHERE id = ?",
                 (claim_id,),
             )
+        with pytest.raises(sqlite3.IntegrityError, match="claim acceptance is immutable"):
+            conn.execute(
+                "UPDATE claims SET accepted_at = NULL WHERE id = ?",
+                (claim_id,),
+            )
     finally:
         conn.close()

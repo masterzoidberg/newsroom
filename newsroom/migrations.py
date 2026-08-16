@@ -564,6 +564,22 @@ MIGRATION_0003_CHECKSUM = hashlib.sha256(
     "\n".join(MIGRATION_0003_STATEMENTS).encode("utf-8")
 ).hexdigest()
 
+MIGRATION_0004_STATEMENTS: tuple[str, ...] = (
+    """
+    CREATE TRIGGER claims_acceptance_immutable
+    BEFORE UPDATE OF accepted_at ON claims
+    WHEN OLD.accepted_at IS NOT NULL
+         AND NEW.accepted_at IS NOT OLD.accepted_at
+    BEGIN
+        SELECT RAISE(ABORT, 'claim acceptance is immutable');
+    END
+    """,
+)
+
+MIGRATION_0004_CHECKSUM = hashlib.sha256(
+    "\n".join(MIGRATION_0004_STATEMENTS).encode("utf-8")
+).hexdigest()
+
 
 @dataclass(frozen=True)
 class MigrationResult:
@@ -610,6 +626,7 @@ def apply_migrations(db_path: Optional[str | Path] = None) -> MigrationResult:
                 1: MIGRATION_0001_STATEMENTS,
                 2: MIGRATION_0002_STATEMENTS,
                 3: MIGRATION_0003_STATEMENTS,
+                4: MIGRATION_0004_STATEMENTS,
             }
             for version, statements in migrations.items():
                 if version in existing:
