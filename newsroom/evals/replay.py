@@ -20,13 +20,17 @@ from dataclasses import dataclass, asdict
 from typing import Any, Optional
 
 from . import SCHEMA_VERSION
-from .schema import ValidationError, canonical_json, content_hash
+from .schema import (
+    ValidationError,
+    content_hash,
+    validate_id,
+    validate_timestamp,
+    validate_url,
+)
+from . import CONTENT_TYPES
 from ..url_norm import normalize_url, parse_url
 from ..similarity import normalize_headline
 from ..event_sig import normalize_event_signature, fallback_event_key
-
-CONTENT_TYPES: frozenset[str] = frozenset({"metadata", "excerpt", "full_text"})
-
 
 @dataclass(frozen=True)
 class NormalizedCandidate:
@@ -75,15 +79,13 @@ def _document_hash(doc: dict) -> str:
 
 
 def _normalize_document(doc: dict, index: int) -> NormalizedCandidate:
-    candidate_id = doc.get("candidate_id")
-    if not isinstance(candidate_id, str) or not candidate_id:
-        raise ValidationError(f"documents[{index}].candidate_id must be non-empty")
-    url = doc.get("canonical_url")
-    if not isinstance(url, str) or not url:
-        raise ValidationError(f"documents[{index}].canonical_url must be non-empty")
+    if not isinstance(doc, dict):
+        raise ValidationError(f"documents[{index}] must be an object")
+    candidate_id = validate_id(doc.get("candidate_id"), f"documents[{index}].candidate_id")
+    url = validate_url(doc.get("canonical_url"), f"documents[{index}].canonical_url")
     title = doc.get("title")
-    if not isinstance(title, str):
-        raise ValidationError(f"documents[{index}].title must be a string")
+    if not isinstance(title, str) or not title.strip():
+        raise ValidationError(f"documents[{index}].title must be a non-empty string")
 
     content_type = doc.get("content_type", "metadata")
     if content_type not in CONTENT_TYPES:
@@ -94,6 +96,15 @@ def _normalize_document(doc: dict, index: int) -> NormalizedCandidate:
         normalized_url = normalize_url(url)
     except ValueError as exc:
         raise ValidationError(f"documents[{index}].canonical_url invalid: {exc}") from exc
+
+    for field_name in ("source", "publisher", "excerpt"):
+        value = doc.get(field_name)
+        if value is not None and not isinstance(value, str):
+            raise ValidationError(f"documents[{index}].{field_name} must be a string or null")
+    for field_name in ("published_at", "retrieved_at"):
+        validate_timestamp(doc.get(field_name), f"documents[{index}].{field_name}")
+    if "proposed_event_key" in doc and doc["proposed_event_key"] is not None and not isinstance(doc["proposed_event_key"], str):
+        raise ValidationError(f"documents[{index}].proposed_event_key must be a string or null")
 
     nh = normalize_headline(title)
     event_key = normalize_event_signature(doc.get("proposed_event_key")) or fallback_event_key(nh)
@@ -108,10 +119,10 @@ def _normalize_document(doc: dict, index: int) -> NormalizedCandidate:
         normalized_headline=nh,
         event_key=event_key,
         publisher=doc.get("publisher") if isinstance(doc.get("publisher"), str) else None,
-        published_at=doc.get("published_at") if isinstance(doc.get("published_at"), str) else None,
-        retrieved_at=doc.get("retrieved_at") if isinstance(doc.get("retrieved_at"), str) else None,
+        published_at=doc.get("published_at"),
+        retrieved_at=doc.get("retrieved_at"),
         content_type=content_type,
-        excerpt=doc.get("excerpt") if isinstance(doc.get("excerpt"), str) else None,
+        excerpt=doc.get("excerpt"),
         content_hash=_document_hash(doc),
     )
 
@@ -129,9 +140,17 @@ def validate_fixture(data: dict) -> ReplayResult:
             f"unsupported fixture schema_version {data.get('schema_version')!r}"
         )
 
-    case_id = data.get("case_id")
-    if not isinstance(case_id, str) or not case_id:
-        raise ValidationError("fixture.case_id must be non-empty")
+    fixture_id = validate_id(data.get("fixture_id"), "fixture_id")
+    case_id = validate_id(data.get("case_id"), "fixture.case_id")
+
+    channel = data.get("channel")
+    if not isinstance(channel, str) or not channel.strip():
+        raise ValidationError("fixture.channel must be a non-empty string")
+    if "captured_at" not in data:
+        raise ValidationError("fixture.captured_at is required")
+    captured_at = validate_timestamp(data.get("captured_at"), "fixture.captured_at")
+    if captured_at is None:
+        raise ValidationError("fixture.captured_at must be a UTC timestamp")
 
     documents_raw = data.get("documents")
     if not isinstance(documents_raw, list) or not documents_raw:
@@ -141,6 +160,8 @@ def validate_fixture(data: dict) -> ReplayResult:
     stored_hash = data.get("content_hash")
     if not isinstance(stored_hash, str) or not stored_hash:
         raise ValidationError("fixture.content_hash must be present")
+    if len(stored_hash) != 64 or any(c not in "0123456789abcdef" for c in stored_hash):
+        raise ValidationError("fixture.content_hash must be a lowercase SHA-256 hex digest")
     computed = content_hash(documents_raw)
     if computed != stored_hash:
         raise ValidationError(
@@ -155,13 +176,19 @@ def validate_fixture(data: dict) -> ReplayResult:
 
     replay_hash = content_hash([asdict(d) for d in docs])
 
-    query = data.get("query") or {}
+    query = data.get("query")
+    if not isinstance(query, dict):
+        raise ValidationError("fixture.query must be an object")
+    if any(not isinstance(key, str) or not key.strip() for key in query):
+        raise ValidationError("fixture.query keys must be non-empty strings")
+    if any(not isinstance(value, str) for value in query.values()):
+        raise ValidationError("fixture.query values must be strings")
     return ReplayResult(
-        fixture_id=data.get("fixture_id", ""),
+        fixture_id=fixture_id,
         case_id=case_id,
-        channel=data.get("channel", "simulated"),
-        query={k: v for k, v in query.items() if isinstance(v, str)},
-        captured_at=data.get("captured_at", ""),
+        channel=channel,
+        query=dict(query),
+        captured_at=captured_at,
         documents=docs,
         replay_hash=replay_hash,
     )

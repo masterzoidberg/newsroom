@@ -92,6 +92,13 @@ Then:
 - `duplicate_rate` = fraction of gold events covered by more than one predicted
   story (per-event duplication measure)
 - `f1 = 2·precision·recall / (precision + recall)`
+- `candidate_coverage` = predicted candidate documents covered by at least one
+  predicted Story / all case candidates. Pairwise precision and recall are
+  multiplied by this coverage so empty or partial predictions cannot receive a
+  perfect event score.
+- `important_story_recall` = important gold Events covered by at least one
+  predicted candidate / important gold Events. A gold Event is important when
+  it has at least one `major` gold Claim.
 
 Vacuous-truth: when no merges are predicted (or expected), precision/recall are
 1.0 — there are no merge errors. This makes "keep N distinct events separate"
@@ -105,6 +112,9 @@ whitespace collapse). `important` = `importance == "major"`.
 - `important_claim_recall` = matched important gold claims / important gold claims
 - `all_claim_recall` = matched gold claims / all gold claims
 - `claim_precision` = matched predicted claims / predicted claims
+- Claim matches require both the normalized proposition and the correct gold
+  Event. `expected_state_accuracy` measures the fraction of matched Claims
+  whose predicted state equals the gold `expected_state`.
 
 ### Evidence metrics
 
@@ -115,8 +125,10 @@ whitespace collapse). `important` = `importance == "major"`.
   contradiction is detected when a predicted contradiction links the matched
   claim to the contradicting evidence's candidate).
 - `unsupported_proposition_rate` = fraction of synthesized propositions whose
-  `claim_ids` do not reference any predicted claim. This is the Phase-0
-  measurable proxy for the closed-world synthesis invariant.
+  `claim_ids` do not reference only accepted predicted Claims. Accepted states
+  for this metric are `supported` and `partially_supported`; pending,
+  disputed, unsubstantiated, and superseded Claims do not ground synthesis.
+  This is the Phase-0 measurable proxy for the closed-world synthesis invariant.
 
 ### Primary source
 
@@ -155,10 +167,16 @@ Guarantees (each covered by a test):
   patches `socket.create_connection`/`socket.socket.connect` to raise, and replay
   still completes;
 - **invalid data** — wrong schema version, empty documents, duplicate candidate
-  ids, and bad URLs all fail with a precise `ValidationError`.
+  ids, malformed timestamps, invalid content types, and bad URLs all fail with
+  a precise `ValidationError`. Case and prediction boundaries likewise reject
+  invalid IDs, references, enums, duplicate assignments, and negative usage.
 
 Replay is provider-neutral: evaluation code consumes the normalized form, not a
 provider's raw response.
+
+URL identity is scheme-, hostname-, and non-default-port-aware. HTTP(S) URLs
+without a host are rejected before they can enter a case, fixture, or dedupe
+decision.
 
 ## 5. v1 baseline
 

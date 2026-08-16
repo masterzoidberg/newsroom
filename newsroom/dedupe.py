@@ -29,6 +29,7 @@ from .similarity import (
     is_merge_candidate,
     is_moderate,
 )
+from .url_norm import normalize_url
 
 
 # Stage-1: existing source canonical_url hit returns this flag.
@@ -137,11 +138,19 @@ def _stage1_url_identity(
     candidates: list[CandidateStory],
 ) -> Optional[str]:
     """Stage 1: exact canonical URL identity. Returns the matching story_id."""
-    new_canon = {s["canonical_url"] for s in new_sources}
+    new_canon = {
+        normalize_url(s["canonical_url"])
+        for s in new_sources
+        if isinstance(s, dict) and isinstance(s.get("canonical_url"), str)
+    }
+    hits = []
     for c in candidates:
-        if c.source_canonical_urls & new_canon:
-            return c.id
-    return None
+        candidate_urls = {
+            normalize_url(url) for url in c.source_canonical_urls
+        }
+        if candidate_urls & new_canon:
+            hits.append(c.id)
+    return min(hits) if hits else None
 
 
 def _stage2_3_4_headline_merge(
@@ -158,6 +167,7 @@ def _stage2_3_4_headline_merge(
     Returns the candidate to merge into, or None to create a new story.
     """
     new_topic_set = set(new_topic_ids)
+    eligible: list[tuple[CandidateStory, tuple[float, ...]]] = []
     for c in candidates:
         # Stage 2: topic overlap.
         if not (new_topic_set & set(c.topic_ids)):
@@ -170,7 +180,20 @@ def _stage2_3_4_headline_merge(
         sim: HeadlineSimilarity = headline_similarity(new_headline, c.headline)
         # Stage 4: VERY_HIGH is sufficient on its own.
         if is_merge_candidate(sim):
-            return c
+            eligible.append(
+                (
+                    c,
+                    (
+                        2.0,
+                        sim.headline_sim,
+                        sim.jaccard,
+                        sim.overlap,
+                        sim.seqmatch,
+                        0.0,
+                    ),
+                )
+            )
+            continue
         # MODERATE requires event-signature corroboration.
         if is_moderate(sim):
             sig_eq = event_keys_match(new_event_signature, c.event_key)
@@ -178,9 +201,34 @@ def _stage2_3_4_headline_merge(
                 new_event_signature, c.event_key
             )
             if sig_eq or sig_overlap >= 0.5:
-                return c
+                eligible.append(
+                    (
+                        c,
+                        (
+                            1.0,
+                            sim.headline_sim,
+                            sim.jaccard,
+                            sim.overlap,
+                            sim.seqmatch,
+                            1.0 if sig_eq else sig_overlap,
+                        ),
+                    )
+                )
         # Entity-only / topic-only overlap is NEVER sufficient.
-    return None
+    if not eligible:
+        return None
+    eligible.sort(
+        key=lambda item: (
+            -item[1][0],
+            -item[1][1],
+            -item[1][2],
+            -item[1][3],
+            -item[1][4],
+            -item[1][5],
+            item[0].id,
+        )
+    )
+    return eligible[0][0]
 
 
 def merge_decision(

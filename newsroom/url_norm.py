@@ -143,12 +143,19 @@ def normalize_url(
         return raw
 
     # Host: lowercase, strip leading www.
-    host = (parsed.hostname or "").lower()
+    try:
+        host = (parsed.hostname or "").lower()
+        port = parsed.port
+    except ValueError as exc:
+        raise ValueError(f"invalid URL host or port: {exc}") from exc
+    if not host:
+        raise ValueError("HTTP(S) URL must include a host")
+    if any(ch.isspace() for ch in host):
+        raise ValueError("HTTP(S) URL host must not contain whitespace")
     if host.startswith("www."):
         host = host[4:]
 
     # Port: drop if default for the scheme.
-    port = parsed.port
     if port is not None and port == _DEFAULT_PORT.get(scheme):
         port = None
     netloc = host if port is None else f"{host}:{port}"
@@ -175,7 +182,7 @@ def url_fingerprint(url: str, *, tracking: Iterable[str] | None = None) -> str:
     """
     canonical = normalize_url(url, tracking=tracking)
     parsed = urlparse(canonical)
-    basis = f"{parsed.hostname}|{parsed.path}|{parsed.query}"
+    basis = f"{parsed.scheme}|{parsed.hostname}|{parsed.port or ''}|{parsed.path}|{parsed.query}"
     return hashlib.sha256(basis.encode("utf-8")).hexdigest()[:16]
 
 

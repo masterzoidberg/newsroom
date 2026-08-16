@@ -72,6 +72,8 @@ EVIDENCE_RELATIONSHIPS: frozenset[str] = frozenset(
 
 IMPORTANCES: frozenset[str] = frozenset({"major", "relevant", "peripheral"})
 
+CONTENT_TYPES: frozenset[str] = frozenset({"metadata", "excerpt", "full_text"})
+
 MONITOR_TARGET_KINDS: frozenset[str] = frozenset(
     {"topic", "subject", "story", "source", "research_question"}
 )

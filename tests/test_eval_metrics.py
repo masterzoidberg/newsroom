@@ -206,7 +206,7 @@ def test_unsupported_proposition_rate():
     pred = _pred(
         [{"story_id": "s1", "candidate_ids": ["a", "b"]}],
         claims=[
-            {"claim_id": "p1", "story_id": "s1", "text": "X", "importance": "major"},
+            {"claim_id": "p1", "story_id": "s1", "text": "X", "importance": "major", "state": "supported"},
         ],
         synthesized_propositions=[
             {"text": "supported proposition", "claim_ids": ["p1"]},

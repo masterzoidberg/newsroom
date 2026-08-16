@@ -10,12 +10,14 @@ false-merge and false-split symmetric and independent of story identity strings.
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from itertools import combinations
-from typing import Iterable, Optional
+from typing import Optional
 
-from .schema import EvaluationCase, content_hash
-from .prediction import Prediction, PredictedClaim
+from .schema import EvaluationCase
+from .prediction import Prediction, prediction_to_dict, validate_prediction
+
+ACCEPTED_CLAIM_STATES: frozenset[str] = frozenset({"supported", "partially_supported"})
 
 
 def normalize_text(text: str) -> str:
@@ -74,6 +76,10 @@ class EventMetrics:
     duplicate_rate: float
     gold_event_count: int
     predicted_story_count: int
+    candidate_coverage: float
+    important_story_recall: float
+    important_story_count: int
+    covered_important_story_count: int
 
 
 def event_metrics(case: EvaluationCase, pred: Prediction) -> EventMetrics:
@@ -91,10 +97,21 @@ def event_metrics(case: EvaluationCase, pred: Prediction) -> EventMetrics:
     gold_diff = all_pairs - gold_same
     gold_same_total = len(gold_same)
 
-    # Vacuous truth: when no merges are predicted (or expected), there are no
-    # merge errors, so precision/recall are 1.0 rather than undefined/0.0.
+    predicted_candidate_ids = {
+        cid for group in pred.story_groups for cid in group.candidate_ids
+    }
+    candidate_coverage = (
+        len(predicted_candidate_ids & candidate_ids) / len(candidate_ids)
+        if candidate_ids else 0.0
+    )
+
+    # Pairwise metrics are vacuously perfect only when the prediction also
+    # covers every candidate. This prevents empty or partial output from
+    # scoring as a perfect "all singleton events" solution.
     precision = len(tp) / len(pred_same) if pred_same else 1.0
     recall = len(tp) / gold_same_total if gold_same_total else 1.0
+    precision *= candidate_coverage
+    recall *= candidate_coverage
     f1 = (2 * precision * recall / (precision + recall)) if (precision + recall) else 0.0
 
     false_merge_rate = len(fp) / len(gold_diff) if gold_diff else 0.0
@@ -102,7 +119,6 @@ def event_metrics(case: EvaluationCase, pred: Prediction) -> EventMetrics:
 
     # Per-event duplicate: a gold event is "duplicated" if more than one
     # predicted story contains >=1 of its candidates.
-    gold_map = _gold_same_map(case)
     pred_map = _pred_same_map(pred)
     duplicated = 0
     for group in case.gold_groups:
@@ -110,6 +126,23 @@ def event_metrics(case: EvaluationCase, pred: Prediction) -> EventMetrics:
         if len(story_ids) > 1:
             duplicated += 1
     duplicate_rate = duplicated / len(case.gold_groups) if case.gold_groups else 0.0
+
+    important_event_ids = {
+        claim.event_id for claim in case.gold_claims if claim.importance == "major"
+    }
+    covered_important = sum(
+        1
+        for event_id in important_event_ids
+        if any(
+            cid in predicted_candidate_ids
+            for group in case.gold_groups
+            if group.event_id == event_id
+            for cid in group.candidate_ids
+        )
+    )
+    important_story_recall = (
+        covered_important / len(important_event_ids) if important_event_ids else 0.0
+    )
 
     return EventMetrics(
         precision=precision,
@@ -122,6 +155,10 @@ def event_metrics(case: EvaluationCase, pred: Prediction) -> EventMetrics:
         duplicate_rate=duplicate_rate,
         gold_event_count=len(case.gold_groups),
         predicted_story_count=len(pred.story_groups),
+        candidate_coverage=candidate_coverage,
+        important_story_recall=important_story_recall,
+        important_story_count=len(important_event_ids),
+        covered_important_story_count=covered_important,
     )
 
 
@@ -136,9 +173,24 @@ def _match_claims(case: EvaluationCase, pred: Prediction) -> tuple[dict[str, Opt
     Returns (gold_claim_id -> matched predicted claim_id or None,
              predicted_claim_id -> matched gold claim_id or None).
     """
-    gold_by_norm: dict[str, str] = {}
+    gold_event_by_candidate = {
+        candidate_id: group.event_id
+        for group in case.gold_groups
+        for candidate_id in group.candidate_ids
+    }
+    pred_events_by_story: dict[str, set[str]] = {}
+    for group in pred.story_groups:
+        pred_events_by_story[group.story_id] = {
+            gold_event_by_candidate[candidate_id]
+            for candidate_id in group.candidate_ids
+            if candidate_id in gold_event_by_candidate
+        }
+
+    gold_by_event_norm: dict[tuple[str, str], list[str]] = {}
     for gc in case.gold_claims:
-        gold_by_norm.setdefault(normalize_text(gc.proposition), gc.claim_id)
+        gold_by_event_norm.setdefault(
+            (gc.event_id, normalize_text(gc.proposition)), []
+        ).append(gc.claim_id)
 
     gold_to_pred: dict[str, Optional[str]] = {}
     pred_to_gold: dict[str, Optional[str]] = {}
@@ -146,8 +198,17 @@ def _match_claims(case: EvaluationCase, pred: Prediction) -> tuple[dict[str, Opt
     used_gold: set[str] = set()
     for pc in pred.claims:
         norm = normalize_text(pc.text)
-        gold_id = gold_by_norm.get(norm)
-        if gold_id is not None and gold_id not in used_gold:
+        event_ids = pred_events_by_story.get(pc.story_id, set())
+        gold_ids = (
+            gold_by_event_norm.get((next(iter(event_ids)), norm), [])
+            if len(event_ids) == 1
+            else []
+        )
+        gold_id = next(
+            (candidate for candidate in gold_ids if candidate not in used_gold),
+            None,
+        )
+        if gold_id is not None:
             pred_to_gold[pc.claim_id] = gold_id
             gold_to_pred[gold_id] = pc.claim_id
             used_gold.add(gold_id)
@@ -168,6 +229,9 @@ class ClaimMetrics:
     important_gold_count: int
     gold_claim_count: int
     predicted_claim_count: int
+    expected_state_accuracy: float
+    expected_state_match_count: int
+    matched_claim_count: int
 
 
 def claim_metrics(case: EvaluationCase, pred: Prediction) -> ClaimMetrics:
@@ -184,6 +248,19 @@ def claim_metrics(case: EvaluationCase, pred: Prediction) -> ClaimMetrics:
         if pred.claims
         else 0.0
     )
+    matched_claim_count = sum(1 for gid in pred_to_gold.values() if gid is not None)
+    expected_state_match_count = sum(
+        1
+        for pc in pred.claims
+        if (gold_id := pred_to_gold.get(pc.claim_id)) is not None
+        and pc.state
+        == next(
+            gc.expected_state for gc in case.gold_claims if gc.claim_id == gold_id
+        )
+    )
+    expected_state_accuracy = (
+        expected_state_match_count / matched_claim_count if matched_claim_count else 0.0
+    )
 
     return ClaimMetrics(
         important_claim_recall=important_recall,
@@ -192,6 +269,9 @@ def claim_metrics(case: EvaluationCase, pred: Prediction) -> ClaimMetrics:
         important_gold_count=len(important),
         gold_claim_count=len(case.gold_claims),
         predicted_claim_count=len(pred.claims),
+        expected_state_accuracy=expected_state_accuracy,
+        expected_state_match_count=expected_state_match_count,
+        matched_claim_count=matched_claim_count,
     )
 
 
@@ -275,10 +355,14 @@ def evidence_metrics(case: EvaluationCase, pred: Prediction) -> EvidenceMetrics:
     )
 
     # Unsupported synthesized proposition rate.
-    valid_claim_ids = {pc.claim_id for pc in pred.claims}
+    accepted_claim_ids = {
+        pc.claim_id for pc in pred.claims if pc.state in ACCEPTED_CLAIM_STATES
+    }
     propositions = pred.synthesized_propositions
     unsupported = sum(
-        1 for p in propositions if not any(cid in valid_claim_ids for cid in p.claim_ids)
+        1
+        for p in propositions
+        if not p.claim_ids or not set(p.claim_ids) <= accepted_claim_ids
     )
     unsupported_rate = unsupported / len(propositions) if propositions else 0.0
 
@@ -393,6 +477,10 @@ class ScoreResult:
                 "duplicate_rate": round(self.event.duplicate_rate, 4),
                 "gold_event_count": self.event.gold_event_count,
                 "predicted_story_count": self.event.predicted_story_count,
+                "candidate_coverage": round(self.event.candidate_coverage, 4),
+                "important_story_recall": round(self.event.important_story_recall, 4),
+                "important_story_count": self.event.important_story_count,
+                "covered_important_story_count": self.event.covered_important_story_count,
             },
             "claim": {
                 "important_claim_recall": round(self.claim.important_claim_recall, 4),
@@ -401,6 +489,9 @@ class ScoreResult:
                 "important_gold_count": self.claim.important_gold_count,
                 "gold_claim_count": self.claim.gold_claim_count,
                 "predicted_claim_count": self.claim.predicted_claim_count,
+                "expected_state_accuracy": round(self.claim.expected_state_accuracy, 4),
+                "expected_state_match_count": self.claim.expected_state_match_count,
+                "matched_claim_count": self.claim.matched_claim_count,
             },
             "evidence": {
                 "citation_correctness": round(self.evidence.citation_correctness, 4),
@@ -434,6 +525,9 @@ class ScoreResult:
 
 def score(case: EvaluationCase, pred: Prediction) -> ScoreResult:
     """Score one prediction against one gold case."""
+    # Dataclasses can be constructed directly by callers, so enforce the same
+    # contract here as the JSON boundary before scoring references or coverage.
+    validate_prediction(prediction_to_dict(pred), case=case)
     return ScoreResult(
         case_id=case.case_id,
         system=pred.system,

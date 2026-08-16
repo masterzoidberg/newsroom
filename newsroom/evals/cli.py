@@ -108,7 +108,7 @@ def _score_case(case_id: str, prediction_file: str, as_json: bool) -> int:
     preds = data.get("predictions", [data]) if isinstance(data, dict) else data
     results: list[ScoreResult] = []
     for raw in preds:
-        pred = validate_prediction(raw)
+        pred = validate_prediction(raw, case=case)
         if pred.case_id != case_id:
             continue
         results.append(score(case, pred))
@@ -123,9 +123,12 @@ def _score_case(case_id: str, prediction_file: str, as_json: bool) -> int:
         for r in results:
             print(f"system {r.system}:")
             print(f"  event.precision={r.event.precision:.3f} recall={r.event.recall:.3f} "
+                  f"coverage={r.event.candidate_coverage:.3f} "
+                  f"important_story_recall={r.event.important_story_recall:.3f} "
                   f"false_merge={r.event.false_merge_count} false_split={r.event.false_split_count}")
             print(f"  claim.important_recall={r.claim.important_claim_recall:.3f} "
-                  f"precision={r.claim.claim_precision:.3f}")
+                  f"precision={r.claim.claim_precision:.3f} "
+                  f"expected_state_accuracy={r.claim.expected_state_accuracy:.3f}")
             print(f"  evidence.citation_correctness={r.evidence.citation_correctness:.3f} "
                   f"coverage={r.evidence.evidence_coverage:.3f} "
                   f"contradiction={r.evidence.contradiction_detection:.3f}")
