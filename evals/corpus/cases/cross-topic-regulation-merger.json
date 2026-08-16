@@ -1,0 +1,73 @@
+{
+  "schema_version": 1,
+  "case_id": "cross-topic-regulation-merger",
+  "title": "Merger with a regulatory angle spans two topics",
+  "description": "A merger story that is also a regulation story.",
+  "case_type": "cross_topic",
+  "monitored_targets": [
+    {
+      "kind": "topic",
+      "ref": "mergers"
+    },
+    {
+      "kind": "topic",
+      "ref": "regulation"
+    }
+  ],
+  "observation_window": {
+    "start": null,
+    "end": null
+  },
+  "provenance": {
+    "source": "synthetic",
+    "note": "Synthetic edge case using reserved .test domains. Entities and facts are fictional; designed from real-world failure modes observed during v1 review (rumor/confirmation, corrections, false merges, mutating pages). Not real reporting."
+  },
+  "reviewer_notes": "",
+  "candidates": [
+    {
+      "candidate_id": "merger-reg",
+      "canonical_url": "https://outlet-c.test/news/merger-regulators",
+      "title": "Acme merger draws regulator scrutiny",
+      "source": "web",
+      "publisher": "Outlet C",
+      "published_at": "2026-08-13T15:00:00Z",
+      "retrieved_at": "2026-08-13T16:00:00Z",
+      "content_type": "metadata",
+      "excerpt": "The Acme-Globex merger drew scrutiny from regulators.",
+      "notes": null,
+      "content_hash": "31233dd15c8d9b2a58bd0454ef8335d91bfda89cd023a531ddfe58e29976f125"
+    }
+  ],
+  "gold_groups": [
+    {
+      "event_id": "evt-merger-reg",
+      "candidate_ids": [
+        "merger-reg"
+      ]
+    }
+  ],
+  "gold_claims": [
+    {
+      "claim_id": "cl-scrutiny",
+      "event_id": "evt-merger-reg",
+      "proposition": "The Acme-Globex merger drew regulator scrutiny.",
+      "importance": "major",
+      "expected_state": "supported"
+    }
+  ],
+  "gold_evidence": [
+    {
+      "evidence_id": "ev-scrutiny",
+      "claim_id": "cl-scrutiny",
+      "candidate_id": "merger-reg",
+      "excerpt": "The Acme-Globex merger drew scrutiny from regulators.",
+      "relationship": "supports"
+    }
+  ],
+  "expected_primary_sources": [
+    "merger-reg"
+  ],
+  "noise_candidates": [],
+  "contradictions": [],
+  "material_changes": []
+}

@@ -1,0 +1,107 @@
+{
+  "schema_version": 1,
+  "case_id": "rumor-confirmed-merger",
+  "title": "Merger rumor later confirmed by official announcement",
+  "description": "A rumor blog reports merger talks; days later both companies confirm. The confirmed claim supersedes the rumor claim.",
+  "case_type": "rumor_confirmed",
+  "monitored_targets": [
+    {
+      "kind": "topic",
+      "ref": "demo"
+    }
+  ],
+  "observation_window": {
+    "start": null,
+    "end": null
+  },
+  "provenance": {
+    "source": "synthetic",
+    "note": "Synthetic edge case using reserved .test domains. Entities and facts are fictional; designed from real-world failure modes observed during v1 review (rumor/confirmation, corrections, false merges, mutating pages). Not real reporting."
+  },
+  "reviewer_notes": "",
+  "candidates": [
+    {
+      "candidate_id": "rumor-merger",
+      "canonical_url": "https://rumor-blog.test/2026/08/10/acme-globex-talks",
+      "title": "Sources: Acme and Globex in merger talks",
+      "source": "web",
+      "publisher": "Rumor Blog",
+      "published_at": "2026-08-10T09:00:00Z",
+      "retrieved_at": "2026-08-10T10:00:00Z",
+      "content_type": "metadata",
+      "excerpt": "People familiar say Acme and Globex are in merger talks.",
+      "notes": null,
+      "content_hash": "9c7e5dc566d272f419de72dac889ecfe4c17ba237fa788e0514896cece8fd487"
+    },
+    {
+      "candidate_id": "acme-confirm",
+      "canonical_url": "https://corp-official.test/press/2026/08/15/merger",
+      "title": "Acme and Globex announce merger agreement",
+      "source": "official",
+      "publisher": "Acme Corp",
+      "published_at": "2026-08-15T13:00:00Z",
+      "retrieved_at": "2026-08-15T14:00:00Z",
+      "content_type": "metadata",
+      "excerpt": "Acme and Globex announced a definitive merger agreement.",
+      "notes": null,
+      "content_hash": "a8379427ea96892f6d28e3955ee41d16a85f73cc37bac9927e8743670c9a110f"
+    }
+  ],
+  "gold_groups": [
+    {
+      "event_id": "evt-merger",
+      "candidate_ids": [
+        "rumor-merger",
+        "acme-confirm"
+      ],
+      "rationale": "Rumor and confirmation are the same event."
+    }
+  ],
+  "gold_claims": [
+    {
+      "claim_id": "cl-merger-talks",
+      "event_id": "evt-merger",
+      "proposition": "Acme and Globex were in merger talks.",
+      "importance": "relevant",
+      "expected_state": "superseded"
+    },
+    {
+      "claim_id": "cl-merger-confirmed",
+      "event_id": "evt-merger",
+      "proposition": "Acme and Globex announced a definitive merger agreement.",
+      "importance": "major",
+      "expected_state": "supported",
+      "supersedes_claim_id": "cl-merger-talks"
+    }
+  ],
+  "gold_evidence": [
+    {
+      "evidence_id": "ev-rumor",
+      "claim_id": "cl-merger-talks",
+      "candidate_id": "rumor-merger",
+      "excerpt": "People familiar say Acme and Globex are in merger talks.",
+      "relationship": "supports"
+    },
+    {
+      "evidence_id": "ev-confirm",
+      "claim_id": "cl-merger-confirmed",
+      "candidate_id": "acme-confirm",
+      "excerpt": "Acme and Globex announced a definitive merger agreement.",
+      "relationship": "supports"
+    }
+  ],
+  "expected_primary_sources": [
+    "acme-confirm"
+  ],
+  "noise_candidates": [],
+  "contradictions": [],
+  "material_changes": [
+    {
+      "event_id": "evt-merger",
+      "claim_id": "cl-merger-confirmed",
+      "description": "Rumor claim superseded by confirmed agreement.",
+      "from_state": "unsubstantiated",
+      "to_state": "supported"
+    }
+  ]
+}

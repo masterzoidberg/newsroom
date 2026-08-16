@@ -1,0 +1,106 @@
+{
+  "schema_version": 1,
+  "case_id": "correction-health-case-count",
+  "title": "Health agency corrects a case count",
+  "description": "An agency first reports a case count, then revises it downward in a correction.",
+  "case_type": "official_correction",
+  "monitored_targets": [
+    {
+      "kind": "topic",
+      "ref": "demo"
+    }
+  ],
+  "observation_window": {
+    "start": null,
+    "end": null
+  },
+  "provenance": {
+    "source": "synthetic",
+    "note": "Synthetic edge case using reserved .test domains. Entities and facts are fictional; designed from real-world failure modes observed during v1 review (rumor/confirmation, corrections, false merges, mutating pages). Not real reporting."
+  },
+  "reviewer_notes": "",
+  "candidates": [
+    {
+      "candidate_id": "gov-cases",
+      "canonical_url": "https://gov.test/agency/press/2026/08/12/cases",
+      "title": "Agency reports 500 cases in outbreak",
+      "source": "official",
+      "publisher": "Gov Agency",
+      "published_at": "2026-08-12T16:00:00Z",
+      "retrieved_at": "2026-08-12T17:00:00Z",
+      "content_type": "metadata",
+      "excerpt": "The agency reported 500 confirmed cases.",
+      "notes": null,
+      "content_hash": "34c5789052f192095cc119f17432e70858a46b4b4a45a1fa836f0cd92d7dcda4"
+    },
+    {
+      "candidate_id": "gov-correction",
+      "canonical_url": "https://gov.test/agency/press/2026/08/13/correction",
+      "title": "Agency corrects outbreak count to 480",
+      "source": "official",
+      "publisher": "Gov Agency",
+      "published_at": "2026-08-13T09:00:00Z",
+      "retrieved_at": "2026-08-13T10:00:00Z",
+      "content_type": "metadata",
+      "excerpt": "The agency corrected the confirmed case count to 480, attributing the difference to a duplicate-counting error.",
+      "notes": null,
+      "content_hash": "ceecb49ee41fd52026a34a2e789aa097530d49e1a09a60c77c6e82ac1f11b475"
+    }
+  ],
+  "gold_groups": [
+    {
+      "event_id": "evt-cases",
+      "candidate_ids": [
+        "gov-cases",
+        "gov-correction"
+      ]
+    }
+  ],
+  "gold_claims": [
+    {
+      "claim_id": "cl-500",
+      "event_id": "evt-cases",
+      "proposition": "The outbreak had 500 confirmed cases.",
+      "importance": "major",
+      "expected_state": "superseded"
+    },
+    {
+      "claim_id": "cl-480",
+      "event_id": "evt-cases",
+      "proposition": "The outbreak had 480 confirmed cases.",
+      "importance": "major",
+      "expected_state": "supported",
+      "supersedes_claim_id": "cl-500"
+    }
+  ],
+  "gold_evidence": [
+    {
+      "evidence_id": "ev-500",
+      "claim_id": "cl-500",
+      "candidate_id": "gov-cases",
+      "excerpt": "The agency reported 500 confirmed cases.",
+      "relationship": "supports"
+    },
+    {
+      "evidence_id": "ev-480",
+      "claim_id": "cl-480",
+      "candidate_id": "gov-correction",
+      "excerpt": "The agency corrected the confirmed case count to 480, attributing the difference to a duplicate-counting error.",
+      "relationship": "supports"
+    }
+  ],
+  "expected_primary_sources": [
+    "gov-correction"
+  ],
+  "noise_candidates": [],
+  "contradictions": [],
+  "material_changes": [
+    {
+      "event_id": "evt-cases",
+      "claim_id": "cl-480",
+      "description": "Agency correction lowers the count.",
+      "from_state": "supported",
+      "to_state": "superseded"
+    }
+  ]
+}

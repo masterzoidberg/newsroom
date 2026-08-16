@@ -1,0 +1,26 @@
+{
+  "schema_version": 1,
+  "fixture_id": "3200fffa9071015c171e0db43470d9174df91deeed4149d5642ac978445350ba",
+  "case_id": "low-quality-noise-aggregator",
+  "channel": "simulated_search",
+  "query": {
+    "text": "low-quality-noise-aggregator",
+    "topic_ref": "demo"
+  },
+  "captured_at": "2026-08-15T00:00:00Z",
+  "documents": [
+    {
+      "candidate_id": "aggro",
+      "canonical_url": "https://aggro.test/roundup",
+      "title": "Daily roundup: 10 things in tech",
+      "source": "web",
+      "publisher": "Aggro",
+      "published_at": "2026-08-15T08:00:00Z",
+      "retrieved_at": "2026-08-15T09:00:00Z",
+      "content_type": "metadata",
+      "excerpt": "Ten unrelated tech items, including a phone launch and a merger rumor.",
+      "proposed_event_key": "daily-roundup"
+    }
+  ],
+  "content_hash": "3200fffa9071015c171e0db43470d9174df91deeed4149d5642ac978445350ba"
+}

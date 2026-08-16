@@ -1,0 +1,38 @@
+{
+  "schema_version": 1,
+  "fixture_id": "5e002b3d89ca5a9bbb72281c216d717b2438d30c4364ef4a49560aadca543b7e",
+  "case_id": "conflicting-attribution",
+  "channel": "simulated_search",
+  "query": {
+    "text": "conflicting-attribution",
+    "topic_ref": "demo"
+  },
+  "captured_at": "2026-08-15T00:00:00Z",
+  "documents": [
+    {
+      "candidate_id": "outlet-a-attr",
+      "canonical_url": "https://outlet-a.test/news/attr",
+      "title": "Group X claims responsibility",
+      "source": "web",
+      "publisher": "Outlet A",
+      "published_at": "2026-08-13T20:00:00Z",
+      "retrieved_at": "2026-08-13T21:00:00Z",
+      "content_type": "metadata",
+      "excerpt": "Group X claimed responsibility for the incident.",
+      "proposed_event_key": "incident-attribution"
+    },
+    {
+      "candidate_id": "outlet-b-attr",
+      "canonical_url": "https://outlet-b.test/news/attr",
+      "title": "Officials blame Group Y",
+      "source": "web",
+      "publisher": "Outlet B",
+      "published_at": "2026-08-13T20:30:00Z",
+      "retrieved_at": "2026-08-13T21:30:00Z",
+      "content_type": "metadata",
+      "excerpt": "Officials blamed Group Y for the incident.",
+      "proposed_event_key": "incident-attribution"
+    }
+  ],
+  "content_hash": "5e002b3d89ca5a9bbb72281c216d717b2438d30c4364ef4a49560aadca543b7e"
+}

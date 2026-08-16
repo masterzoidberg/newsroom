@@ -1,0 +1,98 @@
+{
+  "schema_version": 1,
+  "case_id": "developing-story-outage",
+  "title": "Major cloud outage develops over several hours",
+  "description": "A breaking outage: first report says 'partial outage', a later report confirms full outage and resolution. Same event, evolving.",
+  "case_type": "developing_story",
+  "monitored_targets": [
+    {
+      "kind": "topic",
+      "ref": "demo"
+    }
+  ],
+  "observation_window": {
+    "start": null,
+    "end": null
+  },
+  "provenance": {
+    "source": "synthetic",
+    "note": "Synthetic edge case using reserved .test domains. Entities and facts are fictional; designed from real-world failure modes observed during v1 review (rumor/confirmation, corrections, false merges, mutating pages). Not real reporting."
+  },
+  "reviewer_notes": "",
+  "candidates": [
+    {
+      "candidate_id": "outlet-a-t0",
+      "canonical_url": "https://outlet-a.test/news/outage-t0",
+      "title": "Cloud provider reports partial outage",
+      "source": "web",
+      "publisher": "Outlet A",
+      "published_at": "2026-08-14T08:30:00Z",
+      "retrieved_at": "2026-08-14T09:00:00Z",
+      "content_type": "metadata",
+      "excerpt": "The provider reported a partial outage affecting some regions.",
+      "notes": null,
+      "content_hash": "70614bf987603c034a5a81185759f53dcca8a84ff889aade76e69418b615bb08"
+    },
+    {
+      "candidate_id": "outlet-a-t1",
+      "canonical_url": "https://outlet-a.test/news/outage-t1",
+      "title": "Cloud outage expands, then resolves",
+      "source": "web",
+      "publisher": "Outlet A",
+      "published_at": "2026-08-14T12:00:00Z",
+      "retrieved_at": "2026-08-14T12:30:00Z",
+      "content_type": "metadata",
+      "excerpt": "The outage expanded to all regions before being resolved at 11:40 UTC.",
+      "notes": null,
+      "content_hash": "589bc26bdbbd102548f08026040098b51e924a2977d74e68af4cc5678fb3b45d"
+    }
+  ],
+  "gold_groups": [
+    {
+      "event_id": "evt-outage",
+      "candidate_ids": [
+        "outlet-a-t0",
+        "outlet-a-t1"
+      ],
+      "rationale": "Two updates to the same outage event."
+    }
+  ],
+  "gold_claims": [
+    {
+      "claim_id": "cl-outage-full",
+      "event_id": "evt-outage",
+      "proposition": "The outage expanded to all regions.",
+      "importance": "relevant",
+      "expected_state": "supported"
+    },
+    {
+      "claim_id": "cl-outage-resolved",
+      "event_id": "evt-outage",
+      "proposition": "The outage was resolved by 11:40 UTC on August 14.",
+      "importance": "major",
+      "expected_state": "supported"
+    }
+  ],
+  "gold_evidence": [
+    {
+      "evidence_id": "ev-outage-expand",
+      "claim_id": "cl-outage-full",
+      "candidate_id": "outlet-a-t1",
+      "excerpt": "The outage expanded to all regions before being resolved at 11:40 UTC.",
+      "relationship": "supports"
+    },
+    {
+      "evidence_id": "ev-outage-resolved",
+      "claim_id": "cl-outage-resolved",
+      "candidate_id": "outlet-a-t1",
+      "excerpt": "resolved at 11:40 UTC.",
+      "relationship": "supports"
+    }
+  ],
+  "expected_primary_sources": [
+    "outlet-a-t0"
+  ],
+  "noise_candidates": [],
+  "contradictions": [],
+  "material_changes": []
+}

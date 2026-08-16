@@ -1,0 +1,83 @@
+{
+  "schema_version": 1,
+  "case_id": "rumor-confirmed-product",
+  "title": "Leak about a new device later confirmed at a launch event",
+  "description": "A supply-chain leak is later confirmed by the official reveal.",
+  "case_type": "rumor_confirmed",
+  "monitored_targets": [
+    {
+      "kind": "topic",
+      "ref": "demo"
+    }
+  ],
+  "observation_window": {
+    "start": null,
+    "end": null
+  },
+  "provenance": {
+    "source": "synthetic",
+    "note": "Synthetic edge case using reserved .test domains. Entities and facts are fictional; designed from real-world failure modes observed during v1 review (rumor/confirmation, corrections, false merges, mutating pages). Not real reporting."
+  },
+  "reviewer_notes": "",
+  "candidates": [
+    {
+      "candidate_id": "leak",
+      "canonical_url": "https://outlet-c.test/news/leak-device",
+      "title": "Supply chain leak reveals Acme phone details",
+      "source": "web",
+      "publisher": "Outlet C",
+      "published_at": "2026-08-05T08:00:00Z",
+      "retrieved_at": "2026-08-05T09:00:00Z",
+      "content_type": "metadata",
+      "excerpt": "A supply chain leak suggests the Acme phone has a 5,000 mAh battery.",
+      "notes": null,
+      "content_hash": "d0d7752c5ae4f273ced99574ceaefa64e0c22aefd4fa1da765227af5ae6cd5d1"
+    },
+    {
+      "candidate_id": "official-reveal",
+      "canonical_url": "https://corp-official.test/press/2026/08/20/phone",
+      "title": "Acme unveils phone with 5,000 mAh battery",
+      "source": "official",
+      "publisher": "Acme Corp",
+      "published_at": "2026-08-20T16:00:00Z",
+      "retrieved_at": "2026-08-20T17:00:00Z",
+      "content_type": "metadata",
+      "excerpt": "Acme officially unveiled its phone with a 5,000 mAh battery.",
+      "notes": null,
+      "content_hash": "230c55d9c6ed8f37043accad94ff6c2c656948bb973ff38c0004c47fe754f382"
+    }
+  ],
+  "gold_groups": [
+    {
+      "event_id": "evt-phone",
+      "candidate_ids": [
+        "leak",
+        "official-reveal"
+      ]
+    }
+  ],
+  "gold_claims": [
+    {
+      "claim_id": "cl-phone-battery",
+      "event_id": "evt-phone",
+      "proposition": "The Acme phone has a 5,000 mAh battery.",
+      "importance": "major",
+      "expected_state": "supported"
+    }
+  ],
+  "gold_evidence": [
+    {
+      "evidence_id": "ev-official-battery",
+      "claim_id": "cl-phone-battery",
+      "candidate_id": "official-reveal",
+      "excerpt": "Acme officially unveiled its phone with a 5,000 mAh battery.",
+      "relationship": "supports"
+    }
+  ],
+  "expected_primary_sources": [
+    "official-reveal"
+  ],
+  "noise_candidates": [],
+  "contradictions": [],
+  "material_changes": []
+}

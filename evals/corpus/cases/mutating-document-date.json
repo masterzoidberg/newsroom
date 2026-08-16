@@ -1,0 +1,84 @@
+{
+  "schema_version": 1,
+  "case_id": "mutating-document-date",
+  "title": "A page silently changes its published timestamp",
+  "description": "A document's published_at changes between retrievals without the URL changing. Provenance must preserve the original retrieval facts.",
+  "case_type": "mutating_document",
+  "monitored_targets": [
+    {
+      "kind": "topic",
+      "ref": "demo"
+    }
+  ],
+  "observation_window": {
+    "start": null,
+    "end": null
+  },
+  "provenance": {
+    "source": "synthetic",
+    "note": "Synthetic edge case using reserved .test domains. Entities and facts are fictional; designed from real-world failure modes observed during v1 review (rumor/confirmation, corrections, false merges, mutating pages). Not real reporting."
+  },
+  "reviewer_notes": "",
+  "candidates": [
+    {
+      "candidate_id": "d1",
+      "canonical_url": "https://outlet-b.test/news/dated",
+      "title": "Acme announces hiring spree",
+      "source": "web",
+      "publisher": "Outlet B",
+      "published_at": "2026-08-14T09:00:00Z",
+      "retrieved_at": "2026-08-14T10:00:00Z",
+      "content_type": "metadata",
+      "excerpt": "Acme announced a hiring spree of 200 roles.",
+      "notes": null,
+      "content_hash": "99e7dbbe4e191b00fe18dd5c14c460b18ff6a8a936ddf0ced0758c06b79f9be9"
+    },
+    {
+      "candidate_id": "d2",
+      "canonical_url": "https://outlet-b.test/news/dated",
+      "title": "Acme announces hiring spree",
+      "source": "web",
+      "publisher": "Outlet B",
+      "published_at": "2026-08-15T09:00:00Z",
+      "retrieved_at": "2026-08-15T10:00:00Z",
+      "content_type": "metadata",
+      "excerpt": "Acme announced a hiring spree of 200 roles.",
+      "notes": null,
+      "content_hash": "1706fd1d4b9fcea182eacc10152512f7ae4f637d00a8d7eb0a7c1da87da7fae9"
+    }
+  ],
+  "gold_groups": [
+    {
+      "event_id": "evt-dated",
+      "candidate_ids": [
+        "d1",
+        "d2"
+      ],
+      "rationale": "Same document; published_at mutated silently."
+    }
+  ],
+  "gold_claims": [
+    {
+      "claim_id": "cl-hiring",
+      "event_id": "evt-dated",
+      "proposition": "Acme announced a hiring spree of 200 roles.",
+      "importance": "relevant",
+      "expected_state": "supported"
+    }
+  ],
+  "gold_evidence": [
+    {
+      "evidence_id": "ev-d1",
+      "claim_id": "cl-hiring",
+      "candidate_id": "d1",
+      "excerpt": "Acme announced a hiring spree of 200 roles.",
+      "relationship": "supports"
+    }
+  ],
+  "expected_primary_sources": [
+    "d1"
+  ],
+  "noise_candidates": [],
+  "contradictions": [],
+  "material_changes": []
+}

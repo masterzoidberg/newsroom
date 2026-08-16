@@ -1,0 +1,38 @@
+{
+  "schema_version": 1,
+  "fixture_id": "c55753089c5271b57309ddbbdc1a88fd0a6367c1ba9a90b54fd4b8295fc751fd",
+  "case_id": "ambiguous-merge-same-subject",
+  "channel": "simulated_search",
+  "query": {
+    "text": "ambiguous-merge-same-subject",
+    "topic_ref": "demo"
+  },
+  "captured_at": "2026-08-15T00:00:00Z",
+  "documents": [
+    {
+      "candidate_id": "round-a",
+      "canonical_url": "https://outlet-a.test/news/funding-round-a",
+      "title": "Acme raises $10M Series A",
+      "source": "web",
+      "publisher": "Outlet A",
+      "published_at": "2026-03-01T12:00:00Z",
+      "retrieved_at": "2026-03-01T13:00:00Z",
+      "content_type": "metadata",
+      "excerpt": "Acme raised a $10 million Series A.",
+      "proposed_event_key": "acme-series-a"
+    },
+    {
+      "candidate_id": "round-b",
+      "canonical_url": "https://outlet-a.test/news/funding-round-b",
+      "title": "Acme raises $50M Series B",
+      "source": "web",
+      "publisher": "Outlet A",
+      "published_at": "2026-08-14T12:00:00Z",
+      "retrieved_at": "2026-08-14T13:00:00Z",
+      "content_type": "metadata",
+      "excerpt": "Acme raised a $50 million Series B.",
+      "proposed_event_key": "acme-series-b"
+    }
+  ],
+  "content_hash": "c55753089c5271b57309ddbbdc1a88fd0a6367c1ba9a90b54fd4b8295fc751fd"
+}

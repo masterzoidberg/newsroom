@@ -1,0 +1,87 @@
+{
+  "schema_version": 1,
+  "case_id": "cross-topic-ai-energy",
+  "title": "AI data-center buildout drives energy demand",
+  "description": "A story spanning the 'AI' and 'Energy' topics: a new AI data center and its power agreement.",
+  "case_type": "cross_topic",
+  "monitored_targets": [
+    {
+      "kind": "topic",
+      "ref": "ai"
+    },
+    {
+      "kind": "topic",
+      "ref": "energy"
+    }
+  ],
+  "observation_window": {
+    "start": null,
+    "end": null
+  },
+  "provenance": {
+    "source": "synthetic",
+    "note": "Synthetic edge case using reserved .test domains. Entities and facts are fictional; designed from real-world failure modes observed during v1 review (rumor/confirmation, corrections, false merges, mutating pages). Not real reporting."
+  },
+  "reviewer_notes": "",
+  "candidates": [
+    {
+      "candidate_id": "ai-energy",
+      "canonical_url": "https://outlet-a.test/news/ai-datacenter",
+      "title": "Acme announces AI data center with solar agreement",
+      "source": "web",
+      "publisher": "Outlet A",
+      "published_at": "2026-08-14T09:00:00Z",
+      "retrieved_at": "2026-08-14T10:00:00Z",
+      "content_type": "metadata",
+      "excerpt": "Acme announced an AI data center powered by a new 200 MW solar agreement.",
+      "notes": null,
+      "content_hash": "fd3a65310fb9b3755ebd8dfdde03a077b33030f5c9dc23013fe0c417d4242843"
+    }
+  ],
+  "gold_groups": [
+    {
+      "event_id": "evt-ai-energy",
+      "candidate_ids": [
+        "ai-energy"
+      ]
+    }
+  ],
+  "gold_claims": [
+    {
+      "claim_id": "cl-datacenter",
+      "event_id": "evt-ai-energy",
+      "proposition": "Acme announced an AI data center.",
+      "importance": "major",
+      "expected_state": "supported"
+    },
+    {
+      "claim_id": "cl-solar",
+      "event_id": "evt-ai-energy",
+      "proposition": "The data center is powered by a 200 MW solar agreement.",
+      "importance": "relevant",
+      "expected_state": "supported"
+    }
+  ],
+  "gold_evidence": [
+    {
+      "evidence_id": "ev-dc",
+      "claim_id": "cl-datacenter",
+      "candidate_id": "ai-energy",
+      "excerpt": "Acme announced an AI data center powered by a new 200 MW solar agreement.",
+      "relationship": "supports"
+    },
+    {
+      "evidence_id": "ev-solar",
+      "claim_id": "cl-solar",
+      "candidate_id": "ai-energy",
+      "excerpt": "powered by a new 200 MW solar agreement",
+      "relationship": "supports"
+    }
+  ],
+  "expected_primary_sources": [
+    "ai-energy"
+  ],
+  "noise_candidates": [],
+  "contradictions": [],
+  "material_changes": []
+}

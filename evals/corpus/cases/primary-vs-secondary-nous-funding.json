@@ -1,0 +1,73 @@
+{
+  "schema_version": 1,
+  "case_id": "primary-vs-secondary-nous-funding",
+  "title": "Nous Research funding: secondary 'in talks' report treated as confirmed",
+  "description": "v1 recorded a TechCrunch article headlined 'in talks for new funding at $1.5B valuation' and synthesized a summary asserting the $75M Series B had closed. The secondary report does not support a closed-raise claim; the primary/official confirmation is absent.",
+  "case_type": "primary_vs_secondary",
+  "monitored_targets": [
+    {
+      "kind": "topic",
+      "ref": "hermes"
+    },
+    {
+      "kind": "subject",
+      "ref": "nous-research"
+    }
+  ],
+  "observation_window": {
+    "start": "2026-07-13T00:00:00Z",
+    "end": "2026-08-15T00:00:00Z"
+  },
+  "provenance": {
+    "source": "Hermes Newsroom v1 dev profile (read-only extraction)",
+    "note": "Demonstrates v1 conflating rumor with reported status and secondary with primary.",
+    "source_db": "C:/Users/nicol/AppData/Local/hermes/profiles/newsroom-dev/plugin-data/newsroom/newsroom.db"
+  },
+  "reviewer_notes": "No primary source was retrieved by v1. expected_primary_sources is intentionally empty to mark the gap.",
+  "candidates": [
+    {
+      "candidate_id": "techcrunch-funding",
+      "canonical_url": "https://techcrunch.com/2026/07/13/hermes-agent-maker-nous-research-in-talks-for-new-funding-at-1-5b-valuation",
+      "title": "Hermes agent maker Nous Research in talks for new funding at $1.5B valuation",
+      "source": "web",
+      "publisher": "TechCrunch",
+      "published_at": "2026-07-13T00:00:00Z",
+      "retrieved_at": "2026-08-15T03:51:20Z",
+      "content_type": "metadata",
+      "excerpt": "Nous Research is in talks for new funding at a $1.5 billion valuation.",
+      "notes": null,
+      "content_hash": "950228c93394c2ad928c5b0fd2b50ee8709722c64b55bc7075943a920a4d752c"
+    }
+  ],
+  "gold_groups": [
+    {
+      "event_id": "evt-nous-funding",
+      "candidate_ids": [
+        "techcrunch-funding"
+      ]
+    }
+  ],
+  "gold_claims": [
+    {
+      "claim_id": "cl-funding-closed",
+      "event_id": "evt-nous-funding",
+      "proposition": "Nous Research closed a $75 million Series B at a $1.5 billion valuation.",
+      "importance": "major",
+      "expected_state": "unsubstantiated",
+      "rationale": "The only retrieved source says 'in talks'; no official confirmation was retrieved."
+    }
+  ],
+  "gold_evidence": [
+    {
+      "evidence_id": "ev-funding-talk",
+      "claim_id": "cl-funding-closed",
+      "candidate_id": "techcrunch-funding",
+      "excerpt": "Nous Research is in talks for new funding at a $1.5 billion valuation.",
+      "relationship": "contextualizes"
+    }
+  ],
+  "expected_primary_sources": [],
+  "noise_candidates": [],
+  "contradictions": [],
+  "material_changes": []
+}

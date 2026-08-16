@@ -1,0 +1,68 @@
+{
+  "schema_version": 1,
+  "case_id": "rumor-unsubstantiated-launch",
+  "title": "Rumor of a secret launch that never happened",
+  "description": "A single rumor source claims a secret product launch on a specific date; no confirmation ever appears. The claim must remain unsubstantiated, not false.",
+  "case_type": "rumor_unsubstantiated",
+  "monitored_targets": [
+    {
+      "kind": "topic",
+      "ref": "demo"
+    }
+  ],
+  "observation_window": {
+    "start": null,
+    "end": null
+  },
+  "provenance": {
+    "source": "synthetic",
+    "note": "Synthetic edge case using reserved .test domains. Entities and facts are fictional; designed from real-world failure modes observed during v1 review (rumor/confirmation, corrections, false merges, mutating pages). Not real reporting."
+  },
+  "reviewer_notes": "",
+  "candidates": [
+    {
+      "candidate_id": "rumor-launch",
+      "canonical_url": "https://rumor-blog.test/2026/08/01/secret-launch",
+      "title": "Rumor: Acme to launch secret product on Aug 15",
+      "source": "web",
+      "publisher": "Rumor Blog",
+      "published_at": "2026-08-01T10:00:00Z",
+      "retrieved_at": "2026-08-01T11:00:00Z",
+      "content_type": "metadata",
+      "excerpt": "A tipster claims Acme will launch a secret product on August 15.",
+      "notes": null,
+      "content_hash": "281c7ef4c3dde2b001522135017af282f9532ad3b0018697731d46363f896a43"
+    }
+  ],
+  "gold_groups": [
+    {
+      "event_id": "evt-secret",
+      "candidate_ids": [
+        "rumor-launch"
+      ]
+    }
+  ],
+  "gold_claims": [
+    {
+      "claim_id": "cl-secret-launch",
+      "event_id": "evt-secret",
+      "proposition": "Acme launched a secret product on August 15.",
+      "importance": "relevant",
+      "expected_state": "unsubstantiated",
+      "rationale": "Only a single rumor source; no confirmation."
+    }
+  ],
+  "gold_evidence": [
+    {
+      "evidence_id": "ev-rumor-launch",
+      "claim_id": "cl-secret-launch",
+      "candidate_id": "rumor-launch",
+      "excerpt": "A tipster claims Acme will launch a secret product on August 15.",
+      "relationship": "contextualizes"
+    }
+  ],
+  "expected_primary_sources": [],
+  "noise_candidates": [],
+  "contradictions": [],
+  "material_changes": []
+}

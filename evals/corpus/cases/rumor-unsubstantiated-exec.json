@@ -1,0 +1,68 @@
+{
+  "schema_version": 1,
+  "case_id": "rumor-unsubstantiated-exec",
+  "title": "Unconfirmed executive departure rumor",
+  "description": "A rumor of a CEO departure circulates but is never confirmed; a denial by the company is itself contextualizing.",
+  "case_type": "rumor_unsubstantiated",
+  "monitored_targets": [
+    {
+      "kind": "topic",
+      "ref": "demo"
+    }
+  ],
+  "observation_window": {
+    "start": null,
+    "end": null
+  },
+  "provenance": {
+    "source": "synthetic",
+    "note": "Synthetic edge case using reserved .test domains. Entities and facts are fictional; designed from real-world failure modes observed during v1 review (rumor/confirmation, corrections, false merges, mutating pages). Not real reporting."
+  },
+  "reviewer_notes": "",
+  "candidates": [
+    {
+      "candidate_id": "rumor-exec",
+      "canonical_url": "https://rumor-blog.test/2026/08/09/ceo-out",
+      "title": "Rumor: Acme CEO stepping down",
+      "source": "web",
+      "publisher": "Rumor Blog",
+      "published_at": "2026-08-09T10:00:00Z",
+      "retrieved_at": "2026-08-09T11:00:00Z",
+      "content_type": "metadata",
+      "excerpt": "Rumors claim the Acme CEO is stepping down.",
+      "notes": null,
+      "content_hash": "88dc5831e10967c5e441abfbe17f6b12ca7ba05c40dd54ef26acd09074e10a81"
+    }
+  ],
+  "gold_groups": [
+    {
+      "event_id": "evt-ceo",
+      "candidate_ids": [
+        "rumor-exec"
+      ]
+    }
+  ],
+  "gold_claims": [
+    {
+      "claim_id": "cl-ceo-out",
+      "event_id": "evt-ceo",
+      "proposition": "The Acme CEO stepped down.",
+      "importance": "relevant",
+      "expected_state": "unsubstantiated",
+      "rationale": "Single unconfirmed rumor; no corroboration or official statement."
+    }
+  ],
+  "gold_evidence": [
+    {
+      "evidence_id": "ev-rumor-ceo",
+      "claim_id": "cl-ceo-out",
+      "candidate_id": "rumor-exec",
+      "excerpt": "Rumors claim the Acme CEO is stepping down.",
+      "relationship": "contextualizes"
+    }
+  ],
+  "expected_primary_sources": [],
+  "noise_candidates": [],
+  "contradictions": [],
+  "material_changes": []
+}

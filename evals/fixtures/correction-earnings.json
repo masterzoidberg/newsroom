@@ -1,0 +1,38 @@
+{
+  "schema_version": 1,
+  "fixture_id": "c1a7014f444a55da6d94c0dce833d4a71789cd222f1afb913a41bcc1d1d666c8",
+  "case_id": "correction-earnings",
+  "channel": "simulated_search",
+  "query": {
+    "text": "correction-earnings",
+    "topic_ref": "demo"
+  },
+  "captured_at": "2026-08-15T00:00:00Z",
+  "documents": [
+    {
+      "candidate_id": "outlet-earnings",
+      "canonical_url": "https://outlet-a.test/news/earnings",
+      "title": "Acme Q2 revenue reaches $1.2B",
+      "source": "web",
+      "publisher": "Outlet A",
+      "published_at": "2026-08-01T14:00:00Z",
+      "retrieved_at": "2026-08-01T15:00:00Z",
+      "content_type": "metadata",
+      "excerpt": "Acme reported Q2 revenue of $1.2 billion.",
+      "proposed_event_key": "acme-q2-earnings"
+    },
+    {
+      "candidate_id": "acme-correction",
+      "canonical_url": "https://corp-official.test/press/2026/08/02/earnings-correction",
+      "title": "Acme corrects Q2 revenue to $1.1B",
+      "source": "official",
+      "publisher": "Acme Corp",
+      "published_at": "2026-08-02T10:00:00Z",
+      "retrieved_at": "2026-08-02T11:00:00Z",
+      "content_type": "metadata",
+      "excerpt": "Acme corrected its Q2 revenue to $1.1 billion, citing a bookkeeping error.",
+      "proposed_event_key": "acme-q2-earnings"
+    }
+  ],
+  "content_hash": "c1a7014f444a55da6d94c0dce833d4a71789cd222f1afb913a41bcc1d1d666c8"
+}

@@ -1,0 +1,38 @@
+{
+  "schema_version": 1,
+  "fixture_id": "ae60a6c5003153e8685ed53c39a6174e5529fe5cf26d04741467090d9dc49db4",
+  "case_id": "developing-story-launch",
+  "channel": "simulated_search",
+  "query": {
+    "text": "developing-story-launch",
+    "topic_ref": "demo"
+  },
+  "captured_at": "2026-08-15T00:00:00Z",
+  "documents": [
+    {
+      "candidate_id": "outlet-b-t0",
+      "canonical_url": "https://outlet-b.test/news/widget-t0",
+      "title": "Acme to launch Widget next week",
+      "source": "web",
+      "publisher": "Outlet B",
+      "published_at": "2026-08-10T10:00:00Z",
+      "retrieved_at": "2026-08-10T11:00:00Z",
+      "content_type": "metadata",
+      "excerpt": "Acme plans to launch the Widget next week.",
+      "proposed_event_key": "acme-widget-launch"
+    },
+    {
+      "candidate_id": "outlet-b-t1",
+      "canonical_url": "https://outlet-b.test/news/widget-t1",
+      "title": "Acme Widget launches at $199",
+      "source": "web",
+      "publisher": "Outlet B",
+      "published_at": "2026-08-17T10:00:00Z",
+      "retrieved_at": "2026-08-17T11:00:00Z",
+      "content_type": "metadata",
+      "excerpt": "The Acme Widget launched today at $199 with next-day shipping.",
+      "proposed_event_key": "acme-widget-launch"
+    }
+  ],
+  "content_hash": "ae60a6c5003153e8685ed53c39a6174e5529fe5cf26d04741467090d9dc49db4"
+}

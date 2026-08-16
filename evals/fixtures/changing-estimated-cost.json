@@ -1,0 +1,38 @@
+{
+  "schema_version": 1,
+  "fixture_id": "7f187096edf444aa366919712a4708a60ea440a4d736fe3a9215f993b6e87298",
+  "case_id": "changing-estimated-cost",
+  "channel": "simulated_search",
+  "query": {
+    "text": "changing-estimated-cost",
+    "topic_ref": "demo"
+  },
+  "captured_at": "2026-08-15T00:00:00Z",
+  "documents": [
+    {
+      "candidate_id": "cost-50",
+      "canonical_url": "https://outlet-b.test/news/cost-50",
+      "title": "Project cost estimated at $50M",
+      "source": "web",
+      "publisher": "Outlet B",
+      "published_at": "2026-07-01T10:00:00Z",
+      "retrieved_at": "2026-07-01T11:00:00Z",
+      "content_type": "metadata",
+      "excerpt": "The project is estimated to cost $50 million.",
+      "proposed_event_key": "project-cost"
+    },
+    {
+      "candidate_id": "cost-90",
+      "canonical_url": "https://gov.test/agency/press/2026/08/14/cost",
+      "title": "Agency revises project cost to $90M",
+      "source": "official",
+      "publisher": "Gov Agency",
+      "published_at": "2026-08-14T09:00:00Z",
+      "retrieved_at": "2026-08-14T10:00:00Z",
+      "content_type": "metadata",
+      "excerpt": "The agency revised the project cost estimate to $90 million.",
+      "proposed_event_key": "project-cost"
+    }
+  ],
+  "content_hash": "7f187096edf444aa366919712a4708a60ea440a4d736fe3a9215f993b6e87298"
+}

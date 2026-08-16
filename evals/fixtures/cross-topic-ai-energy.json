@@ -1,0 +1,26 @@
+{
+  "schema_version": 1,
+  "fixture_id": "8e7002b041eef5dba42b40f07e6e1c6ea580b6f5b5ca464c4bd418a19acbbabb",
+  "case_id": "cross-topic-ai-energy",
+  "channel": "simulated_search",
+  "query": {
+    "text": "cross-topic-ai-energy",
+    "topic_ref": "demo"
+  },
+  "captured_at": "2026-08-15T00:00:00Z",
+  "documents": [
+    {
+      "candidate_id": "ai-energy",
+      "canonical_url": "https://outlet-a.test/news/ai-datacenter",
+      "title": "Acme announces AI data center with solar agreement",
+      "source": "web",
+      "publisher": "Outlet A",
+      "published_at": "2026-08-14T09:00:00Z",
+      "retrieved_at": "2026-08-14T10:00:00Z",
+      "content_type": "metadata",
+      "excerpt": "Acme announced an AI data center powered by a new 200 MW solar agreement.",
+      "proposed_event_key": "acme-ai-datacenter-solar"
+    }
+  ],
+  "content_hash": "8e7002b041eef5dba42b40f07e6e1c6ea580b6f5b5ca464c4bd418a19acbbabb"
+}

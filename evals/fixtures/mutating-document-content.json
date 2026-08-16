@@ -1,0 +1,38 @@
+{
+  "schema_version": 1,
+  "fixture_id": "e16822647d541d49e7c45680c5f62b5fbde315b1466d75b7362de56823d64b49",
+  "case_id": "mutating-document-content",
+  "channel": "simulated_search",
+  "query": {
+    "text": "mutating-document-content",
+    "topic_ref": "demo"
+  },
+  "captured_at": "2026-08-15T00:00:00Z",
+  "documents": [
+    {
+      "candidate_id": "v1",
+      "canonical_url": "https://outlet-a.test/news/mutable",
+      "title": "Acme reports Q2 revenue of $1.0B",
+      "source": "web",
+      "publisher": "Outlet A",
+      "published_at": "2026-08-01T10:00:00Z",
+      "retrieved_at": "2026-08-01T11:00:00Z",
+      "content_type": "excerpt",
+      "excerpt": "Acme reported Q2 revenue of $1.0 billion.",
+      "proposed_event_key": "acme-q2-revenue"
+    },
+    {
+      "candidate_id": "v2",
+      "canonical_url": "https://outlet-a.test/news/mutable",
+      "title": "Acme reports Q2 revenue of $1.2B (updated)",
+      "source": "web",
+      "publisher": "Outlet A",
+      "published_at": "2026-08-02T10:00:00Z",
+      "retrieved_at": "2026-08-02T11:00:00Z",
+      "content_type": "excerpt",
+      "excerpt": "Acme reported Q2 revenue of $1.2 billion, updated from $1.0 billion.",
+      "proposed_event_key": "acme-q2-revenue"
+    }
+  ],
+  "content_hash": "e16822647d541d49e7c45680c5f62b5fbde315b1466d75b7362de56823d64b49"
+}

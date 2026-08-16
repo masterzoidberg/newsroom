@@ -1,0 +1,107 @@
+{
+  "schema_version": 1,
+  "case_id": "conflicting-casualty-figures",
+  "title": "Two outlets report different casualty figures",
+  "description": "Two credible outlets report different figures for the same incident. Both claims coexist; neither should silently win.",
+  "case_type": "conflicting_reports",
+  "monitored_targets": [
+    {
+      "kind": "topic",
+      "ref": "demo"
+    }
+  ],
+  "observation_window": {
+    "start": null,
+    "end": null
+  },
+  "provenance": {
+    "source": "synthetic",
+    "note": "Synthetic edge case using reserved .test domains. Entities and facts are fictional; designed from real-world failure modes observed during v1 review (rumor/confirmation, corrections, false merges, mutating pages). Not real reporting."
+  },
+  "reviewer_notes": "",
+  "candidates": [
+    {
+      "candidate_id": "outlet-a",
+      "canonical_url": "https://outlet-a.test/news/incident",
+      "title": "Incident leaves 12 injured",
+      "source": "web",
+      "publisher": "Outlet A",
+      "published_at": "2026-08-14T18:00:00Z",
+      "retrieved_at": "2026-08-14T19:00:00Z",
+      "content_type": "metadata",
+      "excerpt": "Officials said 12 people were injured in the incident.",
+      "notes": null,
+      "content_hash": "01d597cbec670cd1cfd7ae04770d1c411e4965af770edbea1d2a3dabe77f1a8e"
+    },
+    {
+      "candidate_id": "outlet-b",
+      "canonical_url": "https://outlet-b.test/news/incident",
+      "title": "Incident leaves 30 injured, officials say",
+      "source": "web",
+      "publisher": "Outlet B",
+      "published_at": "2026-08-14T18:30:00Z",
+      "retrieved_at": "2026-08-14T19:30:00Z",
+      "content_type": "metadata",
+      "excerpt": "Officials revised the injured count to 30.",
+      "notes": null,
+      "content_hash": "1602f3a867dd437110ef9d39880c143fbde57a792ac4293cbce430d1531662e9"
+    }
+  ],
+  "gold_groups": [
+    {
+      "event_id": "evt-incident",
+      "candidate_ids": [
+        "outlet-a",
+        "outlet-b"
+      ],
+      "rationale": "Same incident; figures conflict."
+    }
+  ],
+  "gold_claims": [
+    {
+      "claim_id": "cl-injured-12",
+      "event_id": "evt-incident",
+      "proposition": "12 people were injured.",
+      "importance": "major",
+      "expected_state": "disputed"
+    },
+    {
+      "claim_id": "cl-injured-30",
+      "event_id": "evt-incident",
+      "proposition": "30 people were injured.",
+      "importance": "major",
+      "expected_state": "disputed"
+    }
+  ],
+  "gold_evidence": [
+    {
+      "evidence_id": "ev-12",
+      "claim_id": "cl-injured-12",
+      "candidate_id": "outlet-a",
+      "excerpt": "Officials said 12 people were injured in the incident.",
+      "relationship": "supports"
+    },
+    {
+      "evidence_id": "ev-30",
+      "claim_id": "cl-injured-30",
+      "candidate_id": "outlet-b",
+      "excerpt": "Officials revised the injured count to 30.",
+      "relationship": "supports"
+    }
+  ],
+  "expected_primary_sources": [],
+  "noise_candidates": [],
+  "contradictions": [
+    {
+      "claim_id": "cl-injured-12",
+      "evidence_id": "ev-30",
+      "note": "Outlet B's figure contradicts Outlet A's."
+    },
+    {
+      "claim_id": "cl-injured-30",
+      "evidence_id": "ev-12",
+      "note": "Outlet A's figure contradicts Outlet B's."
+    }
+  ],
+  "material_changes": []
+}

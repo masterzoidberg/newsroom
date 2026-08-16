@@ -1,0 +1,59 @@
+{
+  "schema_version": 1,
+  "fixture_id": "41ce43f2fc8d65f9d378a2d949e18a2d028df1f57be6417e826b0277222123ff",
+  "case_id": "similar-distinct-hermes-events",
+  "channel": "simulated_search",
+  "query": {},
+  "captured_at": "2026-08-15T00:00:00Z",
+  "documents": [
+    {
+      "candidate_id": "pr-portable-plugins",
+      "canonical_url": "https://github.com/NousResearch/hermes-agent/pull/80593",
+      "title": "feat(plugins): support portable Agent Plugins v1 packages",
+      "source": "github",
+      "publisher": "Nous Research",
+      "published_at": "2026-08-07T00:00:00Z",
+      "retrieved_at": "2026-08-15T03:54:13Z",
+      "content_type": "metadata",
+      "excerpt": "Opt-in support for the Agent Plugins v1 portable standard.",
+      "proposed_event_key": "hermes-portable-plugins-v1"
+    },
+    {
+      "candidate_id": "vercel-integration",
+      "canonical_url": "https://vercel.com/changelog/vercel-ai-gateway-and-vercel-sandbox-now-available-on-hermes-agent",
+      "title": "Vercel AI Gateway and Vercel Sandbox now available on Hermes Agent",
+      "source": "web",
+      "publisher": "Vercel",
+      "published_at": "2026-08-07T00:00:00Z",
+      "retrieved_at": "2026-08-15T03:54:13Z",
+      "content_type": "metadata",
+      "excerpt": "Hermes Agent now supports Vercel AI Gateway and Vercel Sandbox.",
+      "proposed_event_key": "vercel-hermes-integration"
+    },
+    {
+      "candidate_id": "webui-4955",
+      "canonical_url": "https://github.com/nesquena/hermes-webui/pull/4955",
+      "title": "fix(approval): stale local approval card clears instead of dead-ending",
+      "source": "github",
+      "publisher": "Hermes WebUI",
+      "published_at": "2026-07-21T00:00:00Z",
+      "retrieved_at": "2026-08-15T03:54:13Z",
+      "content_type": "metadata",
+      "excerpt": "Fixes a stale approval card dead-end.",
+      "proposed_event_key": "hermes-webui-stale-approval-fix"
+    },
+    {
+      "candidate_id": "webui-6036",
+      "canonical_url": "https://github.com/nesquena/hermes-webui/pull/6036",
+      "title": "Release exp: fix 'approve once' persisting as session approval",
+      "source": "github",
+      "publisher": "Hermes WebUI",
+      "published_at": "2026-07-13T00:00:00Z",
+      "retrieved_at": "2026-08-15T03:54:13Z",
+      "content_type": "metadata",
+      "excerpt": "Fixes 'Approve once' wrongly persisting as session approval.",
+      "proposed_event_key": "hermes-webui-approve-once-fix"
+    }
+  ],
+  "content_hash": "41ce43f2fc8d65f9d378a2d949e18a2d028df1f57be6417e826b0277222123ff"
+}

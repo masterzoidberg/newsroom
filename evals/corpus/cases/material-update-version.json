@@ -1,0 +1,111 @@
+{
+  "schema_version": 1,
+  "case_id": "material-update-version",
+  "title": "Software update adds a material feature",
+  "description": "A software release note is followed by a follow-up patch adding a material feature. Distinct releases, same product line.",
+  "case_type": "material_update",
+  "monitored_targets": [
+    {
+      "kind": "topic",
+      "ref": "demo"
+    }
+  ],
+  "observation_window": {
+    "start": null,
+    "end": null
+  },
+  "provenance": {
+    "source": "synthetic",
+    "note": "Synthetic edge case using reserved .test domains. Entities and facts are fictional; designed from real-world failure modes observed during v1 review (rumor/confirmation, corrections, false merges, mutating pages). Not real reporting."
+  },
+  "reviewer_notes": "",
+  "candidates": [
+    {
+      "candidate_id": "rel-1",
+      "canonical_url": "https://corp-official.test/press/2026/08/01/rel-1",
+      "title": "Acme OS 4.0 released",
+      "source": "official",
+      "publisher": "Acme Corp",
+      "published_at": "2026-08-01T12:00:00Z",
+      "retrieved_at": "2026-08-01T13:00:00Z",
+      "content_type": "metadata",
+      "excerpt": "Acme OS 4.0 released today.",
+      "notes": null,
+      "content_hash": "2a72f21c688b47d5a9ecf1cc9221d17d016dd3aa58ca884217e8798a805a7b9d"
+    },
+    {
+      "candidate_id": "rel-2",
+      "canonical_url": "https://corp-official.test/press/2026/08/14/rel-2",
+      "title": "Acme OS 4.1 adds offline mode",
+      "source": "official",
+      "publisher": "Acme Corp",
+      "published_at": "2026-08-14T12:00:00Z",
+      "retrieved_at": "2026-08-14T13:00:00Z",
+      "content_type": "metadata",
+      "excerpt": "Acme OS 4.1 adds a long-awaited offline mode.",
+      "notes": null,
+      "content_hash": "528750e5fe2d3752dc123395f341dbee1197a67888ebcda8888c283598b0cc06"
+    }
+  ],
+  "gold_groups": [
+    {
+      "event_id": "evt-rel1",
+      "candidate_ids": [
+        "rel-1"
+      ]
+    },
+    {
+      "event_id": "evt-rel2",
+      "candidate_ids": [
+        "rel-2"
+      ]
+    }
+  ],
+  "gold_claims": [
+    {
+      "claim_id": "cl-rel1",
+      "event_id": "evt-rel1",
+      "proposition": "Acme OS 4.0 was released.",
+      "importance": "relevant",
+      "expected_state": "supported"
+    },
+    {
+      "claim_id": "cl-rel2",
+      "event_id": "evt-rel2",
+      "proposition": "Acme OS 4.1 adds offline mode.",
+      "importance": "major",
+      "expected_state": "supported"
+    }
+  ],
+  "gold_evidence": [
+    {
+      "evidence_id": "ev-rel1",
+      "claim_id": "cl-rel1",
+      "candidate_id": "rel-1",
+      "excerpt": "Acme OS 4.0 released today.",
+      "relationship": "supports"
+    },
+    {
+      "evidence_id": "ev-rel2",
+      "claim_id": "cl-rel2",
+      "candidate_id": "rel-2",
+      "excerpt": "Acme OS 4.1 adds a long-awaited offline mode.",
+      "relationship": "supports"
+    }
+  ],
+  "expected_primary_sources": [
+    "rel-1",
+    "rel-2"
+  ],
+  "noise_candidates": [],
+  "contradictions": [],
+  "material_changes": [
+    {
+      "event_id": "evt-rel2",
+      "claim_id": "cl-rel2",
+      "description": "New release with material feature.",
+      "from_state": null,
+      "to_state": "supported"
+    }
+  ]
+}

@@ -1,0 +1,50 @@
+{
+  "schema_version": 1,
+  "fixture_id": "d49db2921be6388474f21689e5a47b4ed04672d0cf1beec0487c1ed5d1e8b11e",
+  "case_id": "corroboration-no-update-three",
+  "channel": "simulated_search",
+  "query": {
+    "text": "corroboration-no-update-three",
+    "topic_ref": "demo"
+  },
+  "captured_at": "2026-08-15T00:00:00Z",
+  "documents": [
+    {
+      "candidate_id": "o1",
+      "canonical_url": "https://outlet-a.test/news/fig",
+      "title": "Acme reaches 1 million users",
+      "source": "web",
+      "publisher": "Outlet A",
+      "published_at": "2026-08-13T12:00:00Z",
+      "retrieved_at": "2026-08-13T13:00:00Z",
+      "content_type": "metadata",
+      "excerpt": "Acme said it reached 1 million users.",
+      "proposed_event_key": "acme-1m-users"
+    },
+    {
+      "candidate_id": "o2",
+      "canonical_url": "https://outlet-b.test/news/fig",
+      "title": "Acme hits 1 million users",
+      "source": "web",
+      "publisher": "Outlet B",
+      "published_at": "2026-08-13T12:30:00Z",
+      "retrieved_at": "2026-08-13T13:30:00Z",
+      "content_type": "metadata",
+      "excerpt": "Acme announced it reached 1 million users.",
+      "proposed_event_key": "acme-1m-users"
+    },
+    {
+      "candidate_id": "o3",
+      "canonical_url": "https://outlet-c.test/news/fig",
+      "title": "Acme surpasses 1 million users",
+      "source": "web",
+      "publisher": "Outlet C",
+      "published_at": "2026-08-13T13:00:00Z",
+      "retrieved_at": "2026-08-13T14:00:00Z",
+      "content_type": "metadata",
+      "excerpt": "Acme confirmed it reached 1 million users.",
+      "proposed_event_key": "acme-1m-users"
+    }
+  ],
+  "content_hash": "d49db2921be6388474f21689e5a47b4ed04672d0cf1beec0487c1ed5d1e8b11e"
+}

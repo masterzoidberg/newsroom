@@ -1,0 +1,136 @@
+{
+  "schema_version": 1,
+  "case_id": "changing-death-toll",
+  "title": "Death toll rises across three reports",
+  "description": "The toll for a disaster rises from 5 to 20 to 40 over successive reports. Each newer figure supersedes the previous.",
+  "case_type": "changing_numeric_claim",
+  "monitored_targets": [
+    {
+      "kind": "topic",
+      "ref": "demo"
+    }
+  ],
+  "observation_window": {
+    "start": null,
+    "end": null
+  },
+  "provenance": {
+    "source": "synthetic",
+    "note": "Synthetic edge case using reserved .test domains. Entities and facts are fictional; designed from real-world failure modes observed during v1 review (rumor/confirmation, corrections, false merges, mutating pages). Not real reporting."
+  },
+  "reviewer_notes": "",
+  "candidates": [
+    {
+      "candidate_id": "toll-5",
+      "canonical_url": "https://outlet-a.test/news/toll-5",
+      "title": "Disaster death toll rises to 5",
+      "source": "web",
+      "publisher": "Outlet A",
+      "published_at": "2026-08-10T12:00:00Z",
+      "retrieved_at": "2026-08-10T13:00:00Z",
+      "content_type": "metadata",
+      "excerpt": "The death toll rose to 5.",
+      "notes": null,
+      "content_hash": "cadd483d48c063f5b9d437870d5a0e86a5f907ce17fd341081de0cd525e1a64c"
+    },
+    {
+      "candidate_id": "toll-20",
+      "canonical_url": "https://outlet-a.test/news/toll-20",
+      "title": "Disaster death toll rises to 20",
+      "source": "web",
+      "publisher": "Outlet A",
+      "published_at": "2026-08-11T12:00:00Z",
+      "retrieved_at": "2026-08-11T13:00:00Z",
+      "content_type": "metadata",
+      "excerpt": "The death toll rose to 20.",
+      "notes": null,
+      "content_hash": "5eabd827383cbedc668bca495a227bb1c0368b8c01dbf42662d8c6dd0c0b3c06"
+    },
+    {
+      "candidate_id": "toll-40",
+      "canonical_url": "https://outlet-a.test/news/toll-40",
+      "title": "Disaster death toll reaches 40",
+      "source": "web",
+      "publisher": "Outlet A",
+      "published_at": "2026-08-12T12:00:00Z",
+      "retrieved_at": "2026-08-12T13:00:00Z",
+      "content_type": "metadata",
+      "excerpt": "The death toll reached 40.",
+      "notes": null,
+      "content_hash": "b3b333637f5a8837bf9a823ffabd29b27782f716e9b27e2644f8212a10c103cd"
+    }
+  ],
+  "gold_groups": [
+    {
+      "event_id": "evt-toll",
+      "candidate_ids": [
+        "toll-5",
+        "toll-20",
+        "toll-40"
+      ],
+      "rationale": "All three report the same disaster's toll."
+    }
+  ],
+  "gold_claims": [
+    {
+      "claim_id": "cl-toll-5",
+      "event_id": "evt-toll",
+      "proposition": "The death toll was 5.",
+      "importance": "major",
+      "expected_state": "superseded"
+    },
+    {
+      "claim_id": "cl-toll-20",
+      "event_id": "evt-toll",
+      "proposition": "The death toll was 20.",
+      "importance": "major",
+      "expected_state": "superseded",
+      "supersedes_claim_id": "cl-toll-5"
+    },
+    {
+      "claim_id": "cl-toll-40",
+      "event_id": "evt-toll",
+      "proposition": "The death toll was 40.",
+      "importance": "major",
+      "expected_state": "supported",
+      "supersedes_claim_id": "cl-toll-20"
+    }
+  ],
+  "gold_evidence": [
+    {
+      "evidence_id": "ev-5",
+      "claim_id": "cl-toll-5",
+      "candidate_id": "toll-5",
+      "excerpt": "The death toll rose to 5.",
+      "relationship": "supports"
+    },
+    {
+      "evidence_id": "ev-20",
+      "claim_id": "cl-toll-20",
+      "candidate_id": "toll-20",
+      "excerpt": "The death toll rose to 20.",
+      "relationship": "supports"
+    },
+    {
+      "evidence_id": "ev-40",
+      "claim_id": "cl-toll-40",
+      "candidate_id": "toll-40",
+      "excerpt": "The death toll reached 40.",
+      "relationship": "supports"
+    }
+  ],
+  "expected_primary_sources": [
+    "toll-40"
+  ],
+  "noise_candidates": [],
+  "contradictions": [],
+  "material_changes": [
+    {
+      "event_id": "evt-toll",
+      "claim_id": "cl-toll-40",
+      "description": "Toll updated twice; latest supersedes prior figures.",
+      "from_state": "supported",
+      "to_state": "superseded"
+    }
+  ]
+}

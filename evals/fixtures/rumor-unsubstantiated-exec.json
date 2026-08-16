@@ -1,0 +1,26 @@
+{
+  "schema_version": 1,
+  "fixture_id": "e75b80368a58c5e2a103eb106406545721d2b456609a4bc23f19e64d2d7310de",
+  "case_id": "rumor-unsubstantiated-exec",
+  "channel": "simulated_search",
+  "query": {
+    "text": "rumor-unsubstantiated-exec",
+    "topic_ref": "demo"
+  },
+  "captured_at": "2026-08-15T00:00:00Z",
+  "documents": [
+    {
+      "candidate_id": "rumor-exec",
+      "canonical_url": "https://rumor-blog.test/2026/08/09/ceo-out",
+      "title": "Rumor: Acme CEO stepping down",
+      "source": "web",
+      "publisher": "Rumor Blog",
+      "published_at": "2026-08-09T10:00:00Z",
+      "retrieved_at": "2026-08-09T11:00:00Z",
+      "content_type": "metadata",
+      "excerpt": "Rumors claim the Acme CEO is stepping down.",
+      "proposed_event_key": "acme-ceo-departure"
+    }
+  ],
+  "content_hash": "e75b80368a58c5e2a103eb106406545721d2b456609a4bc23f19e64d2d7310de"
+}

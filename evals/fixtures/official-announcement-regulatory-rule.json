@@ -1,0 +1,26 @@
+{
+  "schema_version": 1,
+  "fixture_id": "c77de8af4540ce2ed2ce6c2b61a600f078edcd021c753737e8a66bb8090126c6",
+  "case_id": "official-announcement-regulatory-rule",
+  "channel": "simulated_search",
+  "query": {
+    "text": "official-announcement-regulatory-rule",
+    "topic_ref": "demo"
+  },
+  "captured_at": "2026-08-15T00:00:00Z",
+  "documents": [
+    {
+      "candidate_id": "gov-rule",
+      "canonical_url": "https://gov.test/agency/press/2026/08/14/final-rule",
+      "title": "Agency adopts final rule on data retention",
+      "source": "official",
+      "publisher": "Gov Agency",
+      "published_at": "2026-08-14T09:00:00Z",
+      "retrieved_at": "2026-08-15T00:00:00Z",
+      "content_type": "metadata",
+      "excerpt": "The Agency adopted a final rule requiring 12-month data retention.",
+      "proposed_event_key": "agency-data-retention-rule"
+    }
+  ],
+  "content_hash": "c77de8af4540ce2ed2ce6c2b61a600f078edcd021c753737e8a66bb8090126c6"
+}

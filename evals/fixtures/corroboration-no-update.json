@@ -1,0 +1,38 @@
+{
+  "schema_version": 1,
+  "fixture_id": "97ea14bbe2f21a2e530bd6cbdc1b5a5312991157731ded19ed5270943941a3f9",
+  "case_id": "corroboration-no-update",
+  "channel": "simulated_search",
+  "query": {
+    "text": "corroboration-no-update",
+    "topic_ref": "demo"
+  },
+  "captured_at": "2026-08-15T00:00:00Z",
+  "documents": [
+    {
+      "candidate_id": "first",
+      "canonical_url": "https://outlet-a.test/news/acme-os-4",
+      "title": "Acme OS 4.0 launches with new scheduler",
+      "source": "web",
+      "publisher": "Outlet A",
+      "published_at": "2026-08-12T14:00:00Z",
+      "retrieved_at": "2026-08-12T15:00:00Z",
+      "content_type": "metadata",
+      "excerpt": "Acme OS 4.0 launched today with a new scheduler.",
+      "proposed_event_key": "acme-os-4-0-release"
+    },
+    {
+      "candidate_id": "second",
+      "canonical_url": "https://outlet-b.test/news/acme-os-4",
+      "title": "Acme OS 4.0 now available",
+      "source": "web",
+      "publisher": "Outlet B",
+      "published_at": "2026-08-12T15:00:00Z",
+      "retrieved_at": "2026-08-12T16:00:00Z",
+      "content_type": "metadata",
+      "excerpt": "Acme OS 4.0, which launched today with a new scheduler, is now available.",
+      "proposed_event_key": "acme-os-4-0-release"
+    }
+  ],
+  "content_hash": "97ea14bbe2f21a2e530bd6cbdc1b5a5312991157731ded19ed5270943941a3f9"
+}

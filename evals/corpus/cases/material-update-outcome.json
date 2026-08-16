@@ -1,0 +1,106 @@
+{
+  "schema_version": 1,
+  "case_id": "material-update-outcome",
+  "title": "Event outcome changes materially",
+  "description": "An initial report of a settlement is followed by a materially different final outcome. The update must surface as a material change.",
+  "case_type": "material_update",
+  "monitored_targets": [
+    {
+      "kind": "topic",
+      "ref": "demo"
+    }
+  ],
+  "observation_window": {
+    "start": null,
+    "end": null
+  },
+  "provenance": {
+    "source": "synthetic",
+    "note": "Synthetic edge case using reserved .test domains. Entities and facts are fictional; designed from real-world failure modes observed during v1 review (rumor/confirmation, corrections, false merges, mutating pages). Not real reporting."
+  },
+  "reviewer_notes": "",
+  "candidates": [
+    {
+      "candidate_id": "settle-early",
+      "canonical_url": "https://outlet-a.test/news/settle-early",
+      "title": "Acme to settle lawsuit for $10M",
+      "source": "web",
+      "publisher": "Outlet A",
+      "published_at": "2026-08-14T10:00:00Z",
+      "retrieved_at": "2026-08-14T11:00:00Z",
+      "content_type": "metadata",
+      "excerpt": "Acme agreed to settle the lawsuit for $10 million.",
+      "notes": null,
+      "content_hash": "ac4558f2fe511e3d5ab76a50b873b34d9f8be2397c085edc7aded5aa37dcc633"
+    },
+    {
+      "candidate_id": "settle-final",
+      "canonical_url": "https://court.test/news/settle-final",
+      "title": "Judge approves $25M settlement in Acme suit",
+      "source": "official",
+      "publisher": "Court",
+      "published_at": "2026-08-15T12:00:00Z",
+      "retrieved_at": "2026-08-15T13:00:00Z",
+      "content_type": "metadata",
+      "excerpt": "A judge approved a $25 million settlement in the Acme lawsuit.",
+      "notes": null,
+      "content_hash": "ef8c31dd37f73e86295eb379fecbfb32bfae7c53827ddeb563157f8a5d9b10da"
+    }
+  ],
+  "gold_groups": [
+    {
+      "event_id": "evt-settle",
+      "candidate_ids": [
+        "settle-early",
+        "settle-final"
+      ]
+    }
+  ],
+  "gold_claims": [
+    {
+      "claim_id": "cl-settle-10",
+      "event_id": "evt-settle",
+      "proposition": "Acme settled for $10 million.",
+      "importance": "major",
+      "expected_state": "superseded"
+    },
+    {
+      "claim_id": "cl-settle-25",
+      "event_id": "evt-settle",
+      "proposition": "The settlement amount is $25 million.",
+      "importance": "major",
+      "expected_state": "supported",
+      "supersedes_claim_id": "cl-settle-10"
+    }
+  ],
+  "gold_evidence": [
+    {
+      "evidence_id": "ev-10",
+      "claim_id": "cl-settle-10",
+      "candidate_id": "settle-early",
+      "excerpt": "Acme agreed to settle the lawsuit for $10 million.",
+      "relationship": "supports"
+    },
+    {
+      "evidence_id": "ev-25",
+      "claim_id": "cl-settle-25",
+      "candidate_id": "settle-final",
+      "excerpt": "A judge approved a $25 million settlement in the Acme lawsuit.",
+      "relationship": "supports"
+    }
+  ],
+  "expected_primary_sources": [
+    "settle-final"
+  ],
+  "noise_candidates": [],
+  "contradictions": [],
+  "material_changes": [
+    {
+      "event_id": "evt-settle",
+      "claim_id": "cl-settle-25",
+      "description": "Settlement amount materially changed.",
+      "from_state": "supported",
+      "to_state": "superseded"
+    }
+  ]
+}

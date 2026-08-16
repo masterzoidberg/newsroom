@@ -1,0 +1,38 @@
+{
+  "schema_version": 1,
+  "fixture_id": "ba4c3c871957ed66c8e0b1c2b8a2c747a14941047470b5434376a92b26042d9f",
+  "case_id": "ambiguous-merge-similar-date",
+  "channel": "simulated_search",
+  "query": {
+    "text": "ambiguous-merge-similar-date",
+    "topic_ref": "demo"
+  },
+  "captured_at": "2026-08-15T00:00:00Z",
+  "documents": [
+    {
+      "candidate_id": "ann-1",
+      "canonical_url": "https://corp-official.test/press/2026/08/14/office",
+      "title": "Acme opens new office in Berlin",
+      "source": "official",
+      "publisher": "Acme Corp",
+      "published_at": "2026-08-14T09:00:00Z",
+      "retrieved_at": "2026-08-14T10:00:00Z",
+      "content_type": "metadata",
+      "excerpt": "Acme opened a new office in Berlin.",
+      "proposed_event_key": "acme-berlin-office"
+    },
+    {
+      "candidate_id": "ann-2",
+      "canonical_url": "https://corp-official.test/press/2026/08/15/office",
+      "title": "Acme opens new office in Tokyo",
+      "source": "official",
+      "publisher": "Acme Corp",
+      "published_at": "2026-08-15T09:00:00Z",
+      "retrieved_at": "2026-08-15T10:00:00Z",
+      "content_type": "metadata",
+      "excerpt": "Acme opened a new office in Tokyo.",
+      "proposed_event_key": "acme-tokyo-office"
+    }
+  ],
+  "content_hash": "ba4c3c871957ed66c8e0b1c2b8a2c747a14941047470b5434376a92b26042d9f"
+}

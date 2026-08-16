@@ -1,0 +1,111 @@
+{
+  "schema_version": 1,
+  "case_id": "corroboration-no-update-three",
+  "title": "Three outlets report identical figures",
+  "description": "Three outlets report the same confirmed figure; corroboration strengthens the claim without creating new events.",
+  "case_type": "corroboration_no_update",
+  "monitored_targets": [
+    {
+      "kind": "topic",
+      "ref": "demo"
+    }
+  ],
+  "observation_window": {
+    "start": null,
+    "end": null
+  },
+  "provenance": {
+    "source": "synthetic",
+    "note": "Synthetic edge case using reserved .test domains. Entities and facts are fictional; designed from real-world failure modes observed during v1 review (rumor/confirmation, corrections, false merges, mutating pages). Not real reporting."
+  },
+  "reviewer_notes": "",
+  "candidates": [
+    {
+      "candidate_id": "o1",
+      "canonical_url": "https://outlet-a.test/news/fig",
+      "title": "Acme reaches 1 million users",
+      "source": "web",
+      "publisher": "Outlet A",
+      "published_at": "2026-08-13T12:00:00Z",
+      "retrieved_at": "2026-08-13T13:00:00Z",
+      "content_type": "metadata",
+      "excerpt": "Acme said it reached 1 million users.",
+      "notes": null,
+      "content_hash": "bd8a0ac34753a70c58e96756c0e9f64dbae155e7069194e86ea83ceecee0499c"
+    },
+    {
+      "candidate_id": "o2",
+      "canonical_url": "https://outlet-b.test/news/fig",
+      "title": "Acme hits 1 million users",
+      "source": "web",
+      "publisher": "Outlet B",
+      "published_at": "2026-08-13T12:30:00Z",
+      "retrieved_at": "2026-08-13T13:30:00Z",
+      "content_type": "metadata",
+      "excerpt": "Acme announced it reached 1 million users.",
+      "notes": null,
+      "content_hash": "671bed02a5f56cb67ca3089a3bcd317aeecad5dc5d11dffd444635a0bb520b26"
+    },
+    {
+      "candidate_id": "o3",
+      "canonical_url": "https://outlet-c.test/news/fig",
+      "title": "Acme surpasses 1 million users",
+      "source": "web",
+      "publisher": "Outlet C",
+      "published_at": "2026-08-13T13:00:00Z",
+      "retrieved_at": "2026-08-13T14:00:00Z",
+      "content_type": "metadata",
+      "excerpt": "Acme confirmed it reached 1 million users.",
+      "notes": null,
+      "content_hash": "eff0fa6f042df0e06ff39ee7505a6e7b623e559c3b38f5cb9db261a6dc88b984"
+    }
+  ],
+  "gold_groups": [
+    {
+      "event_id": "evt-1m",
+      "candidate_ids": [
+        "o1",
+        "o2",
+        "o3"
+      ]
+    }
+  ],
+  "gold_claims": [
+    {
+      "claim_id": "cl-1m",
+      "event_id": "evt-1m",
+      "proposition": "Acme reached 1 million users.",
+      "importance": "major",
+      "expected_state": "supported"
+    }
+  ],
+  "gold_evidence": [
+    {
+      "evidence_id": "ev-o1",
+      "claim_id": "cl-1m",
+      "candidate_id": "o1",
+      "excerpt": "Acme said it reached 1 million users.",
+      "relationship": "supports"
+    },
+    {
+      "evidence_id": "ev-o2",
+      "claim_id": "cl-1m",
+      "candidate_id": "o2",
+      "excerpt": "Acme announced it reached 1 million users.",
+      "relationship": "supports"
+    },
+    {
+      "evidence_id": "ev-o3",
+      "claim_id": "cl-1m",
+      "candidate_id": "o3",
+      "excerpt": "Acme confirmed it reached 1 million users.",
+      "relationship": "supports"
+    }
+  ],
+  "expected_primary_sources": [
+    "o1"
+  ],
+  "noise_candidates": [],
+  "contradictions": [],
+  "material_changes": []
+}

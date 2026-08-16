@@ -1,0 +1,172 @@
+{
+  "schema_version": 1,
+  "case_id": "similar-distinct-hermes-events",
+  "title": "Four distinct Hermes agent events must not merge",
+  "description": "Four separate, similar-but-distinct Hermes events (a portable-plugins PR, a Vercel integration, and two unrelated WebUI bug-fix PRs). All concern the same subject; a false merge is harmful.",
+  "case_type": "similar_distinct_events",
+  "monitored_targets": [
+    {
+      "kind": "topic",
+      "ref": "hermes"
+    }
+  ],
+  "observation_window": {
+    "start": "2026-07-01T00:00:00Z",
+    "end": "2026-08-15T00:00:00Z"
+  },
+  "provenance": {
+    "source": "Hermes Newsroom v1 dev profile (read-only extraction)",
+    "note": "Metadata only.",
+    "source_db": "C:/Users/nicol/AppData/Local/hermes/profiles/newsroom-dev/plugin-data/newsroom/newsroom.db"
+  },
+  "reviewer_notes": "v1 kept all four as separate stories; this case guards the conservative no-merge behavior.",
+  "candidates": [
+    {
+      "candidate_id": "pr-portable-plugins",
+      "canonical_url": "https://github.com/NousResearch/hermes-agent/pull/80593",
+      "title": "feat(plugins): support portable Agent Plugins v1 packages",
+      "source": "github",
+      "publisher": "Nous Research",
+      "published_at": "2026-08-07T00:00:00Z",
+      "retrieved_at": "2026-08-15T03:54:13Z",
+      "content_type": "metadata",
+      "excerpt": "Opt-in support for the Agent Plugins v1 portable standard.",
+      "notes": null,
+      "content_hash": "81505d7d140a182e34c516705041abca7b71d997239afdcdaca5b64ae5882f65"
+    },
+    {
+      "candidate_id": "vercel-integration",
+      "canonical_url": "https://vercel.com/changelog/vercel-ai-gateway-and-vercel-sandbox-now-available-on-hermes-agent",
+      "title": "Vercel AI Gateway and Vercel Sandbox now available on Hermes Agent",
+      "source": "web",
+      "publisher": "Vercel",
+      "published_at": "2026-08-07T00:00:00Z",
+      "retrieved_at": "2026-08-15T03:54:13Z",
+      "content_type": "metadata",
+      "excerpt": "Hermes Agent now supports Vercel AI Gateway and Vercel Sandbox.",
+      "notes": null,
+      "content_hash": "c123e47c7b47b86714f8794fab3400ce9d6da1cb0cd709f753af4a377d9d5230"
+    },
+    {
+      "candidate_id": "webui-4955",
+      "canonical_url": "https://github.com/nesquena/hermes-webui/pull/4955",
+      "title": "fix(approval): stale local approval card clears instead of dead-ending",
+      "source": "github",
+      "publisher": "Hermes WebUI",
+      "published_at": "2026-07-21T00:00:00Z",
+      "retrieved_at": "2026-08-15T03:54:13Z",
+      "content_type": "metadata",
+      "excerpt": "Fixes a stale approval card dead-end.",
+      "notes": null,
+      "content_hash": "654e38b1032684012a0ecaab8b7ccade3c6a3af63bf4d8ccf543b5165bd45244"
+    },
+    {
+      "candidate_id": "webui-6036",
+      "canonical_url": "https://github.com/nesquena/hermes-webui/pull/6036",
+      "title": "Release exp: fix 'approve once' persisting as session approval",
+      "source": "github",
+      "publisher": "Hermes WebUI",
+      "published_at": "2026-07-13T00:00:00Z",
+      "retrieved_at": "2026-08-15T03:54:13Z",
+      "content_type": "metadata",
+      "excerpt": "Fixes 'Approve once' wrongly persisting as session approval.",
+      "notes": null,
+      "content_hash": "9dc3ae0e6d682d83f76a2c9c870a9b66c8c88a324ec631aac1571064bd1a9bd3"
+    }
+  ],
+  "gold_groups": [
+    {
+      "event_id": "evt-portable-plugins",
+      "candidate_ids": [
+        "pr-portable-plugins"
+      ]
+    },
+    {
+      "event_id": "evt-vercel",
+      "candidate_ids": [
+        "vercel-integration"
+      ]
+    },
+    {
+      "event_id": "evt-webui-4955",
+      "candidate_ids": [
+        "webui-4955"
+      ]
+    },
+    {
+      "event_id": "evt-webui-6036",
+      "candidate_ids": [
+        "webui-6036"
+      ]
+    }
+  ],
+  "gold_claims": [
+    {
+      "claim_id": "cl-portable",
+      "event_id": "evt-portable-plugins",
+      "proposition": "Hermes added support for portable Agent Plugins v1.",
+      "importance": "relevant",
+      "expected_state": "supported"
+    },
+    {
+      "claim_id": "cl-vercel",
+      "event_id": "evt-vercel",
+      "proposition": "Hermes supports Vercel AI Gateway and Sandbox backends.",
+      "importance": "relevant",
+      "expected_state": "supported"
+    },
+    {
+      "claim_id": "cl-webui-4955",
+      "event_id": "evt-webui-4955",
+      "proposition": "Hermes WebUI fixed a stale approval card dead-end.",
+      "importance": "relevant",
+      "expected_state": "supported"
+    },
+    {
+      "claim_id": "cl-webui-6036",
+      "event_id": "evt-webui-6036",
+      "proposition": "Hermes WebUI fixed 'Approve once' persisting as session approval.",
+      "importance": "relevant",
+      "expected_state": "supported"
+    }
+  ],
+  "gold_evidence": [
+    {
+      "evidence_id": "ev-portable",
+      "claim_id": "cl-portable",
+      "candidate_id": "pr-portable-plugins",
+      "excerpt": "Opt-in support for the Agent Plugins v1 portable standard.",
+      "relationship": "supports"
+    },
+    {
+      "evidence_id": "ev-vercel",
+      "claim_id": "cl-vercel",
+      "candidate_id": "vercel-integration",
+      "excerpt": "Hermes Agent now supports Vercel AI Gateway and Vercel Sandbox.",
+      "relationship": "supports"
+    },
+    {
+      "evidence_id": "ev-webui-4955",
+      "claim_id": "cl-webui-4955",
+      "candidate_id": "webui-4955",
+      "excerpt": "Fixes a stale approval card dead-end.",
+      "relationship": "supports"
+    },
+    {
+      "evidence_id": "ev-webui-6036",
+      "claim_id": "cl-webui-6036",
+      "candidate_id": "webui-6036",
+      "excerpt": "Fixes 'Approve once' wrongly persisting as session approval.",
+      "relationship": "supports"
+    }
+  ],
+  "expected_primary_sources": [
+    "pr-portable-plugins",
+    "vercel-integration",
+    "webui-4955",
+    "webui-6036"
+  ],
+  "noise_candidates": [],
+  "contradictions": [],
+  "material_changes": []
+}

@@ -1,0 +1,26 @@
+{
+  "schema_version": 1,
+  "fixture_id": "f521c8670f0396195ddbdfbeb6ff03e290212e918d73149e7ff4422a64dc2645",
+  "case_id": "rumor-unsubstantiated-launch",
+  "channel": "simulated_search",
+  "query": {
+    "text": "rumor-unsubstantiated-launch",
+    "topic_ref": "demo"
+  },
+  "captured_at": "2026-08-15T00:00:00Z",
+  "documents": [
+    {
+      "candidate_id": "rumor-launch",
+      "canonical_url": "https://rumor-blog.test/2026/08/01/secret-launch",
+      "title": "Rumor: Acme to launch secret product on Aug 15",
+      "source": "web",
+      "publisher": "Rumor Blog",
+      "published_at": "2026-08-01T10:00:00Z",
+      "retrieved_at": "2026-08-01T11:00:00Z",
+      "content_type": "metadata",
+      "excerpt": "A tipster claims Acme will launch a secret product on August 15.",
+      "proposed_event_key": "acme-secret-launch"
+    }
+  ],
+  "content_hash": "f521c8670f0396195ddbdfbeb6ff03e290212e918d73149e7ff4422a64dc2645"
+}

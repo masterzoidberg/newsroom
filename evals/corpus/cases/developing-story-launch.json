@@ -1,0 +1,83 @@
+{
+  "schema_version": 1,
+  "case_id": "developing-story-launch",
+  "title": "Product launch coverage accrues details",
+  "description": "Early report of a launch is later followed by pricing and availability details; same event, growing.",
+  "case_type": "developing_story",
+  "monitored_targets": [
+    {
+      "kind": "topic",
+      "ref": "demo"
+    }
+  ],
+  "observation_window": {
+    "start": null,
+    "end": null
+  },
+  "provenance": {
+    "source": "synthetic",
+    "note": "Synthetic edge case using reserved .test domains. Entities and facts are fictional; designed from real-world failure modes observed during v1 review (rumor/confirmation, corrections, false merges, mutating pages). Not real reporting."
+  },
+  "reviewer_notes": "",
+  "candidates": [
+    {
+      "candidate_id": "outlet-b-t0",
+      "canonical_url": "https://outlet-b.test/news/widget-t0",
+      "title": "Acme to launch Widget next week",
+      "source": "web",
+      "publisher": "Outlet B",
+      "published_at": "2026-08-10T10:00:00Z",
+      "retrieved_at": "2026-08-10T11:00:00Z",
+      "content_type": "metadata",
+      "excerpt": "Acme plans to launch the Widget next week.",
+      "notes": null,
+      "content_hash": "fff311677e0dcf73f04d92c6618d31d6dc91e30578a018ea91cae843add07e90"
+    },
+    {
+      "candidate_id": "outlet-b-t1",
+      "canonical_url": "https://outlet-b.test/news/widget-t1",
+      "title": "Acme Widget launches at $199",
+      "source": "web",
+      "publisher": "Outlet B",
+      "published_at": "2026-08-17T10:00:00Z",
+      "retrieved_at": "2026-08-17T11:00:00Z",
+      "content_type": "metadata",
+      "excerpt": "The Acme Widget launched today at $199 with next-day shipping.",
+      "notes": null,
+      "content_hash": "884bff613b433558d8e76fea9901cac96f134e70b8f45f564ca223ab35e78dd8"
+    }
+  ],
+  "gold_groups": [
+    {
+      "event_id": "evt-widget",
+      "candidate_ids": [
+        "outlet-b-t0",
+        "outlet-b-t1"
+      ]
+    }
+  ],
+  "gold_claims": [
+    {
+      "claim_id": "cl-widget-price",
+      "event_id": "evt-widget",
+      "proposition": "The Acme Widget launched at $199.",
+      "importance": "major",
+      "expected_state": "supported"
+    }
+  ],
+  "gold_evidence": [
+    {
+      "evidence_id": "ev-widget-price",
+      "claim_id": "cl-widget-price",
+      "candidate_id": "outlet-b-t1",
+      "excerpt": "The Acme Widget launched today at $199 with next-day shipping.",
+      "relationship": "supports"
+    }
+  ],
+  "expected_primary_sources": [
+    "outlet-b-t1"
+  ],
+  "noise_candidates": [],
+  "contradictions": [],
+  "material_changes": []
+}

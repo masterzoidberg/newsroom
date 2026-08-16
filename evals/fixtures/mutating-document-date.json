@@ -1,0 +1,38 @@
+{
+  "schema_version": 1,
+  "fixture_id": "ae359b504122ba2e44729c24b42e2bfa4aad3b0fdae08f932027ad66e7ae0ae9",
+  "case_id": "mutating-document-date",
+  "channel": "simulated_search",
+  "query": {
+    "text": "mutating-document-date",
+    "topic_ref": "demo"
+  },
+  "captured_at": "2026-08-15T00:00:00Z",
+  "documents": [
+    {
+      "candidate_id": "d1",
+      "canonical_url": "https://outlet-b.test/news/dated",
+      "title": "Acme announces hiring spree",
+      "source": "web",
+      "publisher": "Outlet B",
+      "published_at": "2026-08-14T09:00:00Z",
+      "retrieved_at": "2026-08-14T10:00:00Z",
+      "content_type": "metadata",
+      "excerpt": "Acme announced a hiring spree of 200 roles.",
+      "proposed_event_key": "acme-hiring-spree"
+    },
+    {
+      "candidate_id": "d2",
+      "canonical_url": "https://outlet-b.test/news/dated",
+      "title": "Acme announces hiring spree",
+      "source": "web",
+      "publisher": "Outlet B",
+      "published_at": "2026-08-15T09:00:00Z",
+      "retrieved_at": "2026-08-15T10:00:00Z",
+      "content_type": "metadata",
+      "excerpt": "Acme announced a hiring spree of 200 roles.",
+      "proposed_event_key": "acme-hiring-spree"
+    }
+  ],
+  "content_hash": "ae359b504122ba2e44729c24b42e2bfa4aad3b0fdae08f932027ad66e7ae0ae9"
+}

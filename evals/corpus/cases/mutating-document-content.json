@@ -1,0 +1,105 @@
+{
+  "schema_version": 1,
+  "case_id": "mutating-document-content",
+  "title": "A page changes its content after first retrieval",
+  "description": "The same URL yields different content on a second retrieval. Evidence must pin to the version actually retrieved.",
+  "case_type": "mutating_document",
+  "monitored_targets": [
+    {
+      "kind": "topic",
+      "ref": "demo"
+    }
+  ],
+  "observation_window": {
+    "start": null,
+    "end": null
+  },
+  "provenance": {
+    "source": "synthetic",
+    "note": "Synthetic edge case using reserved .test domains. Entities and facts are fictional; designed from real-world failure modes observed during v1 review (rumor/confirmation, corrections, false merges, mutating pages). Not real reporting."
+  },
+  "reviewer_notes": "",
+  "candidates": [
+    {
+      "candidate_id": "v1",
+      "canonical_url": "https://outlet-a.test/news/mutable",
+      "title": "Acme reports Q2 revenue of $1.0B",
+      "source": "web",
+      "publisher": "Outlet A",
+      "published_at": "2026-08-01T10:00:00Z",
+      "retrieved_at": "2026-08-01T11:00:00Z",
+      "content_type": "excerpt",
+      "excerpt": "Acme reported Q2 revenue of $1.0 billion.",
+      "notes": null,
+      "content_hash": "72c2af9da93947a682a02122ac2a883125b723234e0fb2d2020beb6d3aea8782"
+    },
+    {
+      "candidate_id": "v2",
+      "canonical_url": "https://outlet-a.test/news/mutable",
+      "title": "Acme reports Q2 revenue of $1.2B (updated)",
+      "source": "web",
+      "publisher": "Outlet A",
+      "published_at": "2026-08-02T10:00:00Z",
+      "retrieved_at": "2026-08-02T11:00:00Z",
+      "content_type": "excerpt",
+      "excerpt": "Acme reported Q2 revenue of $1.2 billion, updated from $1.0 billion.",
+      "notes": null,
+      "content_hash": "dee3ad02f1b233cc0d9ad1e0fcadf83a9109c9a0b4e08baa9bc64f5f4c00b698"
+    }
+  ],
+  "gold_groups": [
+    {
+      "event_id": "evt-mutable",
+      "candidate_ids": [
+        "v1",
+        "v2"
+      ],
+      "rationale": "Two versions of the same mutable document."
+    }
+  ],
+  "gold_claims": [
+    {
+      "claim_id": "cl-rev-1",
+      "event_id": "evt-mutable",
+      "proposition": "Q2 revenue was $1.0 billion.",
+      "importance": "major",
+      "expected_state": "superseded"
+    },
+    {
+      "claim_id": "cl-rev-2",
+      "event_id": "evt-mutable",
+      "proposition": "Q2 revenue was $1.2 billion.",
+      "importance": "major",
+      "expected_state": "supported",
+      "supersedes_claim_id": "cl-rev-1"
+    }
+  ],
+  "gold_evidence": [
+    {
+      "evidence_id": "ev-v1",
+      "claim_id": "cl-rev-1",
+      "candidate_id": "v1",
+      "excerpt": "Acme reported Q2 revenue of $1.0 billion.",
+      "relationship": "supports"
+    },
+    {
+      "evidence_id": "ev-v2",
+      "claim_id": "cl-rev-2",
+      "candidate_id": "v2",
+      "excerpt": "Acme reported Q2 revenue of $1.2 billion, updated from $1.0 billion.",
+      "relationship": "supports"
+    }
+  ],
+  "expected_primary_sources": [
+    "v2"
+  ],
+  "noise_candidates": [],
+  "contradictions": [],
+  "material_changes": [
+    {
+      "event_id": "evt-mutable",
+      "claim_id": "cl-rev-2",
+      "description": "Same URL mutated; newer version supersedes."
+    }
+  ]
+}

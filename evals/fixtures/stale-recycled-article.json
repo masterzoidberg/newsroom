@@ -1,0 +1,26 @@
+{
+  "schema_version": 1,
+  "fixture_id": "5fc6c0c310f0584b4c56e515e94ca06c8229985043e718f0d2ffad1e06b17950",
+  "case_id": "stale-recycled-article",
+  "channel": "simulated_search",
+  "query": {
+    "text": "stale-recycled-article",
+    "topic_ref": "demo"
+  },
+  "captured_at": "2026-08-15T00:00:00Z",
+  "documents": [
+    {
+      "candidate_id": "old-article",
+      "canonical_url": "https://outlet-b.test/news/acme-q1",
+      "title": "Acme posts strong Q1 results",
+      "source": "web",
+      "publisher": "Outlet B",
+      "published_at": "2026-02-01T10:00:00Z",
+      "retrieved_at": "2026-08-15T00:00:00Z",
+      "content_type": "metadata",
+      "excerpt": "Acme posted strong Q1 results with 20% growth.",
+      "proposed_event_key": "acme-q1-results"
+    }
+  ],
+  "content_hash": "5fc6c0c310f0584b4c56e515e94ca06c8229985043e718f0d2ffad1e06b17950"
+}

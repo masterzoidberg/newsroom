@@ -1,0 +1,38 @@
+{
+  "schema_version": 1,
+  "fixture_id": "2532d6e4f1ca7b0bad251a65312d9f2db63b01eb51474e751afe7505b5909d06",
+  "case_id": "conflicting-casualty-figures",
+  "channel": "simulated_search",
+  "query": {
+    "text": "conflicting-casualty-figures",
+    "topic_ref": "demo"
+  },
+  "captured_at": "2026-08-15T00:00:00Z",
+  "documents": [
+    {
+      "candidate_id": "outlet-a",
+      "canonical_url": "https://outlet-a.test/news/incident",
+      "title": "Incident leaves 12 injured",
+      "source": "web",
+      "publisher": "Outlet A",
+      "published_at": "2026-08-14T18:00:00Z",
+      "retrieved_at": "2026-08-14T19:00:00Z",
+      "content_type": "metadata",
+      "excerpt": "Officials said 12 people were injured in the incident.",
+      "proposed_event_key": "incident-casualties"
+    },
+    {
+      "candidate_id": "outlet-b",
+      "canonical_url": "https://outlet-b.test/news/incident",
+      "title": "Incident leaves 30 injured, officials say",
+      "source": "web",
+      "publisher": "Outlet B",
+      "published_at": "2026-08-14T18:30:00Z",
+      "retrieved_at": "2026-08-14T19:30:00Z",
+      "content_type": "metadata",
+      "excerpt": "Officials revised the injured count to 30.",
+      "proposed_event_key": "incident-casualties"
+    }
+  ],
+  "content_hash": "2532d6e4f1ca7b0bad251a65312d9f2db63b01eb51474e751afe7505b5909d06"
+}

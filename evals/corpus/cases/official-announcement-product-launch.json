@@ -1,0 +1,69 @@
+{
+  "schema_version": 1,
+  "case_id": "official-announcement-product-launch",
+  "title": "Corp Official press release announces Acme OS 4.0",
+  "description": "A single first-party press release announcing a product. The claim is fully supported by a primary source; no secondary outlets are needed.",
+  "case_type": "official_announcement",
+  "monitored_targets": [
+    {
+      "kind": "topic",
+      "ref": "demo"
+    }
+  ],
+  "observation_window": {
+    "start": null,
+    "end": null
+  },
+  "provenance": {
+    "source": "synthetic",
+    "note": "Synthetic edge case using reserved .test domains. Entities and facts are fictional; designed from real-world failure modes observed during v1 review (rumor/confirmation, corrections, false merges, mutating pages). Not real reporting."
+  },
+  "reviewer_notes": "",
+  "candidates": [
+    {
+      "candidate_id": "acme-official",
+      "canonical_url": "https://corp-official.test/press/2026/08/12/acme-os-4-0",
+      "title": "Acme OS 4.0 is now generally available",
+      "source": "official",
+      "publisher": "Acme Corp",
+      "published_at": "2026-08-12T14:00:00Z",
+      "retrieved_at": "2026-08-15T00:00:00Z",
+      "content_type": "metadata",
+      "excerpt": "Acme OS 4.0 is generally available today, with a new scheduler.",
+      "notes": null,
+      "content_hash": "3fcbcf5ae7b7b1960189a1369361a86dc01647442bef2648375928d2e9d6aa35"
+    }
+  ],
+  "gold_groups": [
+    {
+      "event_id": "evt-acme-4",
+      "candidate_ids": [
+        "acme-official"
+      ]
+    }
+  ],
+  "gold_claims": [
+    {
+      "claim_id": "cl-acme-ga",
+      "event_id": "evt-acme-4",
+      "proposition": "Acme OS 4.0 is generally available as of August 12, 2026.",
+      "importance": "major",
+      "expected_state": "supported"
+    }
+  ],
+  "gold_evidence": [
+    {
+      "evidence_id": "ev-acme-ga",
+      "claim_id": "cl-acme-ga",
+      "candidate_id": "acme-official",
+      "excerpt": "Acme OS 4.0 is generally available today, with a new scheduler.",
+      "relationship": "supports"
+    }
+  ],
+  "expected_primary_sources": [
+    "acme-official"
+  ],
+  "noise_candidates": [],
+  "contradictions": [],
+  "material_changes": []
+}

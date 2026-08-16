@@ -1,0 +1,69 @@
+{
+  "schema_version": 1,
+  "case_id": "official-announcement-regulatory-rule",
+  "title": "Gov Agency publishes a final rule",
+  "description": "A government agency (.test) publishes a final rule. Primary source, single claim.",
+  "case_type": "official_announcement",
+  "monitored_targets": [
+    {
+      "kind": "topic",
+      "ref": "demo"
+    }
+  ],
+  "observation_window": {
+    "start": null,
+    "end": null
+  },
+  "provenance": {
+    "source": "synthetic",
+    "note": "Synthetic edge case using reserved .test domains. Entities and facts are fictional; designed from real-world failure modes observed during v1 review (rumor/confirmation, corrections, false merges, mutating pages). Not real reporting."
+  },
+  "reviewer_notes": "",
+  "candidates": [
+    {
+      "candidate_id": "gov-rule",
+      "canonical_url": "https://gov.test/agency/press/2026/08/14/final-rule",
+      "title": "Agency adopts final rule on data retention",
+      "source": "official",
+      "publisher": "Gov Agency",
+      "published_at": "2026-08-14T09:00:00Z",
+      "retrieved_at": "2026-08-15T00:00:00Z",
+      "content_type": "metadata",
+      "excerpt": "The Agency adopted a final rule requiring 12-month data retention.",
+      "notes": null,
+      "content_hash": "20c5aec53aca5ddc5a6c5236ea5ed015fdfddea4a17a1149784144e52435bb01"
+    }
+  ],
+  "gold_groups": [
+    {
+      "event_id": "evt-rule",
+      "candidate_ids": [
+        "gov-rule"
+      ]
+    }
+  ],
+  "gold_claims": [
+    {
+      "claim_id": "cl-rule",
+      "event_id": "evt-rule",
+      "proposition": "The Agency adopted a final rule requiring 12-month data retention.",
+      "importance": "major",
+      "expected_state": "supported"
+    }
+  ],
+  "gold_evidence": [
+    {
+      "evidence_id": "ev-rule",
+      "claim_id": "cl-rule",
+      "candidate_id": "gov-rule",
+      "excerpt": "The Agency adopted a final rule requiring 12-month data retention.",
+      "relationship": "supports"
+    }
+  ],
+  "expected_primary_sources": [
+    "gov-rule"
+  ],
+  "noise_candidates": [],
+  "contradictions": [],
+  "material_changes": []
+}

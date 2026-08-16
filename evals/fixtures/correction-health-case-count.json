@@ -1,0 +1,38 @@
+{
+  "schema_version": 1,
+  "fixture_id": "c6d0e3f18dc192505facf6a37d89b45ba98fd330195eb92368e96035b3f04683",
+  "case_id": "correction-health-case-count",
+  "channel": "simulated_search",
+  "query": {
+    "text": "correction-health-case-count",
+    "topic_ref": "demo"
+  },
+  "captured_at": "2026-08-15T00:00:00Z",
+  "documents": [
+    {
+      "candidate_id": "gov-cases",
+      "canonical_url": "https://gov.test/agency/press/2026/08/12/cases",
+      "title": "Agency reports 500 cases in outbreak",
+      "source": "official",
+      "publisher": "Gov Agency",
+      "published_at": "2026-08-12T16:00:00Z",
+      "retrieved_at": "2026-08-12T17:00:00Z",
+      "content_type": "metadata",
+      "excerpt": "The agency reported 500 confirmed cases.",
+      "proposed_event_key": "outbreak-cases"
+    },
+    {
+      "candidate_id": "gov-correction",
+      "canonical_url": "https://gov.test/agency/press/2026/08/13/correction",
+      "title": "Agency corrects outbreak count to 480",
+      "source": "official",
+      "publisher": "Gov Agency",
+      "published_at": "2026-08-13T09:00:00Z",
+      "retrieved_at": "2026-08-13T10:00:00Z",
+      "content_type": "metadata",
+      "excerpt": "The agency corrected the confirmed case count to 480, attributing the difference to a duplicate-counting error.",
+      "proposed_event_key": "outbreak-cases"
+    }
+  ],
+  "content_hash": "c6d0e3f18dc192505facf6a37d89b45ba98fd330195eb92368e96035b3f04683"
+}

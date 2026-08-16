@@ -1,0 +1,69 @@
+{
+  "schema_version": 1,
+  "case_id": "stale-recycled-article",
+  "title": "Six-month-old article republished as new",
+  "description": "An outlet re-publishes a six-month-old article with no updates, but the retrieval timestamp is fresh. It must not be treated as a new event.",
+  "case_type": "stale_recycled",
+  "monitored_targets": [
+    {
+      "kind": "topic",
+      "ref": "demo"
+    }
+  ],
+  "observation_window": {
+    "start": null,
+    "end": null
+  },
+  "provenance": {
+    "source": "synthetic",
+    "note": "Synthetic edge case using reserved .test domains. Entities and facts are fictional; designed from real-world failure modes observed during v1 review (rumor/confirmation, corrections, false merges, mutating pages). Not real reporting."
+  },
+  "reviewer_notes": "",
+  "candidates": [
+    {
+      "candidate_id": "old-article",
+      "canonical_url": "https://outlet-b.test/news/acme-q1",
+      "title": "Acme posts strong Q1 results",
+      "source": "web",
+      "publisher": "Outlet B",
+      "published_at": "2026-02-01T10:00:00Z",
+      "retrieved_at": "2026-08-15T00:00:00Z",
+      "content_type": "metadata",
+      "excerpt": "Acme posted strong Q1 results with 20% growth.",
+      "notes": null,
+      "content_hash": "a63dccd78bfb6b2669eafecd8accb60b3f6f84eb75cb0341610a641384c1c464"
+    }
+  ],
+  "gold_groups": [
+    {
+      "event_id": "evt-q1",
+      "candidate_ids": [
+        "old-article"
+      ]
+    }
+  ],
+  "gold_claims": [
+    {
+      "claim_id": "cl-q1",
+      "event_id": "evt-q1",
+      "proposition": "Acme posted 20% growth in Q1.",
+      "importance": "relevant",
+      "expected_state": "supported"
+    }
+  ],
+  "gold_evidence": [
+    {
+      "evidence_id": "ev-q1",
+      "claim_id": "cl-q1",
+      "candidate_id": "old-article",
+      "excerpt": "Acme posted strong Q1 results with 20% growth.",
+      "relationship": "supports"
+    }
+  ],
+  "expected_primary_sources": [
+    "old-article"
+  ],
+  "noise_candidates": [],
+  "contradictions": [],
+  "material_changes": []
+}

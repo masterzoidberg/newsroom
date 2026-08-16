@@ -1,0 +1,38 @@
+{
+  "schema_version": 1,
+  "fixture_id": "ac69a3d21dad7ac946acbf5f93c81e49a04520f524555b2865e4a6f73e16ed6e",
+  "case_id": "material-update-version",
+  "channel": "simulated_search",
+  "query": {
+    "text": "material-update-version",
+    "topic_ref": "demo"
+  },
+  "captured_at": "2026-08-15T00:00:00Z",
+  "documents": [
+    {
+      "candidate_id": "rel-1",
+      "canonical_url": "https://corp-official.test/press/2026/08/01/rel-1",
+      "title": "Acme OS 4.0 released",
+      "source": "official",
+      "publisher": "Acme Corp",
+      "published_at": "2026-08-01T12:00:00Z",
+      "retrieved_at": "2026-08-01T13:00:00Z",
+      "content_type": "metadata",
+      "excerpt": "Acme OS 4.0 released today.",
+      "proposed_event_key": "acme-os-4-0-release"
+    },
+    {
+      "candidate_id": "rel-2",
+      "canonical_url": "https://corp-official.test/press/2026/08/14/rel-2",
+      "title": "Acme OS 4.1 adds offline mode",
+      "source": "official",
+      "publisher": "Acme Corp",
+      "published_at": "2026-08-14T12:00:00Z",
+      "retrieved_at": "2026-08-14T13:00:00Z",
+      "content_type": "metadata",
+      "excerpt": "Acme OS 4.1 adds a long-awaited offline mode.",
+      "proposed_event_key": "acme-os-4-1-release"
+    }
+  ],
+  "content_hash": "ac69a3d21dad7ac946acbf5f93c81e49a04520f524555b2865e4a6f73e16ed6e"
+}

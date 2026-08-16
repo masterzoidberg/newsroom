@@ -1,0 +1,26 @@
+{
+  "schema_version": 1,
+  "fixture_id": "961cefc0d2d427bf9609e58e35e41ec7bb213ad9fdcedd2a825a872f515b2c85",
+  "case_id": "cross-topic-regulation-merger",
+  "channel": "simulated_search",
+  "query": {
+    "text": "cross-topic-regulation-merger",
+    "topic_ref": "demo"
+  },
+  "captured_at": "2026-08-15T00:00:00Z",
+  "documents": [
+    {
+      "candidate_id": "merger-reg",
+      "canonical_url": "https://outlet-c.test/news/merger-regulators",
+      "title": "Acme merger draws regulator scrutiny",
+      "source": "web",
+      "publisher": "Outlet C",
+      "published_at": "2026-08-13T15:00:00Z",
+      "retrieved_at": "2026-08-13T16:00:00Z",
+      "content_type": "metadata",
+      "excerpt": "The Acme-Globex merger drew scrutiny from regulators.",
+      "proposed_event_key": "acme-globex-merger-reg"
+    }
+  ],
+  "content_hash": "961cefc0d2d427bf9609e58e35e41ec7bb213ad9fdcedd2a825a872f515b2c85"
+}

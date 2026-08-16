@@ -1,0 +1,103 @@
+{
+  "schema_version": 1,
+  "case_id": "ambiguous-merge-similar-date",
+  "title": "Same subject, similar date, genuinely different events",
+  "description": "Two announcements from the same company on adjacent days that look similar but are distinct. Ambiguity resolves to split.",
+  "case_type": "ambiguous_merge",
+  "monitored_targets": [
+    {
+      "kind": "topic",
+      "ref": "demo"
+    }
+  ],
+  "observation_window": {
+    "start": null,
+    "end": null
+  },
+  "provenance": {
+    "source": "synthetic",
+    "note": "Synthetic edge case using reserved .test domains. Entities and facts are fictional; designed from real-world failure modes observed during v1 review (rumor/confirmation, corrections, false merges, mutating pages). Not real reporting."
+  },
+  "reviewer_notes": "",
+  "candidates": [
+    {
+      "candidate_id": "ann-1",
+      "canonical_url": "https://corp-official.test/press/2026/08/14/office",
+      "title": "Acme opens new office in Berlin",
+      "source": "official",
+      "publisher": "Acme Corp",
+      "published_at": "2026-08-14T09:00:00Z",
+      "retrieved_at": "2026-08-14T10:00:00Z",
+      "content_type": "metadata",
+      "excerpt": "Acme opened a new office in Berlin.",
+      "notes": null,
+      "content_hash": "e8cb678039c808a530dc1f3e2a314a9f242a638a9440e14b2d33811a50339824"
+    },
+    {
+      "candidate_id": "ann-2",
+      "canonical_url": "https://corp-official.test/press/2026/08/15/office",
+      "title": "Acme opens new office in Tokyo",
+      "source": "official",
+      "publisher": "Acme Corp",
+      "published_at": "2026-08-15T09:00:00Z",
+      "retrieved_at": "2026-08-15T10:00:00Z",
+      "content_type": "metadata",
+      "excerpt": "Acme opened a new office in Tokyo.",
+      "notes": null,
+      "content_hash": "ba418320e4335f6b81deb338ff06370f57feeaa26938ddc35c9aa93bca62fc15"
+    }
+  ],
+  "gold_groups": [
+    {
+      "event_id": "evt-berlin",
+      "candidate_ids": [
+        "ann-1"
+      ]
+    },
+    {
+      "event_id": "evt-tokyo",
+      "candidate_ids": [
+        "ann-2"
+      ]
+    }
+  ],
+  "gold_claims": [
+    {
+      "claim_id": "cl-berlin",
+      "event_id": "evt-berlin",
+      "proposition": "Acme opened an office in Berlin.",
+      "importance": "relevant",
+      "expected_state": "supported"
+    },
+    {
+      "claim_id": "cl-tokyo",
+      "event_id": "evt-tokyo",
+      "proposition": "Acme opened an office in Tokyo.",
+      "importance": "relevant",
+      "expected_state": "supported"
+    }
+  ],
+  "gold_evidence": [
+    {
+      "evidence_id": "ev-berlin",
+      "claim_id": "cl-berlin",
+      "candidate_id": "ann-1",
+      "excerpt": "Acme opened a new office in Berlin.",
+      "relationship": "supports"
+    },
+    {
+      "evidence_id": "ev-tokyo",
+      "claim_id": "cl-tokyo",
+      "candidate_id": "ann-2",
+      "excerpt": "Acme opened a new office in Tokyo.",
+      "relationship": "supports"
+    }
+  ],
+  "expected_primary_sources": [
+    "ann-1",
+    "ann-2"
+  ],
+  "noise_candidates": [],
+  "contradictions": [],
+  "material_changes": []
+}

@@ -1,0 +1,38 @@
+{
+  "schema_version": 1,
+  "fixture_id": "22cf007f819e914d6ea53c349d6e3880f4356fdd3491571ad7bff2a5cbf1d247",
+  "case_id": "developing-story-outage",
+  "channel": "simulated_search",
+  "query": {
+    "text": "developing-story-outage",
+    "topic_ref": "demo"
+  },
+  "captured_at": "2026-08-15T00:00:00Z",
+  "documents": [
+    {
+      "candidate_id": "outlet-a-t0",
+      "canonical_url": "https://outlet-a.test/news/outage-t0",
+      "title": "Cloud provider reports partial outage",
+      "source": "web",
+      "publisher": "Outlet A",
+      "published_at": "2026-08-14T08:30:00Z",
+      "retrieved_at": "2026-08-14T09:00:00Z",
+      "content_type": "metadata",
+      "excerpt": "The provider reported a partial outage affecting some regions.",
+      "proposed_event_key": "cloud-outage"
+    },
+    {
+      "candidate_id": "outlet-a-t1",
+      "canonical_url": "https://outlet-a.test/news/outage-t1",
+      "title": "Cloud outage expands, then resolves",
+      "source": "web",
+      "publisher": "Outlet A",
+      "published_at": "2026-08-14T12:00:00Z",
+      "retrieved_at": "2026-08-14T12:30:00Z",
+      "content_type": "metadata",
+      "excerpt": "The outage expanded to all regions before being resolved at 11:40 UTC.",
+      "proposed_event_key": "cloud-outage"
+    }
+  ],
+  "content_hash": "22cf007f819e914d6ea53c349d6e3880f4356fdd3491571ad7bff2a5cbf1d247"
+}

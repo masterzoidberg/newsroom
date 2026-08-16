@@ -1,0 +1,38 @@
+{
+  "schema_version": 1,
+  "fixture_id": "897d6feca37242a5a6560dc26bfa3cbe2b2cb6bc97106969ba32065aa8aaf1bb",
+  "case_id": "material-update-outcome",
+  "channel": "simulated_search",
+  "query": {
+    "text": "material-update-outcome",
+    "topic_ref": "demo"
+  },
+  "captured_at": "2026-08-15T00:00:00Z",
+  "documents": [
+    {
+      "candidate_id": "settle-early",
+      "canonical_url": "https://outlet-a.test/news/settle-early",
+      "title": "Acme to settle lawsuit for $10M",
+      "source": "web",
+      "publisher": "Outlet A",
+      "published_at": "2026-08-14T10:00:00Z",
+      "retrieved_at": "2026-08-14T11:00:00Z",
+      "content_type": "metadata",
+      "excerpt": "Acme agreed to settle the lawsuit for $10 million.",
+      "proposed_event_key": "acme-settlement"
+    },
+    {
+      "candidate_id": "settle-final",
+      "canonical_url": "https://court.test/news/settle-final",
+      "title": "Judge approves $25M settlement in Acme suit",
+      "source": "official",
+      "publisher": "Court",
+      "published_at": "2026-08-15T12:00:00Z",
+      "retrieved_at": "2026-08-15T13:00:00Z",
+      "content_type": "metadata",
+      "excerpt": "A judge approved a $25 million settlement in the Acme lawsuit.",
+      "proposed_event_key": "acme-settlement"
+    }
+  ],
+  "content_hash": "897d6feca37242a5a6560dc26bfa3cbe2b2cb6bc97106969ba32065aa8aaf1bb"
+}

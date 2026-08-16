@@ -1,0 +1,38 @@
+{
+  "schema_version": 1,
+  "fixture_id": "ea12212f5dee33408c7c4dd2f2f6081eed446e2ce0e3cba627948142b791d668",
+  "case_id": "rumor-confirmed-merger",
+  "channel": "simulated_search",
+  "query": {
+    "text": "rumor-confirmed-merger",
+    "topic_ref": "demo"
+  },
+  "captured_at": "2026-08-15T00:00:00Z",
+  "documents": [
+    {
+      "candidate_id": "rumor-merger",
+      "canonical_url": "https://rumor-blog.test/2026/08/10/acme-globex-talks",
+      "title": "Sources: Acme and Globex in merger talks",
+      "source": "web",
+      "publisher": "Rumor Blog",
+      "published_at": "2026-08-10T09:00:00Z",
+      "retrieved_at": "2026-08-10T10:00:00Z",
+      "content_type": "metadata",
+      "excerpt": "People familiar say Acme and Globex are in merger talks.",
+      "proposed_event_key": "acme-globex-merger"
+    },
+    {
+      "candidate_id": "acme-confirm",
+      "canonical_url": "https://corp-official.test/press/2026/08/15/merger",
+      "title": "Acme and Globex announce merger agreement",
+      "source": "official",
+      "publisher": "Acme Corp",
+      "published_at": "2026-08-15T13:00:00Z",
+      "retrieved_at": "2026-08-15T14:00:00Z",
+      "content_type": "metadata",
+      "excerpt": "Acme and Globex announced a definitive merger agreement.",
+      "proposed_event_key": "acme-globex-merger"
+    }
+  ],
+  "content_hash": "ea12212f5dee33408c7c4dd2f2f6081eed446e2ce0e3cba627948142b791d668"
+}

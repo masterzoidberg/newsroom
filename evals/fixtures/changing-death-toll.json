@@ -1,0 +1,50 @@
+{
+  "schema_version": 1,
+  "fixture_id": "ff038bf458202c75d1e0d88d0db0121d1a878f4b8e348f7113e98e53c72ef146",
+  "case_id": "changing-death-toll",
+  "channel": "simulated_search",
+  "query": {
+    "text": "changing-death-toll",
+    "topic_ref": "demo"
+  },
+  "captured_at": "2026-08-15T00:00:00Z",
+  "documents": [
+    {
+      "candidate_id": "toll-5",
+      "canonical_url": "https://outlet-a.test/news/toll-5",
+      "title": "Disaster death toll rises to 5",
+      "source": "web",
+      "publisher": "Outlet A",
+      "published_at": "2026-08-10T12:00:00Z",
+      "retrieved_at": "2026-08-10T13:00:00Z",
+      "content_type": "metadata",
+      "excerpt": "The death toll rose to 5.",
+      "proposed_event_key": "disaster-toll"
+    },
+    {
+      "candidate_id": "toll-20",
+      "canonical_url": "https://outlet-a.test/news/toll-20",
+      "title": "Disaster death toll rises to 20",
+      "source": "web",
+      "publisher": "Outlet A",
+      "published_at": "2026-08-11T12:00:00Z",
+      "retrieved_at": "2026-08-11T13:00:00Z",
+      "content_type": "metadata",
+      "excerpt": "The death toll rose to 20.",
+      "proposed_event_key": "disaster-toll"
+    },
+    {
+      "candidate_id": "toll-40",
+      "canonical_url": "https://outlet-a.test/news/toll-40",
+      "title": "Disaster death toll reaches 40",
+      "source": "web",
+      "publisher": "Outlet A",
+      "published_at": "2026-08-12T12:00:00Z",
+      "retrieved_at": "2026-08-12T13:00:00Z",
+      "content_type": "metadata",
+      "excerpt": "The death toll reached 40.",
+      "proposed_event_key": "disaster-toll"
+    }
+  ],
+  "content_hash": "ff038bf458202c75d1e0d88d0db0121d1a878f4b8e348f7113e98e53c72ef146"
+}

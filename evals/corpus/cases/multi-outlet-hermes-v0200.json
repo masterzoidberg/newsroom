@@ -1,0 +1,106 @@
+{
+  "schema_version": 1,
+  "case_id": "multi-outlet-hermes-v0200",
+  "title": "Hermes Agent v0.20.0 reported by an official release and a third-party guide",
+  "description": "One event (Hermes Agent v0.20.0 release) reported by the official GitHub release and a third-party beginner guide. The two must be grouped into a single event; the official release is primary.",
+  "case_type": "multi_outlet",
+  "monitored_targets": [
+    {
+      "kind": "topic",
+      "ref": "hermes"
+    }
+  ],
+  "observation_window": {
+    "start": "2026-08-03T00:00:00Z",
+    "end": "2026-08-15T00:00:00Z"
+  },
+  "provenance": {
+    "source": "Hermes Newsroom v1 dev profile (read-only extraction)",
+    "note": "Metadata only; no article bodies.",
+    "source_db": "C:/Users/nicol/AppData/Local/hermes/profiles/newsroom-dev/plugin-data/newsroom/newsroom.db"
+  },
+  "reviewer_notes": "The hermesatlas.com guide is a low-quality recycled guide but is genuinely about the same release; it is a legitimate second outlet, not a separate event.",
+  "candidates": [
+    {
+      "candidate_id": "github-v0200",
+      "canonical_url": "https://github.com/NousResearch/hermes-agent/releases/tag/v2026.8.3",
+      "title": "Hermes Agent v0.20.0 (v2026.8.3) - GitHub Release",
+      "source": "github",
+      "publisher": "Nous Research",
+      "published_at": "2026-08-03T16:57:52Z",
+      "retrieved_at": "2026-08-14T02:32:59Z",
+      "content_type": "metadata",
+      "excerpt": "Hermes Agent v0.20.0 ships with real-time voice, A2A protocol, and signed webhooks.",
+      "notes": null,
+      "content_hash": "bac57e58d740fc1b6663d9617503e4e99ec079727ae769707e76d4090cd46b5d"
+    },
+    {
+      "candidate_id": "hermesatlas-guide",
+      "canonical_url": "https://hermesatlas.com/guide",
+      "title": "Hermes Agent v0.20.0: The Complete Beginner's Guide (Aug 2026)",
+      "source": "web",
+      "publisher": "Hermes Atlas",
+      "published_at": null,
+      "retrieved_at": "2026-08-15T03:51:20Z",
+      "content_type": "metadata",
+      "excerpt": "A beginner guide to the Hermes Agent v0.20.0 release.",
+      "notes": null,
+      "content_hash": "b6a6625e1c8b8062c23e185b30ed92b56be78892ff983185461fce241fffc71c"
+    }
+  ],
+  "gold_groups": [
+    {
+      "event_id": "evt-hermes-v0200",
+      "candidate_ids": [
+        "github-v0200",
+        "hermesatlas-guide"
+      ],
+      "rationale": "Both report the same v0.20.0 release."
+    }
+  ],
+  "gold_claims": [
+    {
+      "claim_id": "cl-v0200-released",
+      "event_id": "evt-hermes-v0200",
+      "proposition": "Nous Research released Hermes Agent v0.20.0 on August 3, 2026.",
+      "importance": "major",
+      "expected_state": "supported"
+    },
+    {
+      "claim_id": "cl-v0200-voice",
+      "event_id": "evt-hermes-v0200",
+      "proposition": "Hermes Agent v0.20.0 added real-time voice.",
+      "importance": "relevant",
+      "expected_state": "supported"
+    }
+  ],
+  "gold_evidence": [
+    {
+      "evidence_id": "ev-v0200-released",
+      "claim_id": "cl-v0200-released",
+      "candidate_id": "github-v0200",
+      "excerpt": "Hermes Agent v0.20.0 ships with real-time voice, A2A protocol, and signed webhooks.",
+      "relationship": "supports"
+    },
+    {
+      "evidence_id": "ev-v0200-guide",
+      "claim_id": "cl-v0200-released",
+      "candidate_id": "hermesatlas-guide",
+      "excerpt": "A beginner guide to the Hermes Agent v0.20.0 release.",
+      "relationship": "supports"
+    },
+    {
+      "evidence_id": "ev-v0200-voice",
+      "claim_id": "cl-v0200-voice",
+      "candidate_id": "github-v0200",
+      "excerpt": "real-time voice",
+      "relationship": "supports"
+    }
+  ],
+  "expected_primary_sources": [
+    "github-v0200"
+  ],
+  "noise_candidates": [],
+  "contradictions": [],
+  "material_changes": []
+}

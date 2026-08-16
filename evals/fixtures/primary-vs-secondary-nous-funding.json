@@ -1,0 +1,23 @@
+{
+  "schema_version": 1,
+  "fixture_id": "3cdc2ef47e25d3bb2d127c317827f60c0a42037a9205c0b02ff1d93bf988edaf",
+  "case_id": "primary-vs-secondary-nous-funding",
+  "channel": "simulated_search",
+  "query": {},
+  "captured_at": "2026-08-15T00:00:00Z",
+  "documents": [
+    {
+      "candidate_id": "techcrunch-funding",
+      "canonical_url": "https://techcrunch.com/2026/07/13/hermes-agent-maker-nous-research-in-talks-for-new-funding-at-1-5b-valuation",
+      "title": "Hermes agent maker Nous Research in talks for new funding at $1.5B valuation",
+      "source": "web",
+      "publisher": "TechCrunch",
+      "published_at": "2026-07-13T00:00:00Z",
+      "retrieved_at": "2026-08-15T03:51:20Z",
+      "content_type": "metadata",
+      "excerpt": "Nous Research is in talks for new funding at a $1.5 billion valuation.",
+      "proposed_event_key": "nous-research-funding"
+    }
+  ],
+  "content_hash": "3cdc2ef47e25d3bb2d127c317827f60c0a42037a9205c0b02ff1d93bf988edaf"
+}

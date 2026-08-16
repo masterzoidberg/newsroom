@@ -1,0 +1,91 @@
+{
+  "schema_version": 1,
+  "case_id": "corroboration-no-update",
+  "title": "Second outlet confirms the same facts, adds nothing",
+  "description": "A second outlet reports the same facts as the first with no new information. This corroborates the existing event but must not create a new one or resurface as material.",
+  "case_type": "corroboration_no_update",
+  "monitored_targets": [
+    {
+      "kind": "topic",
+      "ref": "demo"
+    }
+  ],
+  "observation_window": {
+    "start": null,
+    "end": null
+  },
+  "provenance": {
+    "source": "synthetic",
+    "note": "Synthetic edge case using reserved .test domains. Entities and facts are fictional; designed from real-world failure modes observed during v1 review (rumor/confirmation, corrections, false merges, mutating pages). Not real reporting."
+  },
+  "reviewer_notes": "",
+  "candidates": [
+    {
+      "candidate_id": "first",
+      "canonical_url": "https://outlet-a.test/news/acme-os-4",
+      "title": "Acme OS 4.0 launches with new scheduler",
+      "source": "web",
+      "publisher": "Outlet A",
+      "published_at": "2026-08-12T14:00:00Z",
+      "retrieved_at": "2026-08-12T15:00:00Z",
+      "content_type": "metadata",
+      "excerpt": "Acme OS 4.0 launched today with a new scheduler.",
+      "notes": null,
+      "content_hash": "33e983a67f6fa80ada197a77bac7a6b904df7d543e0d78fee11b5220108aef38"
+    },
+    {
+      "candidate_id": "second",
+      "canonical_url": "https://outlet-b.test/news/acme-os-4",
+      "title": "Acme OS 4.0 now available",
+      "source": "web",
+      "publisher": "Outlet B",
+      "published_at": "2026-08-12T15:00:00Z",
+      "retrieved_at": "2026-08-12T16:00:00Z",
+      "content_type": "metadata",
+      "excerpt": "Acme OS 4.0, which launched today with a new scheduler, is now available.",
+      "notes": null,
+      "content_hash": "7ddc3e2df5d46317f597a3c245af8d8b18aca4d4128260cbbb682136232928e6"
+    }
+  ],
+  "gold_groups": [
+    {
+      "event_id": "evt-acme4",
+      "candidate_ids": [
+        "first",
+        "second"
+      ],
+      "rationale": "Second report adds no new facts."
+    }
+  ],
+  "gold_claims": [
+    {
+      "claim_id": "cl-acme4",
+      "event_id": "evt-acme4",
+      "proposition": "Acme OS 4.0 launched with a new scheduler.",
+      "importance": "major",
+      "expected_state": "supported"
+    }
+  ],
+  "gold_evidence": [
+    {
+      "evidence_id": "ev-first",
+      "claim_id": "cl-acme4",
+      "candidate_id": "first",
+      "excerpt": "Acme OS 4.0 launched today with a new scheduler.",
+      "relationship": "supports"
+    },
+    {
+      "evidence_id": "ev-second",
+      "claim_id": "cl-acme4",
+      "candidate_id": "second",
+      "excerpt": "Acme OS 4.0, which launched today with a new scheduler, is now available.",
+      "relationship": "supports"
+    }
+  ],
+  "expected_primary_sources": [
+    "first"
+  ],
+  "noise_candidates": [],
+  "contradictions": [],
+  "material_changes": []
+}

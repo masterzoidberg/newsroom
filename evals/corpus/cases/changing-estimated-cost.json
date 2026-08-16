@@ -1,0 +1,106 @@
+{
+  "schema_version": 1,
+  "case_id": "changing-estimated-cost",
+  "title": "Project cost estimate rises",
+  "description": "A project cost estimate grows from $50M to $90M. The older figure is superseded, not deleted.",
+  "case_type": "changing_numeric_claim",
+  "monitored_targets": [
+    {
+      "kind": "topic",
+      "ref": "demo"
+    }
+  ],
+  "observation_window": {
+    "start": null,
+    "end": null
+  },
+  "provenance": {
+    "source": "synthetic",
+    "note": "Synthetic edge case using reserved .test domains. Entities and facts are fictional; designed from real-world failure modes observed during v1 review (rumor/confirmation, corrections, false merges, mutating pages). Not real reporting."
+  },
+  "reviewer_notes": "",
+  "candidates": [
+    {
+      "candidate_id": "cost-50",
+      "canonical_url": "https://outlet-b.test/news/cost-50",
+      "title": "Project cost estimated at $50M",
+      "source": "web",
+      "publisher": "Outlet B",
+      "published_at": "2026-07-01T10:00:00Z",
+      "retrieved_at": "2026-07-01T11:00:00Z",
+      "content_type": "metadata",
+      "excerpt": "The project is estimated to cost $50 million.",
+      "notes": null,
+      "content_hash": "6a54bde73c79827570aff7a3e7643ce5c7a67cadc82064eb8078a1cfb215d168"
+    },
+    {
+      "candidate_id": "cost-90",
+      "canonical_url": "https://gov.test/agency/press/2026/08/14/cost",
+      "title": "Agency revises project cost to $90M",
+      "source": "official",
+      "publisher": "Gov Agency",
+      "published_at": "2026-08-14T09:00:00Z",
+      "retrieved_at": "2026-08-14T10:00:00Z",
+      "content_type": "metadata",
+      "excerpt": "The agency revised the project cost estimate to $90 million.",
+      "notes": null,
+      "content_hash": "a2b0b041ce8a24503477b45304acee4a93f523bc836f8582ed4245e9fca18482"
+    }
+  ],
+  "gold_groups": [
+    {
+      "event_id": "evt-cost",
+      "candidate_ids": [
+        "cost-50",
+        "cost-90"
+      ]
+    }
+  ],
+  "gold_claims": [
+    {
+      "claim_id": "cl-cost-50",
+      "event_id": "evt-cost",
+      "proposition": "The project costs $50 million.",
+      "importance": "major",
+      "expected_state": "superseded"
+    },
+    {
+      "claim_id": "cl-cost-90",
+      "event_id": "evt-cost",
+      "proposition": "The project costs $90 million.",
+      "importance": "major",
+      "expected_state": "supported",
+      "supersedes_claim_id": "cl-cost-50"
+    }
+  ],
+  "gold_evidence": [
+    {
+      "evidence_id": "ev-50",
+      "claim_id": "cl-cost-50",
+      "candidate_id": "cost-50",
+      "excerpt": "The project is estimated to cost $50 million.",
+      "relationship": "supports"
+    },
+    {
+      "evidence_id": "ev-90",
+      "claim_id": "cl-cost-90",
+      "candidate_id": "cost-90",
+      "excerpt": "The agency revised the project cost estimate to $90 million.",
+      "relationship": "supports"
+    }
+  ],
+  "expected_primary_sources": [
+    "cost-90"
+  ],
+  "noise_candidates": [],
+  "contradictions": [],
+  "material_changes": [
+    {
+      "event_id": "evt-cost",
+      "claim_id": "cl-cost-90",
+      "description": "Cost estimate revised upward.",
+      "from_state": "supported",
+      "to_state": "superseded"
+    }
+  ]
+}

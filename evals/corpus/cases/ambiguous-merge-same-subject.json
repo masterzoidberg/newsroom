@@ -1,0 +1,103 @@
+{
+  "schema_version": 1,
+  "case_id": "ambiguous-merge-same-subject",
+  "title": "Two similar headlines about the same subject that are distinct events",
+  "description": "Two near-identical headlines about the same subject, in different rounds. A false merge would be harmful; they must stay separate.",
+  "case_type": "ambiguous_merge",
+  "monitored_targets": [
+    {
+      "kind": "topic",
+      "ref": "demo"
+    }
+  ],
+  "observation_window": {
+    "start": null,
+    "end": null
+  },
+  "provenance": {
+    "source": "synthetic",
+    "note": "Synthetic edge case using reserved .test domains. Entities and facts are fictional; designed from real-world failure modes observed during v1 review (rumor/confirmation, corrections, false merges, mutating pages). Not real reporting."
+  },
+  "reviewer_notes": "",
+  "candidates": [
+    {
+      "candidate_id": "round-a",
+      "canonical_url": "https://outlet-a.test/news/funding-round-a",
+      "title": "Acme raises $10M Series A",
+      "source": "web",
+      "publisher": "Outlet A",
+      "published_at": "2026-03-01T12:00:00Z",
+      "retrieved_at": "2026-03-01T13:00:00Z",
+      "content_type": "metadata",
+      "excerpt": "Acme raised a $10 million Series A.",
+      "notes": null,
+      "content_hash": "57d8bc970c7d76e16f0e500b8ec9d5ee876b7a82c87cb6a2703fb08aafd1d6c8"
+    },
+    {
+      "candidate_id": "round-b",
+      "canonical_url": "https://outlet-a.test/news/funding-round-b",
+      "title": "Acme raises $50M Series B",
+      "source": "web",
+      "publisher": "Outlet A",
+      "published_at": "2026-08-14T12:00:00Z",
+      "retrieved_at": "2026-08-14T13:00:00Z",
+      "content_type": "metadata",
+      "excerpt": "Acme raised a $50 million Series B.",
+      "notes": null,
+      "content_hash": "f94d828a668837787cb0d415270fb476e092d43ecf3f9191f6c3c4ab1b6ab61e"
+    }
+  ],
+  "gold_groups": [
+    {
+      "event_id": "evt-a",
+      "candidate_ids": [
+        "round-a"
+      ]
+    },
+    {
+      "event_id": "evt-b",
+      "candidate_ids": [
+        "round-b"
+      ]
+    }
+  ],
+  "gold_claims": [
+    {
+      "claim_id": "cl-a",
+      "event_id": "evt-a",
+      "proposition": "Acme raised a $10 million Series A.",
+      "importance": "relevant",
+      "expected_state": "supported"
+    },
+    {
+      "claim_id": "cl-b",
+      "event_id": "evt-b",
+      "proposition": "Acme raised a $50 million Series B.",
+      "importance": "major",
+      "expected_state": "supported"
+    }
+  ],
+  "gold_evidence": [
+    {
+      "evidence_id": "ev-a",
+      "claim_id": "cl-a",
+      "candidate_id": "round-a",
+      "excerpt": "Acme raised a $10 million Series A.",
+      "relationship": "supports"
+    },
+    {
+      "evidence_id": "ev-b",
+      "claim_id": "cl-b",
+      "candidate_id": "round-b",
+      "excerpt": "Acme raised a $50 million Series B.",
+      "relationship": "supports"
+    }
+  ],
+  "expected_primary_sources": [
+    "round-a",
+    "round-b"
+  ],
+  "noise_candidates": [],
+  "contradictions": [],
+  "material_changes": []
+}

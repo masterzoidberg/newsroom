@@ -1,0 +1,104 @@
+{
+  "schema_version": 1,
+  "case_id": "conflicting-attribution",
+  "title": "Two outlets disagree on who is responsible",
+  "description": "Outlets attribute an event to different actors. Claims are mutually contradictory.",
+  "case_type": "conflicting_reports",
+  "monitored_targets": [
+    {
+      "kind": "topic",
+      "ref": "demo"
+    }
+  ],
+  "observation_window": {
+    "start": null,
+    "end": null
+  },
+  "provenance": {
+    "source": "synthetic",
+    "note": "Synthetic edge case using reserved .test domains. Entities and facts are fictional; designed from real-world failure modes observed during v1 review (rumor/confirmation, corrections, false merges, mutating pages). Not real reporting."
+  },
+  "reviewer_notes": "",
+  "candidates": [
+    {
+      "candidate_id": "outlet-a-attr",
+      "canonical_url": "https://outlet-a.test/news/attr",
+      "title": "Group X claims responsibility",
+      "source": "web",
+      "publisher": "Outlet A",
+      "published_at": "2026-08-13T20:00:00Z",
+      "retrieved_at": "2026-08-13T21:00:00Z",
+      "content_type": "metadata",
+      "excerpt": "Group X claimed responsibility for the incident.",
+      "notes": null,
+      "content_hash": "50981db8e709a7eaead41dca38a0c615b3786f17a593604b2f9c31ba3173f00a"
+    },
+    {
+      "candidate_id": "outlet-b-attr",
+      "canonical_url": "https://outlet-b.test/news/attr",
+      "title": "Officials blame Group Y",
+      "source": "web",
+      "publisher": "Outlet B",
+      "published_at": "2026-08-13T20:30:00Z",
+      "retrieved_at": "2026-08-13T21:30:00Z",
+      "content_type": "metadata",
+      "excerpt": "Officials blamed Group Y for the incident.",
+      "notes": null,
+      "content_hash": "bb00194f81d4fb0650fc6e539e636874be931462e4e45e09fa36931a4eecd8bb"
+    }
+  ],
+  "gold_groups": [
+    {
+      "event_id": "evt-attr",
+      "candidate_ids": [
+        "outlet-a-attr",
+        "outlet-b-attr"
+      ]
+    }
+  ],
+  "gold_claims": [
+    {
+      "claim_id": "cl-group-x",
+      "event_id": "evt-attr",
+      "proposition": "Group X is responsible.",
+      "importance": "major",
+      "expected_state": "disputed"
+    },
+    {
+      "claim_id": "cl-group-y",
+      "event_id": "evt-attr",
+      "proposition": "Group Y is responsible.",
+      "importance": "major",
+      "expected_state": "disputed"
+    }
+  ],
+  "gold_evidence": [
+    {
+      "evidence_id": "ev-x",
+      "claim_id": "cl-group-x",
+      "candidate_id": "outlet-a-attr",
+      "excerpt": "Group X claimed responsibility for the incident.",
+      "relationship": "supports"
+    },
+    {
+      "evidence_id": "ev-y",
+      "claim_id": "cl-group-y",
+      "candidate_id": "outlet-b-attr",
+      "excerpt": "Officials blamed Group Y for the incident.",
+      "relationship": "supports"
+    }
+  ],
+  "expected_primary_sources": [],
+  "noise_candidates": [],
+  "contradictions": [
+    {
+      "claim_id": "cl-group-x",
+      "evidence_id": "ev-y"
+    },
+    {
+      "claim_id": "cl-group-y",
+      "evidence_id": "ev-x"
+    }
+  ],
+  "material_changes": []
+}

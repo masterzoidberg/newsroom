@@ -1,0 +1,85 @@
+{
+  "schema_version": 1,
+  "case_id": "duplicate-syndication-hermes-v0201",
+  "title": "Hermes Agent v0.20.1 recorded identically in dev and prod profiles",
+  "description": "The same official GitHub release (v0.20.1) was retrieved in two isolated v1 profiles. Canonical URL is identical, so the two candidate records are one document; a false split would create two events.",
+  "case_type": "duplicate_syndication",
+  "monitored_targets": [
+    {
+      "kind": "topic",
+      "ref": "hermes"
+    }
+  ],
+  "observation_window": {
+    "start": "2026-08-13T00:00:00Z",
+    "end": "2026-08-15T00:00:00Z"
+  },
+  "provenance": {
+    "source": "Hermes Newsroom v1 dev + prod profiles (read-only extraction)",
+    "note": "The two records come from isolated profiles; the split is an environment artifact, not an algorithm defect.",
+    "source_db": "C:/Users/nicol/AppData/Local/hermes/profiles/newsroom-dev/plugin-data/newsroom/newsroom.db"
+  },
+  "reviewer_notes": "Used to calibrate duplicate handling. The v1 baseline false-splits this case only because the two profiles never shared a database.",
+  "candidates": [
+    {
+      "candidate_id": "github-v0201-dev",
+      "canonical_url": "https://github.com/NousResearch/hermes-agent/releases/tag/v2026.8.13",
+      "title": "Hermes Agent v0.20.1 (2026.8.13)",
+      "source": "github",
+      "publisher": "Nous Research",
+      "published_at": "2026-08-13T20:37:37Z",
+      "retrieved_at": "2026-08-14T02:34:33Z",
+      "content_type": "metadata",
+      "excerpt": "Hermes Agent v0.20.1 stabilization rollup.",
+      "notes": null,
+      "content_hash": "519759e7803d18b0da2eda921fc021403b34573d889aba341cf2fbb00055a2d7"
+    },
+    {
+      "candidate_id": "github-v0201-prod",
+      "canonical_url": "https://github.com/NousResearch/hermes-agent/releases/tag/v2026.8.13",
+      "title": "Hermes Agent v0.20.1",
+      "source": "official",
+      "publisher": "Nous Research",
+      "published_at": "2026-08-13T20:37:37Z",
+      "retrieved_at": "2026-08-15T04:02:37Z",
+      "content_type": "metadata",
+      "excerpt": "Hermes Agent v0.20.1 stabilization rollup.",
+      "notes": null,
+      "content_hash": "6639785db625978d8bcdddd61c034a27aee55a823be0934338a7fff8385fc996"
+    }
+  ],
+  "gold_groups": [
+    {
+      "event_id": "evt-hermes-v0201",
+      "candidate_ids": [
+        "github-v0201-dev",
+        "github-v0201-prod"
+      ],
+      "rationale": "Identical canonical URL: one document, one event."
+    }
+  ],
+  "gold_claims": [
+    {
+      "claim_id": "cl-v0201-released",
+      "event_id": "evt-hermes-v0201",
+      "proposition": "Hermes Agent v0.20.1 was released on August 13, 2026.",
+      "importance": "major",
+      "expected_state": "supported"
+    }
+  ],
+  "gold_evidence": [
+    {
+      "evidence_id": "ev-v0201-dev",
+      "claim_id": "cl-v0201-released",
+      "candidate_id": "github-v0201-dev",
+      "excerpt": "Hermes Agent v0.20.1 stabilization rollup.",
+      "relationship": "supports"
+    }
+  ],
+  "expected_primary_sources": [
+    "github-v0201-dev"
+  ],
+  "noise_candidates": [],
+  "contradictions": [],
+  "material_changes": []
+}

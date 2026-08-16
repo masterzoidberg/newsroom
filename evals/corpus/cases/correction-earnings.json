@@ -1,0 +1,106 @@
+{
+  "schema_version": 1,
+  "case_id": "correction-earnings",
+  "title": "Company corrects a previously reported earnings figure",
+  "description": "An initial (secondary) report of Q2 revenue is later corrected by the company's official statement. The corrected claim supersedes the original.",
+  "case_type": "official_correction",
+  "monitored_targets": [
+    {
+      "kind": "topic",
+      "ref": "demo"
+    }
+  ],
+  "observation_window": {
+    "start": null,
+    "end": null
+  },
+  "provenance": {
+    "source": "synthetic",
+    "note": "Synthetic edge case using reserved .test domains. Entities and facts are fictional; designed from real-world failure modes observed during v1 review (rumor/confirmation, corrections, false merges, mutating pages). Not real reporting."
+  },
+  "reviewer_notes": "",
+  "candidates": [
+    {
+      "candidate_id": "outlet-earnings",
+      "canonical_url": "https://outlet-a.test/news/earnings",
+      "title": "Acme Q2 revenue reaches $1.2B",
+      "source": "web",
+      "publisher": "Outlet A",
+      "published_at": "2026-08-01T14:00:00Z",
+      "retrieved_at": "2026-08-01T15:00:00Z",
+      "content_type": "metadata",
+      "excerpt": "Acme reported Q2 revenue of $1.2 billion.",
+      "notes": null,
+      "content_hash": "631b2a5d1d83eb2bfbe6c9fa11dd46aa7a958c036c124beb602e6c8d4d05c4bd"
+    },
+    {
+      "candidate_id": "acme-correction",
+      "canonical_url": "https://corp-official.test/press/2026/08/02/earnings-correction",
+      "title": "Acme corrects Q2 revenue to $1.1B",
+      "source": "official",
+      "publisher": "Acme Corp",
+      "published_at": "2026-08-02T10:00:00Z",
+      "retrieved_at": "2026-08-02T11:00:00Z",
+      "content_type": "metadata",
+      "excerpt": "Acme corrected its Q2 revenue to $1.1 billion, citing a bookkeeping error.",
+      "notes": null,
+      "content_hash": "86c3c98c3c1763a218940225feef61a706f889ffa7ee863ff02dd1190b8f13c3"
+    }
+  ],
+  "gold_groups": [
+    {
+      "event_id": "evt-earnings",
+      "candidate_ids": [
+        "outlet-earnings",
+        "acme-correction"
+      ]
+    }
+  ],
+  "gold_claims": [
+    {
+      "claim_id": "cl-rev-12",
+      "event_id": "evt-earnings",
+      "proposition": "Acme Q2 revenue was $1.2 billion.",
+      "importance": "major",
+      "expected_state": "superseded"
+    },
+    {
+      "claim_id": "cl-rev-11",
+      "event_id": "evt-earnings",
+      "proposition": "Acme Q2 revenue was $1.1 billion.",
+      "importance": "major",
+      "expected_state": "supported",
+      "supersedes_claim_id": "cl-rev-12"
+    }
+  ],
+  "gold_evidence": [
+    {
+      "evidence_id": "ev-rev-12",
+      "claim_id": "cl-rev-12",
+      "candidate_id": "outlet-earnings",
+      "excerpt": "Acme reported Q2 revenue of $1.2 billion.",
+      "relationship": "supports"
+    },
+    {
+      "evidence_id": "ev-rev-11",
+      "claim_id": "cl-rev-11",
+      "candidate_id": "acme-correction",
+      "excerpt": "Acme corrected its Q2 revenue to $1.1 billion, citing a bookkeeping error.",
+      "relationship": "supports"
+    }
+  ],
+  "expected_primary_sources": [
+    "acme-correction"
+  ],
+  "noise_candidates": [],
+  "contradictions": [],
+  "material_changes": [
+    {
+      "event_id": "evt-earnings",
+      "claim_id": "cl-rev-11",
+      "description": "Official correction supersedes the secondary-reported figure.",
+      "from_state": "supported",
+      "to_state": "superseded"
+    }
+  ]
+}

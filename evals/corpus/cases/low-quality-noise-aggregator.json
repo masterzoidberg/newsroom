@@ -1,0 +1,53 @@
+{
+  "schema_version": 1,
+  "case_id": "low-quality-noise-aggregator",
+  "title": "Aggregator mashes unrelated items into one page",
+  "description": "A low-quality aggregation page mixes several unrelated items. The page must not spawn multiple events or be treated as authoritative.",
+  "case_type": "low_quality_noise",
+  "monitored_targets": [
+    {
+      "kind": "topic",
+      "ref": "demo"
+    }
+  ],
+  "observation_window": {
+    "start": null,
+    "end": null
+  },
+  "provenance": {
+    "source": "synthetic",
+    "note": "Synthetic edge case using reserved .test domains. Entities and facts are fictional; designed from real-world failure modes observed during v1 review (rumor/confirmation, corrections, false merges, mutating pages). Not real reporting."
+  },
+  "reviewer_notes": "",
+  "candidates": [
+    {
+      "candidate_id": "aggro",
+      "canonical_url": "https://aggro.test/roundup",
+      "title": "Daily roundup: 10 things in tech",
+      "source": "web",
+      "publisher": "Aggro",
+      "published_at": "2026-08-15T08:00:00Z",
+      "retrieved_at": "2026-08-15T09:00:00Z",
+      "content_type": "metadata",
+      "excerpt": "Ten unrelated tech items, including a phone launch and a merger rumor.",
+      "notes": null,
+      "content_hash": "a1f97f308bc3e9469897b05f497c46cb6f90259d59b9733ef2889ea3b90357e3"
+    }
+  ],
+  "gold_groups": [
+    {
+      "event_id": "evt-roundup",
+      "candidate_ids": [
+        "aggro"
+      ]
+    }
+  ],
+  "gold_claims": [],
+  "gold_evidence": [],
+  "expected_primary_sources": [],
+  "noise_candidates": [
+    "aggro"
+  ],
+  "contradictions": [],
+  "material_changes": []
+}

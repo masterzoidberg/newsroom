@@ -1,0 +1,26 @@
+{
+  "schema_version": 1,
+  "fixture_id": "e956e7f824a7d32f3a8184f1b89e4ac22976684b7c8186b8ccb11fa0ed351079",
+  "case_id": "official-announcement-product-launch",
+  "channel": "simulated_search",
+  "query": {
+    "text": "official-announcement-product-launch",
+    "topic_ref": "demo"
+  },
+  "captured_at": "2026-08-15T00:00:00Z",
+  "documents": [
+    {
+      "candidate_id": "acme-official",
+      "canonical_url": "https://corp-official.test/press/2026/08/12/acme-os-4-0",
+      "title": "Acme OS 4.0 is now generally available",
+      "source": "official",
+      "publisher": "Acme Corp",
+      "published_at": "2026-08-12T14:00:00Z",
+      "retrieved_at": "2026-08-15T00:00:00Z",
+      "content_type": "metadata",
+      "excerpt": "Acme OS 4.0 is generally available today, with a new scheduler.",
+      "proposed_event_key": "acme-os-4-0-release"
+    }
+  ],
+  "content_hash": "e956e7f824a7d32f3a8184f1b89e4ac22976684b7c8186b8ccb11fa0ed351079"
+}
