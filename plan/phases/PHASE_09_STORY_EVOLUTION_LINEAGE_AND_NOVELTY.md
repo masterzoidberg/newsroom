@@ -35,6 +35,7 @@ graph or silently merge based on embeddings, entities, or signatures alone.
 
 Completed 2026-08-16.
 
+- Implementation checkpoint: `3df51c0` (`Complete Phase 09 story evolution and lineage`).
 - Added migration 0008 for Story-document observation links, immutable
   evolution events, document lineage, and revision-document provenance.
 - Added conservative candidate resolution using URL/document identity, temporal
