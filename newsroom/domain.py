@@ -902,35 +902,12 @@ class CoreService:
         return self.get_story(identifier, include_deleted=True)
 
     def create_story_revision(self, identifier: str, data: Mapping[str, Any]) -> dict[str, Any]:
-        now = utc_now()
-        conn = storage.connect(self.db_path)
-        try:
-            with storage.write_tx(conn):
-                self._require(conn, "stories", identifier, "story", live=True)
-                next_number = conn.execute(
-                    "SELECT COALESCE(MAX(revision_number), 0) + 1 FROM story_revisions WHERE story_id = ?",
-                    (identifier,),
-                ).fetchone()[0]
-                self._insert(
-                    conn,
-                    "story_revisions",
-                    {
-                        "id": new_id("rev"),
-                        "story_id": identifier,
-                        "revision_number": next_number,
-                        "headline": data["headline"].strip(),
-                        "headline_normalized": normalized_text(data["headline"]),
-                        "summary": data.get("summary", ""),
-                        "why_it_matters": data.get("why_it_matters", ""),
-                        "material_change": int(data.get("material_change", False)),
-                        "claim_set_hash": data.get("claim_set_hash"),
-                        "created_at": now,
-                    },
-                )
-                conn.execute("UPDATE stories SET updated_at = ? WHERE id = ?", (now, identifier))
-        finally:
-            conn.close()
-        return self.get_story(identifier, include_deleted=True)
+        # Keep the legacy service entry point evidence-bound as well as the
+        # HTTP route. This prevents callers that still hold CoreService from
+        # bypassing the Phase 04 closed-world audit.
+        from .evidence import EvidenceService
+
+        return EvidenceService(self.db_path).create_story_revision(identifier, data)
 
     def delete_story(self, identifier: str) -> None:
         self._soft_delete("stories", identifier)

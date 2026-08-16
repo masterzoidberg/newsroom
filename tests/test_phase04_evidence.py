@@ -8,6 +8,7 @@ from fastapi.testclient import TestClient
 
 from newsroom.app import create_app
 from newsroom.config import RuntimeConfig
+from newsroom.domain import CoreService, DomainValidation
 from newsroom import storage
 
 
@@ -224,6 +225,16 @@ def test_closed_world_audit_rejects_pending_claims_and_unknown_citations(tmp_pat
 
     revisions = client.get(f"/api/v1/stories/{story_id}/evidence").json()["revisions"]
     assert len(revisions) == 1
+    db_path = RuntimeConfig.for_environment("dev", root=tmp_path / "dev").database_path
+    with pytest.raises(DomainValidation, match="accepted Claims"):
+        CoreService(db_path).create_story_revision(
+            story_id,
+            {
+                "headline": "Bypass attempt",
+                "claim_ids": [pending["id"]],
+                "propositions": [{"text": "A pending proposition", "claim_ids": [pending["id"]]}],
+            },
+        )
 
 
 def test_sqlite_guards_keep_frozen_versions_evidence_and_accepted_claim_text_immutable(tmp_path):

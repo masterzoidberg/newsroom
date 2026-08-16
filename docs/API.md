@@ -1,4 +1,4 @@
-# Phase 03 API Contract
+# Phase 04 API Contract
 
 The standalone API is rooted at `/api/v1`. Health and readiness are public;
 core domain reads and mutations require the authenticated single local user.
@@ -29,9 +29,46 @@ suggestions are created under `/topics/{topic_id}/scope-suggestions` and an
 AI-sourced suggestion remains `pending` until an explicit approve or reject
 mutation is made.
 
-Stories create immutable revision 1 and add later revisions through
-`/stories/{story_id}/revisions`. Tags attach through
-`/stories/{story_id}/tags`.
+Stories create immutable seed revision 1. Later generated revisions must use
+the evidence-bound `POST /stories/{story_id}/revisions` contract described
+below. Tags attach through `/stories/{story_id}/tags`.
+
+## Evidence Ledger
+
+Document versions and evidence spans are append-only:
+
+- `GET/POST /documents/{document_id}/versions`
+- `GET /document-versions/{version_id}`
+- `GET/POST /document-versions/{version_id}/evidence-spans`
+- `GET /evidence-spans/{span_id}`
+
+Claims are created under a Story and have append-only evidence/state history:
+
+- `GET/POST /stories/{story_id}/claims`
+- `GET /claims/{claim_id}`
+- `POST /claims/{claim_id}/evidence`
+- `POST /claims/{claim_id}/state`
+- `POST /claims/{claim_id}/accept`
+- `GET /claims/{claim_id}/evidence`
+- `GET /stories/{story_id}/evidence`
+
+Accepted Claims must be `supported` or `partially_supported` and have a
+supporting Evidence Span. Accepted Claim proposition text cannot be edited;
+corrections create a new Claim with `supersedes_claim_id`.
+
+Generated revisions require `claim_ids` and structured `propositions`, each
+with one or more cited Claim IDs. The server checks that every cited Claim is
+accepted, belongs to the Story, and is part of the revision Claim set. It then
+stores the exact Claim IDs in `story_revision_claims` and computes
+`claim_set_hash`; unsupported citations reject the revision before insertion.
+
+## Manual run
+
+`POST /runs/manual` accepts a deterministic frozen fixture and transactionally
+creates Source, Document, DocumentVersion, Claims, Evidence Spans, links, and
+an optional evidence-bound revision. A caller may provide an existing
+`source_id`, `document_id`, or `story_id`; automatic matching is deliberately
+not performed in this phase, keeping resolution conservative and auditable.
 
 ## Query and mutation conventions
 

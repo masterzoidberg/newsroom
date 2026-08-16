@@ -4,9 +4,8 @@ from __future__ import annotations
 import hashlib
 import json
 import sqlite3
-from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Mapping, Optional
+from typing import Any, Mapping
 
 from . import storage
 from .domain import (
@@ -15,6 +14,7 @@ from .domain import (
     DomainNotFound,
     DomainValidation,
     new_id,
+    normalized_slug,
     normalized_text,
     utc_now,
 )
@@ -95,6 +95,8 @@ class EvidenceService:
             if normalized_json is not None and not isinstance(normalized_json, str)
             else normalized_json
         )
+        if encoded_json is not None and len(encoded_json) > 20000:
+            raise DomainValidation("normalized_json exceeds max length 20000")
         now = utc_now()
         conn = storage.connect(self.db_path)
         try:
@@ -616,8 +618,12 @@ class EvidenceService:
 
     def _create_source_tx(self, conn, data: Mapping[str, Any]) -> str:
         identifier = new_id("src")
-        homepage_url = normalize_url(data["homepage_url"]) if data.get("homepage_url") else None
-        feed_url = normalize_url(data["feed_url"]) if data.get("feed_url") else None
+        try:
+            homepage_url = normalize_url(data["homepage_url"]) if data.get("homepage_url") else None
+            feed_url = normalize_url(data["feed_url"]) if data.get("feed_url") else None
+            slug = normalized_slug(str(data["slug"]))
+        except ValueError as exc:
+            raise DomainValidation(str(exc)) from exc
         domain = data.get("domain") or (parse_url(homepage_url)["domain"] if homepage_url else None)
         now = utc_now()
         _insert(
@@ -626,7 +632,7 @@ class EvidenceService:
             {
                 "id": identifier,
                 "name": str(data["name"]).strip(),
-                "slug": str(data["slug"]).strip().lower(),
+                "slug": slug,
                 "domain": domain,
                 "homepage_url": homepage_url,
                 "feed_url": feed_url,
@@ -640,7 +646,10 @@ class EvidenceService:
 
     def _create_document_tx(self, conn, source_id: str, data: Mapping[str, Any]) -> str:
         identifier = new_id("doc")
-        canonical_url = normalize_url(str(data["canonical_url"]))
+        try:
+            canonical_url = normalize_url(str(data["canonical_url"]))
+        except ValueError as exc:
+            raise DomainValidation(str(exc)) from exc
         now = utc_now()
         _require(conn, "sources", source_id, "source", live=True)
         _insert(
@@ -751,12 +760,19 @@ class EvidenceService:
                 document_id = data.get("document_id") or self._create_document_tx(
                     conn, source_id, data["document"]
                 )
-                _require(conn, "documents", document_id, "document")
+                document = _require(conn, "documents", document_id, "document")
+                if document["source_id"] != source_id:
+                    raise DomainValidation("document does not belong to the selected source")
                 version_data = data["document_version"]
                 version_id = new_id("dv")
                 normalized_json = version_data.get("normalized_json")
                 if normalized_json is not None and not isinstance(normalized_json, str):
                     normalized_json = json.dumps(normalized_json, sort_keys=True, separators=(",", ":"))
+                content_hash = str(version_data["content_hash"]).strip()
+                if not content_hash:
+                    raise DomainValidation("content_hash must not be empty")
+                if normalized_json is not None and len(normalized_json) > 20000:
+                    raise DomainValidation("normalized_json exceeds max length 20000")
                 _insert(
                     conn,
                     "document_versions",
@@ -764,7 +780,7 @@ class EvidenceService:
                         "id": version_id,
                         "document_id": document_id,
                         "retrieved_at": version_data.get("retrieved_at") or utc_now(),
-                        "content_hash": str(version_data["content_hash"]).strip(),
+                        "content_hash": content_hash,
                         "content_kind": version_data.get("content_kind", "metadata"),
                         "locator_type": version_data.get("locator_type"),
                         "locator_value": version_data.get("locator_value"),
