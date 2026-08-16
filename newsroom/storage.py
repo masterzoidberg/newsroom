@@ -11,6 +11,7 @@ Invariants:
 from __future__ import annotations
 
 import sqlite3
+import uuid
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Iterator, Optional
@@ -75,10 +76,40 @@ def online_backup(dest_path: str | Path, *, source_path: Optional[str | Path] = 
         dst = sqlite3.connect(str(dest))
         try:
             src.backup(dst)
+            dst.commit()
         finally:
             dst.close()
     finally:
         src.close()
+    return dest
+
+
+def restore_backup(backup_path: str | Path, dest_path: str | Path) -> Path:
+    """Restore a backup through SQLite's online API and an atomic replacement."""
+    backup = Path(backup_path)
+    dest = Path(dest_path)
+    if not backup.is_file():
+        raise FileNotFoundError(backup)
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    temporary = dest.with_name(f"{dest.name}.restore-{uuid.uuid4().hex}.tmp")
+    src = sqlite3.connect(str(backup))
+    try:
+        restored = sqlite3.connect(str(temporary))
+        try:
+            src.backup(restored)
+            restored.commit()
+        finally:
+            restored.close()
+    finally:
+        src.close()
+    try:
+        temporary.replace(dest)
+        for sidecar in (Path(f"{dest}-wal"), Path(f"{dest}-shm")):
+            if sidecar.exists():
+                sidecar.unlink()
+    finally:
+        if temporary.exists():
+            temporary.unlink()
     return dest
 
 
