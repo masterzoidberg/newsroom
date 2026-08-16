@@ -1,6 +1,7 @@
 """Validated API contracts for the Phase 03 core domain."""
 from __future__ import annotations
 
+from dataclasses import asdict
 from typing import Any, Callable, Optional
 
 from fastapi import APIRouter, Query, Request, Response
@@ -8,6 +9,12 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from .ai import AIError, AIRouter, CapabilityBundle, SQLiteTelemetrySink
 from .ai_pipeline import AIVerticalSliceService, VerticalSliceInput
+from .acquisition import (
+    AcquisitionError,
+    AcquisitionService,
+    SourceProfileService,
+    SourceSuggestionService,
+)
 from .domain import CoreService, DomainValidation
 from .evidence import EvidenceService
 
@@ -299,6 +306,30 @@ class AIRunCreate(StrictModel):
         return self
 
 
+class AcquisitionCreate(StrictModel):
+    url: str = Field(min_length=1, max_length=2048)
+    channel: str = Field(default="direct_http", pattern="^(direct_http|page)$")
+
+
+class FeedPollCreate(StrictModel):
+    feed_url: Optional[str] = Field(default=None, max_length=2048)
+
+
+class SourceSuggestionCreate(StrictModel):
+    source_id: Optional[str] = Field(default=None, max_length=200)
+    name: str = Field(min_length=1, max_length=500)
+    homepage_url: Optional[str] = Field(default=None, max_length=2048)
+    feed_url: Optional[str] = Field(default=None, max_length=2048)
+    rationale: str = Field(min_length=1, max_length=4000)
+    likely_contribution: str = Field(min_length=1, max_length=4000)
+    limitations: str = Field(default="", max_length=4000)
+    supported_methods: list[str] = Field(min_length=1, max_length=10)
+
+
+class SourceSuggestionReview(StrictModel):
+    status: str = Field(pattern="^(approved|rejected)$")
+
+
 class StoryRevisionCreate(StrictModel):
     headline: str = Field(min_length=1, max_length=500)
     summary: str = Field(default="", max_length=10000)
@@ -344,6 +375,9 @@ def create_domain_router(
 ) -> APIRouter:
     router = APIRouter()
     ledger = evidence_service or EvidenceService(service.db_path)
+    acquisition = AcquisitionService(service.db_path)
+    profiles = SourceProfileService(service.db_path)
+    suggestions = SourceSuggestionService(service.db_path)
 
     def read_guard(request: Request):
         return require_user(request)
@@ -540,6 +574,27 @@ def create_domain_router(
         write_guard(request)
         return service.update_source(identifier, _patch_data(payload))
 
+    @router.get("/sources/{identifier}/profile")
+    async def source_profile(request: Request, identifier: str):
+        read_guard(request)
+        return profiles.get(identifier)
+
+    @router.post("/sources/{identifier}/acquire", status_code=201)
+    async def acquire_source_document(request: Request, identifier: str, payload: AcquisitionCreate):
+        write_guard(request)
+        try:
+            return asdict(acquisition.acquire_document(identifier, payload.url, channel=payload.channel))
+        except AcquisitionError as exc:
+            raise DomainValidation(f"acquisition failed safely: {type(exc).__name__}") from exc
+
+    @router.post("/sources/{identifier}/feed/poll", status_code=201)
+    async def poll_source_feed(request: Request, identifier: str, payload: FeedPollCreate):
+        write_guard(request)
+        try:
+            return asdict(acquisition.poll_feed(identifier, payload.feed_url))
+        except AcquisitionError as exc:
+            raise DomainValidation(f"feed poll failed safely: {type(exc).__name__}") from exc
+
     @router.delete("/sources/{identifier}", status_code=204)
     async def delete_source(request: Request, identifier: str):
         write_guard(request)
@@ -704,6 +759,21 @@ def create_domain_router(
     async def manual_run(request: Request, payload: ManualRunCreate):
         write_guard(request)
         return ledger.run_manual(payload.model_dump())
+
+    @router.get("/source-suggestions")
+    async def source_suggestions(request: Request, status: Optional[str] = None):
+        read_guard(request)
+        return {"items": suggestions.list(status=status)}
+
+    @router.post("/source-suggestions", status_code=201)
+    async def create_source_suggestion(request: Request, payload: SourceSuggestionCreate):
+        write_guard(request)
+        return suggestions.create(payload.model_dump())
+
+    @router.post("/source-suggestions/{identifier}/review")
+    async def review_source_suggestion(request: Request, identifier: str, payload: SourceSuggestionReview):
+        user = write_guard(request)
+        return suggestions.review(identifier, payload.status, user.user_id)
 
     @router.post("/runs/ai", status_code=201)
     async def ai_run(request: Request, payload: AIRunCreate):

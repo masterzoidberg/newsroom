@@ -580,6 +580,84 @@ MIGRATION_0004_CHECKSUM = hashlib.sha256(
     "\n".join(MIGRATION_0004_STATEMENTS).encode("utf-8")
 ).hexdigest()
 
+MIGRATION_0005_STATEMENTS: tuple[str, ...] = (
+    """
+    CREATE TABLE acquisition_events (
+        id TEXT PRIMARY KEY,
+        source_id TEXT NOT NULL REFERENCES sources(id) ON DELETE CASCADE,
+        document_id TEXT REFERENCES documents(id) ON DELETE SET NULL,
+        document_version_id TEXT REFERENCES document_versions(id) ON DELETE SET NULL,
+        channel TEXT NOT NULL CHECK (channel IN ('rss', 'atom', 'direct_http', 'page')),
+        request_url TEXT NOT NULL,
+        final_url TEXT,
+        outcome TEXT NOT NULL CHECK (outcome IN ('retrieved', 'not_modified', 'unchanged', 'failed', 'blocked')),
+        status_code INTEGER,
+        content_type TEXT,
+        etag TEXT,
+        last_modified TEXT,
+        raw_content_hash TEXT,
+        normalized_content_hash TEXT,
+        response_bytes INTEGER,
+        error_code TEXT,
+        error_message TEXT,
+        observed_at TEXT NOT NULL,
+        created_at TEXT NOT NULL
+    )
+    """,
+    "CREATE INDEX acquisition_events_source_idx ON acquisition_events(source_id, created_at DESC)",
+    "CREATE INDEX acquisition_events_document_idx ON acquisition_events(document_id, created_at DESC)",
+    """
+    CREATE TABLE source_profiles (
+        source_id TEXT PRIMARY KEY REFERENCES sources(id) ON DELETE CASCADE,
+        source_type TEXT NOT NULL DEFAULT 'unknown',
+        coverage_json TEXT NOT NULL DEFAULT '{}',
+        acquisition_methods_json TEXT NOT NULL DEFAULT '[]',
+        activity_json TEXT NOT NULL DEFAULT '{}',
+        failure_json TEXT NOT NULL DEFAULT '{}',
+        duplication_json TEXT NOT NULL DEFAULT '{}',
+        usefulness_json TEXT NOT NULL DEFAULT '{}',
+        updated_at TEXT NOT NULL
+    )
+    """,
+    """
+    CREATE TABLE source_suggestions (
+        id TEXT PRIMARY KEY,
+        source_id TEXT REFERENCES sources(id) ON DELETE SET NULL,
+        name TEXT NOT NULL,
+        domain TEXT,
+        homepage_url TEXT,
+        feed_url TEXT,
+        rationale TEXT NOT NULL,
+        likely_contribution TEXT NOT NULL,
+        limitations TEXT NOT NULL DEFAULT '',
+        supported_methods_json TEXT NOT NULL DEFAULT '[]',
+        status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'approved', 'rejected')),
+        created_at TEXT NOT NULL,
+        reviewed_at TEXT,
+        reviewed_by TEXT
+    )
+    """,
+    "CREATE INDEX source_suggestions_status_idx ON source_suggestions(status, created_at DESC)",
+    """
+    CREATE TRIGGER acquisition_events_immutable_update
+    BEFORE UPDATE ON acquisition_events
+    BEGIN
+        SELECT RAISE(ABORT, 'acquisition events are immutable');
+    END
+    """,
+    """
+    CREATE TRIGGER acquisition_events_immutable_delete
+    BEFORE DELETE ON acquisition_events
+    BEGIN
+        SELECT RAISE(ABORT, 'acquisition events are immutable');
+    END
+    """,
+)
+
+MIGRATION_0005_CHECKSUM = hashlib.sha256(
+    "\n".join(MIGRATION_0005_STATEMENTS).encode("utf-8")
+).hexdigest()
+
 
 @dataclass(frozen=True)
 class MigrationResult:
@@ -627,6 +705,7 @@ def apply_migrations(db_path: Optional[str | Path] = None) -> MigrationResult:
                 2: MIGRATION_0002_STATEMENTS,
                 3: MIGRATION_0003_STATEMENTS,
                 4: MIGRATION_0004_STATEMENTS,
+                5: MIGRATION_0005_STATEMENTS,
             }
             for version, statements in migrations.items():
                 if version in existing:

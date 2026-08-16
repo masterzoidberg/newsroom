@@ -44,6 +44,14 @@ Monitor, MonitoringPolicy, due scheduling, budgets, retirement/backoff.
 Connectors produce normalized candidate observations/documents. Provider-specific
 objects do not leak into Story/Claim domain models.
 
+Phase 06 implements bounded RSS/Atom polling and direct HTTP/page acquisition.
+The transport enforces domain, redirect, timeout, and response-size policy;
+conditional headers and raw/normalized hashes support cheap change detection.
+`acquisition_events` preserves append-only provenance, while HTML extraction
+stores only bounded metadata until exact excerpts are deliberately selected for
+the Evidence Ledger. Source profiles remain multidimensional, and suggestions
+require explicit human review.
+
 ### Documents
 Source -> Document -> DocumentVersion. Version identity is content/provenance
 state at retrieval time.

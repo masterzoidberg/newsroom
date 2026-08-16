@@ -56,6 +56,31 @@ Accepted Claims must be `supported` or `partially_supported` and have a
 supporting Evidence Span. Accepted Claim proposition text cannot be edited;
 corrections create a new Claim with `supersedes_claim_id`.
 
+## Source discovery and acquisition
+
+Phase 06 adds authenticated, manually invoked acquisition endpoints. They use
+the server's bounded standard-library transport and preserve retrieval
+provenance in `acquisition_events`:
+
+- `GET /sources/{source_id}/profile` returns separate source-type, coverage,
+  acquisition-method, activity, failure, duplication, and usefulness fields.
+- `POST /sources/{source_id}/acquire` accepts `{ "url": "...", "channel":
+  "direct_http" | "page" }` and performs one bounded conditional HTTP request.
+- `POST /sources/{source_id}/feed/poll` accepts an optional `feed_url` and
+  performs one bounded RSS/Atom poll. If omitted, the Source's configured feed
+  URL is used.
+- `GET /source-suggestions` lists pending or reviewed suggestions.
+- `POST /source-suggestions` records a suggestion with rationale, likely
+  contribution, limitations, and supported monitoring methods.
+- `POST /source-suggestions/{suggestion_id}/review` explicitly approves or
+  rejects a suggestion. Review never creates a Source automatically.
+
+Requests are denied when the URL violates the configured domain policy or
+response limits. A 304 response records `not_modified` without creating a new
+DocumentVersion; a changed response creates a new immutable version, while an
+unchanged body records only an `unchanged` acquisition event. The acquisition
+layer stores bounded metadata and hashes, not the retrieved article body.
+
 Generated revisions require `claim_ids` and structured `propositions`, each
 with one or more cited Claim IDs. The server checks that every cited Claim is
 accepted, belongs to the Story, and is part of the revision Claim set. It then

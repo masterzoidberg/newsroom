@@ -17,6 +17,11 @@ Formal ADR records are under `docs/adr/`.
 - **D-008:** Phase 05 AI capabilities are narrow, validated, local-first, and
   routed through hard global/per-work paid budgets; benchmark results and
   limitations are recorded in ADR-003.
+- **D-009:** Phase 06 source discovery uses bounded RSS/Atom and conditional
+  HTTP acquisition with append-only provenance, multidimensional Source
+  Profiles, and explicitly reviewed suggestions; it does not crawl openly,
+  execute browser JavaScript, store article bodies by default, or assign a
+  universal trust score. See ADR-004.
 
 Phase 0 established the evaluation subsystem (`newsroom.evals`), a 30-case
 labeled corpus, deterministic replay, reproducible metrics, and the v1 baseline.
