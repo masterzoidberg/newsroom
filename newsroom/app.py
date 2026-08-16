@@ -12,16 +12,43 @@ from fastapi import APIRouter, FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 from starlette.exceptions import HTTPException
 
 from . import __version__
+from .auth import (
+    CSRF_COOKIE,
+    SESSION_COOKIE,
+    AuthService,
+    InvalidCredentials,
+    LoginThrottled,
+    SESSION_TTL,
+    SetupUnavailable,
+    USERNAME_PATTERN,
+)
 from .config import RuntimeConfig
+from .domain import CoreService, DomainError
+from .domain_api import create_domain_router
 from .integrity import check_database
 from .migrations import apply_migrations
 
 
 LOGGER = logging.getLogger("newsroom.api")
 _REQUEST_ID = re.compile(r"^[A-Za-z0-9._:-]{1,128}$")
+
+
+class AuthCredentials(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    username: str = Field(min_length=3, max_length=64, pattern=USERNAME_PATTERN)
+    password: str = Field(min_length=12, max_length=256)
+
+    @field_validator("username", mode="before")
+    @classmethod
+    def normalize_username(cls, value: object) -> str:
+        if not isinstance(value, str):
+            raise ValueError("username must be a string")
+        return value.strip().lower()
 
 
 def _request_id(request: Request) -> str:
@@ -42,6 +69,19 @@ def _log_event(event: str, **fields: object) -> None:
     LOGGER.info(json.dumps({"event": event, **fields}, sort_keys=True, default=str))
 
 
+def _safe_validation_errors(errors: list[dict]) -> list[dict]:
+    """Return validation locations/messages without echoing submitted values."""
+    safe: list[dict] = []
+    for error in errors:
+        safe_error = {
+            key: value
+            for key, value in error.items()
+            if key not in {"input", "ctx"}
+        }
+        safe.append(safe_error)
+    return safe
+
+
 def create_app(
     config: RuntimeConfig | None = None,
     *,
@@ -50,6 +90,7 @@ def create_app(
     runtime = config or RuntimeConfig.for_environment("dev")
     runtime.ensure_runtime_dirs()
     apply_migrations(runtime.database_path)
+    auth = AuthService(runtime.database_path)
 
     app = FastAPI(title="Newsroom", version=__version__)
     app.state.runtime_config = runtime
@@ -60,6 +101,19 @@ def create_app(
         request.state.request_id = supplied if _REQUEST_ID.fullmatch(supplied) else uuid.uuid4().hex
         response = await call_next(request)
         response.headers["X-Request-ID"] = request.state.request_id
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        response.headers["X-Frame-Options"] = "DENY"
+        response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+        response.headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=()"
+        response.headers["Content-Security-Policy"] = (
+            "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; "
+            "img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; "
+            "base-uri 'self'; form-action 'self'"
+        )
+        if runtime.environment == "prod":
+            response.headers["Strict-Transport-Security"] = (
+                "max-age=31536000; includeSubDomains"
+            )
         _log_event(
             "http_request",
             method=request.method,
@@ -76,6 +130,7 @@ def create_app(
         return JSONResponse(
             status_code=exc.status_code,
             content=_error_payload(request, code, message),
+            headers=exc.headers,
         )
 
     @app.exception_handler(RequestValidationError)
@@ -86,8 +141,15 @@ def create_app(
                 request,
                 "validation_error",
                 "request validation failed",
-                fields=exc.errors(),
+                fields=_safe_validation_errors(exc.errors()),
             ),
+        )
+
+    @app.exception_handler(DomainError)
+    async def domain_exception_handler(request: Request, exc: DomainError):
+        return JSONResponse(
+            status_code=exc.status_code,
+            content=_error_payload(request, exc.code, exc.message),
         )
 
     @app.exception_handler(Exception)
@@ -132,7 +194,84 @@ def create_app(
             "status": "ready",
         }
 
+    def require_user(request: Request):
+        user = auth.authenticate(request.cookies.get(SESSION_COOKIE))
+        if user is None:
+            raise HTTPException(status_code=401, detail="authentication required")
+        return user
+
+    def require_csrf(request: Request, user) -> None:
+        if not auth.valid_csrf(
+            request.cookies.get(SESSION_COOKIE),
+            request.headers.get("X-CSRF-Token"),
+            request.cookies.get(CSRF_COOKIE),
+        ):
+            raise HTTPException(status_code=403, detail="csrf validation failed")
+
+    domain_service = CoreService(runtime.database_path)
+
+    @api.post("/auth/setup", status_code=201)
+    async def setup(payload: AuthCredentials):
+        try:
+            username = auth.setup(payload.username, payload.password)
+        except SetupUnavailable as exc:
+            raise HTTPException(status_code=409, detail="setup unavailable") from exc
+        return {"username": username}
+
+    @api.post("/auth/login")
+    async def login(payload: AuthCredentials):
+        try:
+            session = auth.login(payload.username, payload.password)
+        except LoginThrottled as exc:
+            raise HTTPException(
+                status_code=429,
+                detail="too many login attempts",
+                headers={"Retry-After": "300"},
+            ) from exc
+        except InvalidCredentials as exc:
+            raise HTTPException(status_code=401, detail="invalid credentials") from exc
+        response = JSONResponse({"username": session.username})
+        secure = runtime.environment == "prod"
+        response.set_cookie(
+            SESSION_COOKIE,
+            session.session_token,
+            max_age=int(SESSION_TTL.total_seconds()),
+            httponly=True,
+            secure=secure,
+            samesite="lax",
+            path="/",
+        )
+        response.set_cookie(
+            CSRF_COOKIE,
+            session.csrf_token,
+            max_age=int(SESSION_TTL.total_seconds()),
+            httponly=False,
+            secure=secure,
+            samesite="lax",
+            path="/",
+        )
+        return response
+
+    @api.get("/auth/me")
+    async def me(request: Request):
+        user = require_user(request)
+        return {"username": user.username}
+
+    @api.post("/auth/logout", status_code=204)
+    async def logout(request: Request):
+        user = require_user(request)
+        require_csrf(request, user)
+        auth.revoke(request.cookies.get(SESSION_COOKIE))
+        response = JSONResponse(content=None, status_code=204)
+        response.delete_cookie(SESSION_COOKIE, path="/")
+        response.delete_cookie(CSRF_COOKIE, path="/")
+        return response
+
     app.include_router(api)
+    app.include_router(
+        create_domain_router(domain_service, require_user, require_csrf),
+        prefix="/api/v1",
+    )
 
     dist = (
         Path(frontend_dist)

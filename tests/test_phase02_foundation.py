@@ -7,7 +7,7 @@ import pytest
 from newsroom import storage
 from newsroom.cli import main as cli_main
 from newsroom.integrity import check_database
-from newsroom.migrations import apply_migrations, migration_status
+from newsroom.migrations import MIGRATION_0001_STATEMENTS, apply_migrations, migration_status
 from newsroom.repository import Repository, RepositoryIntegrityError, evidence_span_hash
 
 
@@ -52,9 +52,9 @@ def test_fresh_migration_creates_the_proposed_schema_and_rerun_is_idempotent(tmp
     first = apply_migrations(tmp_db)
     second = apply_migrations(tmp_db)
 
-    assert first.applied_versions == (1,)
+    assert first.applied_versions == (1, 2)
     assert second.applied_versions == ()
-    assert migration_status(tmp_db) == (1,)
+    assert migration_status(tmp_db) == (1, 2)
 
     conn = storage.connect(tmp_db)
     try:
@@ -67,9 +67,29 @@ def test_fresh_migration_creates_the_proposed_schema_and_rerun_is_idempotent(tmp
         assert EXPECTED_TABLES <= tables
         assert conn.execute("PRAGMA foreign_keys").fetchone()[0] == 1
         assert conn.execute("PRAGMA journal_mode").fetchone()[0].lower() == "wal"
-        assert conn.execute("SELECT value FROM app_meta WHERE key = 'schema_version'").fetchone()[0] == "1"
+        assert conn.execute("SELECT value FROM app_meta WHERE key = 'schema_version'").fetchone()[0] == "2"
     finally:
         conn.close()
+
+
+def test_existing_phase02_database_migrates_forward_without_replaying_0001(tmp_db):
+    conn = storage.connect(tmp_db)
+    try:
+        with storage.write_tx(conn):
+            conn.execute(
+                "CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL)"
+            )
+            for statement in MIGRATION_0001_STATEMENTS:
+                conn.execute(statement)
+            conn.execute("INSERT INTO schema_migrations(version, applied_at) VALUES (1, '2026-01-01T00:00:00Z')")
+            conn.execute("INSERT INTO app_meta(key, value) VALUES ('schema_version', '1')")
+            conn.execute("INSERT INTO app_meta(key, value) VALUES ('schema_seeded_at', '2026-01-01T00:00:00Z')")
+    finally:
+        conn.close()
+
+    result = apply_migrations(tmp_db)
+    assert result.applied_versions == (2,)
+    assert migration_status(tmp_db) == (1, 2)
 
 
 def test_evidence_span_hash_includes_excerpt_and_locator():

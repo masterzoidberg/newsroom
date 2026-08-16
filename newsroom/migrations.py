@@ -413,6 +413,40 @@ MIGRATION_0001_CHECKSUM = hashlib.sha256(
     "\n".join(MIGRATION_0001_STATEMENTS).encode("utf-8")
 ).hexdigest()
 
+MIGRATION_0002_STATEMENTS: tuple[str, ...] = (
+    "ALTER TABLE sessions ADD COLUMN csrf_token_hash TEXT",
+    "ALTER TABLE topic_terms ADD COLUMN concept_kind TEXT NOT NULL DEFAULT 'term'",
+    """
+    CREATE TABLE auth_login_attempts (
+        username TEXT PRIMARY KEY,
+        failed_count INTEGER NOT NULL DEFAULT 0,
+        first_failed_at TEXT NOT NULL,
+        locked_until TEXT,
+        updated_at TEXT NOT NULL
+    )
+    """,
+    """
+    CREATE TABLE topic_scope_suggestions (
+        id TEXT PRIMARY KEY,
+        topic_id TEXT NOT NULL REFERENCES topics(id) ON DELETE CASCADE,
+        suggestion_type TEXT NOT NULL CHECK (suggestion_type IN ('term', 'alias', 'acronym', 'related_concept', 'exclude')),
+        value TEXT NOT NULL,
+        value_normalized TEXT NOT NULL,
+        rationale TEXT NOT NULL DEFAULT '',
+        source TEXT NOT NULL CHECK (source IN ('ai', 'user')),
+        status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'approved', 'rejected')),
+        created_at TEXT NOT NULL,
+        reviewed_at TEXT,
+        reviewed_by TEXT,
+        UNIQUE (topic_id, suggestion_type, value_normalized)
+    )
+    """,
+)
+
+MIGRATION_0002_CHECKSUM = hashlib.sha256(
+    "\n".join(MIGRATION_0002_STATEMENTS).encode("utf-8")
+).hexdigest()
+
 
 @dataclass(frozen=True)
 class MigrationResult:
@@ -455,22 +489,34 @@ def apply_migrations(db_path: Optional[str | Path] = None) -> MigrationResult:
                 row[0]
                 for row in conn.execute("SELECT version FROM schema_migrations")
             }
-            if 1 not in existing:
-                for statement in MIGRATION_0001_STATEMENTS:
+            migrations = {
+                1: MIGRATION_0001_STATEMENTS,
+                2: MIGRATION_0002_STATEMENTS,
+            }
+            for version, statements in migrations.items():
+                if version in existing:
+                    continue
+                for statement in statements:
                     conn.execute(statement)
                 now = utc_now()
                 conn.execute(
                     "INSERT INTO schema_migrations(version, applied_at) VALUES (?, ?)",
-                    (1, now),
+                    (version, now),
                 )
-                conn.execute(
-                    "INSERT INTO app_meta(key, value) VALUES ('schema_version', '1')"
-                )
-                conn.execute(
-                    "INSERT INTO app_meta(key, value) VALUES ('schema_seeded_at', ?)",
-                    (now,),
-                )
-                applied.append(1)
+                if version == 1:
+                    conn.execute(
+                        "INSERT INTO app_meta(key, value) VALUES ('schema_version', '1')"
+                    )
+                    conn.execute(
+                        "INSERT INTO app_meta(key, value) VALUES ('schema_seeded_at', ?)",
+                        (now,),
+                    )
+                else:
+                    conn.execute(
+                        "UPDATE app_meta SET value = ? WHERE key = 'schema_version'",
+                        (str(version),),
+                    )
+                applied.append(version)
         current = max((*existing, *applied), default=0)
         return MigrationResult(tuple(applied), current)
     finally:

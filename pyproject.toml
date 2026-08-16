@@ -8,6 +8,7 @@ version = "0.1.0.dev0"
 description = "Standalone, evidence-first personal news intelligence system"
 requires-python = ">=3.11"
 dependencies = [
+    "argon2-cffi>=23.1",
     "fastapi>=0.100",
     "uvicorn>=0.23",
 ]
