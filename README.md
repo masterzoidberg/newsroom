@@ -1,0 +1,43 @@
+# Newsroom
+
+Standalone, evidence-first personal news intelligence.
+
+Target workspace: `G:\Projects\Newsroom -v2`
+
+This repository is the standalone successor to the completed Hermes Newsroom
+reference implementation. **Hermes is not a runtime dependency.**
+
+## Current state
+
+Bootstrap only. The repository intentionally contains a small proven deterministic
+core ported from Hermes Newsroom v1 plus standalone SQLite/path primitives. The
+next implementation phase is the evaluation/benchmark foundation, not broad
+feature development.
+
+## Authority
+
+1. `plan/STANDALONE_NEWSROOM_PRODUCT_SPEC.md` — product contract.
+2. `plan/MASTER_PLAN.md` — implementation sequence and gates.
+3. `docs/ARCHITECTURE.md` — architecture overview.
+4. `docs/PORTING_AUDIT.md` — what was reused, redesigned, or rejected from v1.
+
+## Bootstrap validation
+
+```powershell
+python -m pytest -q
+```
+
+The imported deterministic core and standalone storage tests must remain green.
+
+## Runtime-data rule
+
+No runtime database, logs, backups, secrets, provider caches, or downloaded
+article bodies belong in this repository. The planned standalone runtime roots
+are under `%LOCALAPPDATA%\Newsroom\...` with explicit dev/prod selection.
+
+## v1 provenance
+
+Reference implementation Git HEAD used for bootstrap:
+`76a0be19ea3e0978743024d9283433a827c9e901`.
+
+The v1 implementation report is retained under `reference/hermes-v1/`.
