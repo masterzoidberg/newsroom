@@ -12,8 +12,20 @@ Reviewed commits:
 - `17bd795` — Phase 04 evidence-ledger backend
 - `9976178` — Phase 04 Evidence inspection view
 - `ce12eac` — Phase 04 closed-world bypass fix and API documentation
+- `65f083e` — accepted Claim acceptance-marker immutability fix
 
 ## Findings
+
+### Required — resolved
+
+1. **Accepted Claim immutability could be bypassed in two direct SQL writes.**
+   Migration 0003 rejected proposition changes only while `OLD.accepted_at` was
+   non-null, but allowed `accepted_at` to be cleared first. A caller with direct
+   database access could then alter the accepted proposition. Migration 0004
+   makes Claim acceptance one-way: the initial `NULL` to timestamp transition is
+   allowed, while any later change or removal raises `claim acceptance is
+   immutable`. The regression test first reproduced the bypass and now verifies
+   the database-level rejection. Fixed in `65f083e`.
 
 ### Optional / non-blocking
 
@@ -48,6 +60,9 @@ Reviewed commits:
   sets.
 - Accepted Claim proposition edits fail at SQLite level; corrections use a new
   Claim with `supersedes_claim_id` and a superseded state-history row.
+- Migration 0004 prevents clearing or replacing an existing Claim acceptance
+  timestamp, closing the two-write proposition-mutation bypass without changing
+  migrations 0001-0003.
 - Existing WAL, foreign-key, transaction, online-backup, restore, runtime-path,
   and integrity tests remain green.
 - `CoreService.create_story_revision()` delegates to the evidence-bound service,
@@ -85,11 +100,19 @@ Reviewed commits:
 
 Completed checks:
 
-- `python -m pytest -q` — pass;
+- `python -m pytest -q` — pass (206 tests);
 - `python -m compileall -q newsroom` — pass;
+- `python -m newsroom.evals validate` — pass (30 cases);
+- two consecutive `python -m newsroom.evals baseline --json` outputs — exact
+  match, SHA-256 `F3D84AAB5B1D19931318C7BC37CC84A6373D175D6D32A58F73640FACF75EB1C3`;
+- `python -m newsroom.evals replay multi-outlet-hermes-v0200` — deterministic
+  replay hash `54eeacbd32f04ffc83844b27ad972e075c3075988eb6da82c4dac03d51b55776`;
 - `npm run typecheck` — pass;
 - `npm run build` — pass;
 - `npm audit --audit-level=high` — 0 vulnerabilities;
+- fresh operator migration — versions 1-4 applied; idempotence covered by the
+  backend suite;
+- operator integrity, online backup, restore, and post-restore integrity — pass;
 - Playwright smoke test — Evidence view rendered, unauthenticated API failure
   displayed accessibly, no browser page errors, screenshot visually checked.
 
@@ -100,3 +123,5 @@ fixture corpus. Citation correctness is represented by required structured
 Claim citations; unsupported proposition rate is zero for accepted revisions;
 false merge behavior is conservative because the manual run accepts an
 explicit existing Story or creates a new one and performs no automatic merge.
+
+Accepted implementation commit: `65f083e1365c59476b384d7914a51a3ed36adeba`.

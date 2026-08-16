@@ -68,4 +68,5 @@ Completed 2026-08-16.
 
 - Required review: [docs/reviews/PHASE_04_REVIEW.md](../../docs/reviews/PHASE_04_REVIEW.md)
 - Verdict: Approved; no Critical or Required findings remain.
-- Accepted implementation commit: `eef6466` (includes `ce12eac`).
+- Accepted implementation commit: `65f083e1365c59476b384d7914a51a3ed36adeba`
+  (includes the migration 0004 review fix).
