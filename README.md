@@ -9,10 +9,10 @@ reference implementation. **Hermes is not a runtime dependency.**
 
 ## Current state
 
-Bootstrap only. The repository intentionally contains a small proven deterministic
-core ported from Hermes Newsroom v1 plus standalone SQLite/path primitives. The
-next implementation phase is the evaluation/benchmark foundation, not broad
-feature development.
+The standalone deterministic core, evaluation foundation, evidence-ledger
+vertical slice, and Phase 05 local-first AI routing are implemented. The next
+phase is source discovery and acquisition; hosted providers remain optional and
+disabled by default.
 
 ## Authority
 

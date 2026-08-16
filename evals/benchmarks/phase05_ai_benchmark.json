@@ -1,0 +1,121 @@
+{
+  "benchmark": "newsroom-phase05-ai",
+  "network": false,
+  "schema_version": 1,
+  "tasks": {
+    "embedding": {
+      "candidates": [
+        {
+          "case_count": 2,
+          "cases_passed": 2,
+          "limitation": "Test-only reference; not a runtime provider.",
+          "name": "deterministic-reference-v1",
+          "score": 1.0
+        },
+        {
+          "case_count": 2,
+          "cases_passed": 2,
+          "limitation": "Hash vectors are lexical, not semantic.",
+          "name": "local-token-hash-v1",
+          "score": 1.0
+        }
+      ],
+      "selected_default": "local-token-hash-v1"
+    },
+    "entailment": {
+      "candidates": [
+        {
+          "case_count": 2,
+          "cases_passed": 2,
+          "limitation": "Test-only reference; not a runtime provider.",
+          "name": "deterministic-reference-v1",
+          "score": 1.0
+        },
+        {
+          "case_count": 2,
+          "cases_passed": 2,
+          "limitation": "Contradiction detection uses a small marker vocabulary.",
+          "name": "local-token-entailment-v1",
+          "score": 1.0
+        }
+      ],
+      "selected_default": "local-token-entailment-v1"
+    },
+    "extraction": {
+      "candidates": [
+        {
+          "case_count": 2,
+          "cases_passed": 2,
+          "limitation": "Test-only reference; not a runtime provider.",
+          "name": "deterministic-reference-v1",
+          "score": 1.0
+        },
+        {
+          "case_count": 2,
+          "cases_passed": 2,
+          "limitation": "Sentence boundaries are heuristic and require later review.",
+          "name": "local-sentence-extraction-v1",
+          "score": 1.0
+        }
+      ],
+      "selected_default": "local-sentence-extraction-v1"
+    },
+    "relevance": {
+      "candidates": [
+        {
+          "case_count": 2,
+          "cases_passed": 2,
+          "limitation": "Test-only reference; not a runtime provider.",
+          "name": "deterministic-reference-v1",
+          "score": 1.0
+        },
+        {
+          "case_count": 2,
+          "cases_passed": 2,
+          "limitation": "Multi-word scope terms are treated as independent tokens.",
+          "name": "local-scope-overlap-v1",
+          "score": 1.0
+        }
+      ],
+      "selected_default": "local-scope-overlap-v1"
+    },
+    "reranker": {
+      "candidates": [
+        {
+          "case_count": 2,
+          "cases_passed": 2,
+          "limitation": "Test-only reference; not a runtime provider.",
+          "name": "deterministic-reference-v1",
+          "score": 1.0
+        },
+        {
+          "case_count": 2,
+          "cases_passed": 2,
+          "limitation": "Scores do not understand negation or entities.",
+          "name": "local-token-overlap-v1",
+          "score": 1.0
+        }
+      ],
+      "selected_default": "local-token-overlap-v1"
+    },
+    "synthesis": {
+      "candidates": [
+        {
+          "case_count": 2,
+          "cases_passed": 2,
+          "limitation": "Test-only reference; not a runtime provider.",
+          "name": "deterministic-reference-v1",
+          "score": 1.0
+        },
+        {
+          "case_count": 2,
+          "cases_passed": 2,
+          "limitation": "Synthesis is templated and intentionally not stylistically rich.",
+          "name": "local-claim-join-v1",
+          "score": 1.0
+        }
+      ],
+      "selected_default": "local-claim-join-v1"
+    }
+  }
+}

@@ -14,6 +14,9 @@ Formal ADR records are under `docs/adr/`.
   bounded escalation.
 - **D-007:** SQLite is the initial DB and durable queue; infrastructure upgrades
   require measured need.
+- **D-008:** Phase 05 AI capabilities are narrow, validated, local-first, and
+  routed through hard global/per-work paid budgets; benchmark results and
+  limitations are recorded in ADR-003.
 
 Phase 0 established the evaluation subsystem (`newsroom.evals`), a 30-case
 labeled corpus, deterministic replay, reproducible metrics, and the v1 baseline.

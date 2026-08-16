@@ -6,7 +6,9 @@ from typing import Any, Callable, Optional
 from fastapi import APIRouter, Query, Request, Response
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from .domain import CoreService
+from .ai import AIError, AIRouter, CapabilityBundle, SQLiteTelemetrySink
+from .ai_pipeline import AIVerticalSliceService, VerticalSliceInput
+from .domain import CoreService, DomainValidation
 from .evidence import EvidenceService
 
 
@@ -271,6 +273,29 @@ class ManualRunCreate(StrictModel):
             raise ValueError("provide exactly one of source_id or source")
         if (self.document_id is None) == (self.document is None):
             raise ValueError("provide exactly one of document_id or document")
+        return self
+
+
+class AIRunCreate(StrictModel):
+    source_id: Optional[str] = Field(default=None, max_length=200)
+    source: Optional[SourceCreate] = None
+    document_id: Optional[str] = Field(default=None, max_length=200)
+    document: Optional[ManualDocument] = None
+    document_version: DocumentVersionCreate
+    content_text: str = Field(min_length=1, max_length=50000)
+    scope_terms: list[str] = Field(min_length=1, max_length=100)
+    story_id: Optional[str] = Field(default=None, max_length=200)
+    story: Optional[StoryCreate] = None
+    work_id: Optional[str] = Field(default=None, max_length=200)
+
+    @model_validator(mode="after")
+    def require_new_or_existing_parents(self):
+        if (self.source_id is None) == (self.source is None):
+            raise ValueError("provide exactly one of source_id or source")
+        if (self.document_id is None) == (self.document is None):
+            raise ValueError("provide exactly one of document_id or document")
+        if self.story_id is not None and self.story is not None:
+            raise ValueError("provide at most one of story_id or story")
         return self
 
 
@@ -679,6 +704,34 @@ def create_domain_router(
     async def manual_run(request: Request, payload: ManualRunCreate):
         write_guard(request)
         return ledger.run_manual(payload.model_dump())
+
+    @router.post("/runs/ai", status_code=201)
+    async def ai_run(request: Request, payload: AIRunCreate):
+        write_guard(request)
+        ai_service = AIVerticalSliceService(
+            service.db_path,
+            AIRouter(
+                local=CapabilityBundle.local_defaults(),
+                telemetry=SQLiteTelemetrySink(service.db_path),
+            ),
+        )
+        try:
+            return ai_service.run(
+                VerticalSliceInput(
+                    source=payload.source.model_dump() if payload.source else None,
+                    source_id=payload.source_id,
+                    document=payload.document.model_dump() if payload.document else None,
+                    document_id=payload.document_id,
+                    document_version=payload.document_version.model_dump(exclude_none=True),
+                    content_text=payload.content_text,
+                    scope_terms=payload.scope_terms,
+                    story=payload.story.model_dump() if payload.story else None,
+                    story_id=payload.story_id,
+                    work_id=payload.work_id,
+                )
+            )
+        except AIError as exc:
+            raise DomainValidation(f"AI run failed safely: {type(exc).__name__}") from exc
 
     @router.post("/stories/{story_id}/tags", status_code=201)
     async def tag_story(request: Request, story_id: str, payload: StoryTagCreate):

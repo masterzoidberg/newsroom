@@ -70,6 +70,21 @@ an optional evidence-bound revision. A caller may provide an existing
 `source_id`, `document_id`, or `story_id`; automatic matching is deliberately
 not performed in this phase, keeping resolution conservative and auditable.
 
+## Local AI run
+
+`POST /runs/ai` accepts the same Source, Document, and DocumentVersion parent
+choices plus `content_text` and `scope_terms`. It runs the measured local-first
+capability cascade for relevance, embeddings, reranking, extraction, entailment,
+and synthesis, then delegates persistence to the same evidence-ledger writer.
+Only accepted, evidence-supported Claims can appear in the generated revision.
+The response includes an `ai` diagnostic object; provider usage metadata is
+recorded in `provider_usage`. Paid escalation is disabled by default and is not
+needed for this route to complete locally.
+
+Malformed provider output, timeout, and provider failure return a safe validation
+error and do not partially persist a ledger run. The router records the failure
+cause and work ID when telemetry is enabled.
+
 ## Query and mutation conventions
 
 List responses use:
