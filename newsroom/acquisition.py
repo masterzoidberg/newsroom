@@ -10,6 +10,7 @@ import hashlib
 import ipaddress
 import json
 import re
+import socket
 import urllib.error
 import urllib.request
 import xml.etree.ElementTree as ET
@@ -88,6 +89,24 @@ class AcquisitionPolicy:
     def check_content_length(self, content_length: int | None) -> None:
         if content_length is not None and content_length > self.max_response_bytes:
             raise AcquisitionTooLarge("response exceeds configured byte limit")
+
+    def check_resolved_url(self, url: str) -> str:
+        """Validate the URL and reject any non-public resolved address."""
+        canonical = self.check_url(url)
+        parsed = urlparse(canonical)
+        try:
+            addresses = socket.getaddrinfo(
+                parsed.hostname,
+                parsed.port or (443 if parsed.scheme == "https" else 80),
+                type=socket.SOCK_STREAM,
+            )
+        except socket.gaierror as exc:
+            raise AcquisitionError("URL host could not be resolved") from exc
+        if not addresses:
+            raise AcquisitionError("URL host could not be resolved")
+        if any(_is_private_host(item[4][0]) for item in addresses):
+            raise AcquisitionBlocked("URL host resolves to a non-public address")
+        return canonical
 
 
 def _clean_domain(value: str) -> str:
@@ -335,7 +354,7 @@ class _BoundedRedirectHandler(urllib.request.HTTPRedirectHandler):
     def redirect_request(self, req, fp, code, msg, headers, newurl):
         if self.count >= self.max_redirects:
             raise AcquisitionBlocked("redirect limit exceeded")
-        safe_url = self.policy.check_url(newurl)
+        safe_url = self.policy.check_resolved_url(newurl)
         self.count += 1
         return super().redirect_request(req, fp, code, msg, headers, safe_url)
 
@@ -346,7 +365,7 @@ class UrllibHttpTransport:
     user_agent = "Newsroom/0.1 (+local source acquisition)"
 
     def get(self, url: str, *, headers: Mapping[str, str], policy: AcquisitionPolicy) -> HttpResponse:
-        canonical = policy.check_url(url)
+        canonical = policy.check_resolved_url(url)
         request = urllib.request.Request(canonical, headers={"User-Agent": self.user_agent, **dict(headers)}, method="GET")
         opener = urllib.request.build_opener(_BoundedRedirectHandler(policy.max_redirects, policy))
         try:

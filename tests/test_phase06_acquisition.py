@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import socket
 import sqlite3
 
 import pytest
@@ -92,6 +93,16 @@ def test_policy_denies_disallowed_hosts_and_bounds_response_size():
         AcquisitionPolicy().check_url("https://service.internal/item")
     with pytest.raises(AcquisitionTooLarge):
         policy.check_content_length(11)
+
+
+def test_policy_blocks_hostnames_resolving_to_non_public_addresses(monkeypatch):
+    def private_resolution(*_args, **_kwargs):
+        return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("127.0.0.1", 443))]
+
+    monkeypatch.setattr(socket, "getaddrinfo", private_resolution)
+
+    with pytest.raises(AcquisitionBlocked, match="non-public address"):
+        AcquisitionPolicy().check_resolved_url("https://apparently-public.example/item")
 
 
 def test_safe_html_extractor_removes_active_content_and_bounds_text():

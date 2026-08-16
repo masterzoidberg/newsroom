@@ -390,7 +390,8 @@ class RelevanceCascade:
                 raise DomainValidation("AI classifier must return (relevant, confidence, signal)") from exc
             if isinstance(relevant, bool) is False or not 0.0 <= float(confidence) <= 1.0 or not str(signal).strip():
                 raise DomainValidation("AI classifier returned an invalid result")
-        return RelevanceResult(bool(relevant), "ai" if relevant else "none", float(confidence), (), str(signal), False)
+        accepted = bool(relevant) and float(confidence) >= scope.semantic_threshold
+        return RelevanceResult(accepted, "ai" if accepted else "none", float(confidence), (), str(signal), False)
 
 
 def _scope_for_target(conn: sqlite3.Connection, target_type: str, target_id: str) -> RelevanceScope:
@@ -548,6 +549,10 @@ class MonitorService:
         conn = storage.connect(self.db_path)
         try:
             with storage.write_tx(conn):
+                if values.get("enabled") is True and not self._target_exists(
+                    conn, current["target_type"], current["target_id"]
+                ):
+                    raise DomainNotFound("monitor target not found")
                 policy_id = values.get("policy_id", current["policy_id"])
                 if conn.execute("SELECT 1 FROM monitoring_policies WHERE id = ?", (policy_id,)).fetchone() is None:
                     raise DomainNotFound("monitoring policy not found")

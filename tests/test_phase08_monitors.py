@@ -208,6 +208,10 @@ def test_relevance_cascade_exercises_all_levels_and_exclusions():
     assert (result.relevant, result.stage) == (True, "ai")
     assert result.paid_used is False
 
+    low_confidence = RelevanceCascade(ai_classifier=lambda _text, _scope: (True, 0.2, "uncertain"))
+    result = low_confidence.evaluate("An uncertain candidate", RelevanceScope())
+    assert (result.relevant, result.stage, result.score) == (False, "none", 0.2)
+
     excluded = RelevanceCascade().evaluate(
         "Quantum chip rumor is a hoax", RelevanceScope(exact_terms=("quantum chip",), exclusions=("hoax",))
     )
@@ -234,6 +238,10 @@ def test_disabled_monitor_cannot_schedule_work_and_survives_restart(tmp_db):
     monitors.disable(monitor["id"])
     assert SchedulerService(tmp_db).tick(now=T0)["job_ids"] == []
     assert MonitorService(tmp_db).get(monitor["id"])["enabled"] == 0
+
+    core.delete_source(source["id"])
+    with pytest.raises(DomainNotFound):
+        monitors.enable(monitor["id"], next_check_at=T0)
 
 
 def test_scheduled_monitor_has_local_only_allowlisted_worker_handler(tmp_db):
