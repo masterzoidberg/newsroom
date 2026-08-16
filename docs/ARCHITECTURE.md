@@ -60,14 +60,24 @@ Source -> Document -> DocumentVersion. Version identity is content/provenance
 state at retrieval time.
 
 ### Event Resolution
-Candidate retrieval + conservative merge/new decision. Embeddings narrow
-candidates; deterministic/model adjudication establishes event identity.
+Candidate retrieval + conservative merge/new decision. URL/document identity,
+time, entities, location, shared Claims, bounded text/embedding similarity, and
+event attributes narrow candidates; deterministic exclusions reject incompatible
+events. An adjudicator is called only for an ambiguous top candidate, and a
+low-confidence or absent adjudication creates a separate Story.
+
+Phase 09 persists Story-document links, immutable evolution classifications,
+document lineage edges for citations/syndication/wire propagation/rewrites, and
+revision-document provenance. Independent corroboration is counted by lineage
+group and source rather than publication count.
 
 ### Evidence
 Claim, EvidenceSpan, ClaimEvidence, ClaimStateHistory and supersession.
 
 ### Story
 Story and immutable StoryRevision records plus Topics/Subjects/review metadata.
+Review status remains independent from revision attention; a material revision
+sets `review.new_update` without changing saved/dismissed/not-useful state.
 
 ### Research Questions
 Persistent gaps that can generate targeted follow-up jobs.

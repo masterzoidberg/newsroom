@@ -888,6 +888,27 @@ class CoreService:
                 (identifier,),
             ).fetchone()
             result["current_revision"] = _as_dict(revision)
+            review = conn.execute(
+                "SELECT * FROM story_review WHERE story_id = ?", (identifier,)
+            ).fetchone()
+            if review is not None:
+                review_result = _as_dict(review)
+                reviewed_number = 0
+                if review_result["last_reviewed_revision_id"]:
+                    reviewed = conn.execute(
+                        "SELECT revision_number FROM story_revisions WHERE id = ? AND story_id = ?",
+                        (review_result["last_reviewed_revision_id"], identifier),
+                    ).fetchone()
+                    reviewed_number = reviewed["revision_number"] if reviewed else 0
+                review_result["new_update"] = conn.execute(
+                    """
+                    SELECT 1 FROM story_revisions
+                    WHERE story_id = ? AND material_change = 1 AND revision_number > ?
+                    LIMIT 1
+                    """,
+                    (identifier, reviewed_number),
+                ).fetchone() is not None
+                result["review"] = review_result
             result["subject_ids"] = [
                 item[0] for item in conn.execute(
                     "SELECT subject_id FROM story_subjects WHERE story_id = ? ORDER BY subject_id", (identifier,)

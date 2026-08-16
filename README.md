@@ -12,7 +12,9 @@ reference implementation. **Hermes is not a runtime dependency.**
 The standalone deterministic core, evaluation foundation, evidence-ledger
 vertical slice, Phase 05 local-first AI routing, Phase 06 bounded source
 discovery/acquisition, Phase 07 durable jobs/scheduling, and Phase 08 persistent
-monitors with semantic relevance are implemented.
+monitors with semantic relevance are implemented. Phase 09 Story evolution,
+lineage, novelty classification, and review-independent material-update
+resurfacing are implemented.
 Hosted providers remain optional and disabled by default.
 
 ## Authority

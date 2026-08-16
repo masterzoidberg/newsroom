@@ -131,6 +131,30 @@ accepted, belongs to the Story, and is part of the revision Claim set. It then
 stores the exact Claim IDs in `story_revision_claims` and computes
 `claim_set_hash`; unsupported citations reject the revision before insertion.
 
+## Story evolution, lineage, and novelty
+
+Phase 09 adds authenticated endpoints for the conservative resolver and its
+immutable provenance:
+
+- `POST /story-evolution/resolve` evaluates a candidate against persisted Story
+  signals without mutating state.
+- `POST /story-evolution/process` resolves and records one Document observation,
+  creating a new Story when ambiguity remains.
+- `POST /stories/{story_id}/evolution` records an explicitly classified
+  observation; `GET /stories/{story_id}/timeline` returns evolution events,
+  revision links, and document lineage.
+- `GET /stories/{story_id}/corroboration` reports publication count separately
+  from independent source/lineage groups.
+- `GET/POST /documents/{document_id}/lineage` manages citations, syndication,
+  wire propagation, rewritten reporting, and common-primary-document edges.
+- `GET/POST /stories/{story_id}/review` tracks the reviewed revision and exposes
+  `new_update` without rewriting saved, dismissed, or not-useful state.
+
+All mutations require the existing session and CSRF protections. Evolution
+events, lineage edges, Story-document links, and revision-document links are
+append-only; corrections are represented by the existing Claim supersession
+chain and immutable Story revisions.
+
 ## Manual run
 
 `POST /runs/manual` accepts a deterministic frozen fixture and transactionally

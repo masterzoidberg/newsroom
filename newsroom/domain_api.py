@@ -25,6 +25,7 @@ from .monitoring import (
     RelevanceScope,
     ScopeSuggestionService,
 )
+from .story_evolution import StoryCandidate, StoryEvolutionService
 
 
 class StrictModel(BaseModel):
@@ -460,6 +461,57 @@ class StoryTagCreate(StrictModel):
     tag_id: str = Field(min_length=1, max_length=200)
 
 
+class StoryReviewWrite(StrictModel):
+    review_status: str = Field(pattern="^(new|saved|dismissed|not_useful)$")
+    revision_id: Optional[str] = Field(default=None, max_length=200)
+
+
+class EvolutionObservationCreate(StrictModel):
+    document_id: str = Field(min_length=1, max_length=200)
+    update_class: str = Field(
+        pattern="^(new_story|duplicate|corroboration|contradiction|qualification|correction|material_update)$"
+    )
+    event_key: Optional[str] = Field(default=None, max_length=200)
+    entities: list[str] = Field(default_factory=list, max_length=100)
+    locations: list[str] = Field(default_factory=list, max_length=100)
+    revision_id: Optional[str] = Field(default=None, max_length=200)
+    decision: dict[str, Any] = Field(default_factory=dict)
+    material_change: Optional[bool] = None
+
+
+class LineageCreate(StrictModel):
+    parent_document_id: str = Field(min_length=1, max_length=200)
+    relationship: str = Field(
+        pattern="^(cites|syndicated_from|wire_propagation|rewritten_from|common_primary_document)$"
+    )
+    confidence: float = Field(default=1.0, ge=0.0, le=1.0)
+    rationale: str = Field(default="", max_length=2000)
+
+
+class StoryResolutionCandidate(StrictModel):
+    id: str = Field(min_length=1, max_length=200)
+    headline: str = Field(min_length=1, max_length=500)
+    canonical_url: Optional[str] = Field(default=None, max_length=2048)
+    document_id: Optional[str] = Field(default=None, max_length=200)
+    published_at: Optional[str] = Field(default=None, max_length=64)
+    event_key: Optional[str] = Field(default=None, max_length=200)
+    entities: list[str] = Field(default_factory=list, max_length=100)
+    locations: list[str] = Field(default_factory=list, max_length=100)
+    claims: list[str] = Field(default_factory=list, max_length=100)
+    embedding: list[float] = Field(default_factory=list, max_length=4096)
+    text: str = Field(default="", max_length=20000)
+
+
+class StoryEvolutionProcess(StoryResolutionCandidate):
+    document_id: str = Field(min_length=1, max_length=200)
+    story_id: Optional[str] = Field(default=None, max_length=200)
+    update_class: Optional[str] = Field(
+        default=None,
+        pattern="^(new_story|duplicate|corroboration|contradiction|qualification|correction|material_update)$",
+    )
+    revision_id: Optional[str] = Field(default=None, max_length=200)
+
+
 class SettingWrite(StrictModel):
     value: str = Field(max_length=4000)
 
@@ -489,6 +541,7 @@ def create_domain_router(
     policies = MonitoringPolicyService(service.db_path)
     monitors = MonitorService(service.db_path)
     vocabulary_service = ScopeSuggestionService(service.db_path)
+    evolution = StoryEvolutionService(service.db_path)
 
     def read_guard(request: Request):
         return require_user(request)
@@ -781,6 +834,22 @@ def create_domain_router(
         read_guard(request)
         return ledger.list_document_versions(document_id, page=page, page_size=page_size)
 
+    @router.get("/documents/{document_id}/lineage")
+    async def document_lineage(request: Request, document_id: str):
+        read_guard(request)
+        return evolution.lineage(document_id)
+
+    @router.post("/documents/{document_id}/lineage", status_code=201)
+    async def create_document_lineage(request: Request, document_id: str, payload: LineageCreate):
+        write_guard(request)
+        return evolution.link_lineage(
+            document_id,
+            payload.parent_document_id,
+            payload.relationship,
+            confidence=payload.confidence,
+            rationale=payload.rationale,
+        )
+
     @router.post("/documents/{document_id}/versions", status_code=201)
     async def create_document_version(request: Request, document_id: str, payload: DocumentVersionCreate):
         write_guard(request)
@@ -847,6 +916,67 @@ def create_domain_router(
     async def story_evidence(request: Request, story_id: str):
         read_guard(request)
         return ledger.get_story_evidence(story_id)
+
+    @router.get("/stories/{story_id}/timeline")
+    async def story_timeline(request: Request, story_id: str):
+        read_guard(request)
+        return evolution.timeline(story_id)
+
+    @router.get("/stories/{story_id}/corroboration")
+    async def story_corroboration(request: Request, story_id: str, claim_id: Optional[str] = None):
+        read_guard(request)
+        return evolution.corroboration(story_id, claim_id=claim_id)
+
+    @router.get("/stories/{story_id}/review")
+    async def story_review(request: Request, story_id: str):
+        read_guard(request)
+        return evolution.review_state(story_id)
+
+    @router.post("/stories/{story_id}/review")
+    async def write_story_review(request: Request, story_id: str, payload: StoryReviewWrite):
+        write_guard(request)
+        return evolution.review(story_id, payload.review_status, payload.revision_id)
+
+    @router.post("/stories/{story_id}/evolution", status_code=201)
+    async def record_story_evolution(request: Request, story_id: str, payload: EvolutionObservationCreate):
+        write_guard(request)
+        return evolution.record_observation(
+            story_id,
+            payload.document_id,
+            payload.update_class,
+            candidate={
+                "id": payload.document_id,
+                "headline": "",
+                "event_key": payload.event_key,
+                "entities": payload.entities,
+                "locations": payload.locations,
+            },
+            decision=payload.decision,
+            revision_id=payload.revision_id,
+            material_change=payload.material_change,
+        )
+
+    @router.post("/story-evolution/resolve")
+    async def resolve_story_candidate(request: Request, payload: StoryResolutionCandidate):
+        read_guard(request)
+        candidate = StoryCandidate.from_mapping(payload.model_dump())
+        return evolution.resolve(candidate).__dict__
+
+    @router.post("/story-evolution/process", status_code=201)
+    async def process_story_candidate(request: Request, payload: StoryEvolutionProcess):
+        write_guard(request)
+        values = payload.model_dump()
+        document_id = values.pop("document_id")
+        story_id = values.pop("story_id")
+        update_class = values.pop("update_class")
+        revision_id = values.pop("revision_id")
+        return evolution.process(
+            document_id,
+            values,
+            story_id=story_id,
+            update_class=update_class,
+            revision_id=revision_id,
+        )
 
     @router.get("/stories/{identifier}")
     async def story(request: Request, identifier: str, include_deleted: bool = False):

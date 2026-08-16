@@ -31,6 +31,12 @@ Formal ADR records are under `docs/adr/`.
   is a deterministic cascade from exact terms through local semantic and AI
   classification; suggestions remain pending until explicitly reviewed, and
   scheduler work carries only the monitor policy budget. See ADR-006.
+- **D-012:** Phase 09 keeps Story resolution conservative and append-only. URL,
+  temporal, entity/location, Claim, text/embedding, and event signals retrieve
+  candidates; deterministic exclusions and low-confidence ambiguity handling
+  prefer a new Story. Lineage groups repeated publications so publication count
+  cannot masquerade as independent corroboration, while review attention remains
+  independent from saved/dismissed state.
 
 Phase 0 established the evaluation subsystem (`newsroom.evals`), a 30-case
 labeled corpus, deterministic replay, reproducible metrics, and the v1 baseline.

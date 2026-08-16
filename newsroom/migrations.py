@@ -783,6 +783,126 @@ MIGRATION_0007_CHECKSUM = hashlib.sha256(
 ).hexdigest()
 
 
+MIGRATION_0008_STATEMENTS: tuple[str, ...] = (
+    """
+    CREATE TABLE story_documents (
+        story_id TEXT NOT NULL REFERENCES stories(id) ON DELETE CASCADE,
+        document_id TEXT NOT NULL REFERENCES documents(id) ON DELETE RESTRICT,
+        event_key TEXT,
+        entities_json TEXT NOT NULL DEFAULT '[]',
+        locations_json TEXT NOT NULL DEFAULT '[]',
+        linked_at TEXT NOT NULL,
+        PRIMARY KEY (story_id, document_id)
+    )
+    """,
+    "CREATE INDEX story_documents_document_idx ON story_documents(document_id)",
+    """
+    CREATE TABLE document_lineage (
+        id TEXT PRIMARY KEY,
+        document_id TEXT NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+        parent_document_id TEXT NOT NULL REFERENCES documents(id) ON DELETE RESTRICT,
+        relationship TEXT NOT NULL CHECK (relationship IN (
+            'cites', 'syndicated_from', 'wire_propagation',
+            'rewritten_from', 'common_primary_document'
+        )),
+        confidence REAL NOT NULL DEFAULT 1.0 CHECK (confidence >= 0.0 AND confidence <= 1.0),
+        rationale TEXT NOT NULL DEFAULT '',
+        created_at TEXT NOT NULL,
+        UNIQUE (document_id, parent_document_id, relationship),
+        CHECK (document_id <> parent_document_id)
+    )
+    """,
+    "CREATE INDEX document_lineage_document_idx ON document_lineage(document_id, relationship)",
+    "CREATE INDEX document_lineage_parent_idx ON document_lineage(parent_document_id, relationship)",
+    """
+    CREATE TABLE story_evolution_events (
+        id TEXT PRIMARY KEY,
+        story_id TEXT NOT NULL REFERENCES stories(id) ON DELETE CASCADE,
+        document_id TEXT NOT NULL REFERENCES documents(id) ON DELETE RESTRICT,
+        update_class TEXT NOT NULL CHECK (update_class IN (
+            'new_story', 'duplicate', 'corroboration', 'contradiction',
+            'qualification', 'correction', 'material_update'
+        )),
+        material_change INTEGER NOT NULL DEFAULT 0 CHECK (material_change IN (0, 1)),
+        decision_json TEXT NOT NULL DEFAULT '{}',
+        created_at TEXT NOT NULL
+    )
+    """,
+    "CREATE INDEX story_evolution_events_story_idx ON story_evolution_events(story_id, created_at, id)",
+    "CREATE INDEX story_evolution_events_document_idx ON story_evolution_events(document_id, created_at, id)",
+    """
+    CREATE TABLE story_revision_documents (
+        revision_id TEXT NOT NULL REFERENCES story_revisions(id) ON DELETE CASCADE,
+        document_id TEXT NOT NULL REFERENCES documents(id) ON DELETE RESTRICT,
+        role TEXT NOT NULL DEFAULT 'trigger' CHECK (role IN ('trigger', 'provenance')),
+        created_at TEXT NOT NULL,
+        PRIMARY KEY (revision_id, document_id)
+    )
+    """,
+    "CREATE INDEX story_revision_documents_document_idx ON story_revision_documents(document_id)",
+    """
+    CREATE TRIGGER story_documents_immutable_update
+    BEFORE UPDATE ON story_documents
+    BEGIN
+        SELECT RAISE(ABORT, 'story document links are append-only');
+    END
+    """,
+    """
+    CREATE TRIGGER story_documents_immutable_delete
+    BEFORE DELETE ON story_documents
+    BEGIN
+        SELECT RAISE(ABORT, 'story document links are append-only');
+    END
+    """,
+    """
+    CREATE TRIGGER document_lineage_immutable_update
+    BEFORE UPDATE ON document_lineage
+    BEGIN
+        SELECT RAISE(ABORT, 'document lineage is append-only');
+    END
+    """,
+    """
+    CREATE TRIGGER document_lineage_immutable_delete
+    BEFORE DELETE ON document_lineage
+    BEGIN
+        SELECT RAISE(ABORT, 'document lineage is append-only');
+    END
+    """,
+    """
+    CREATE TRIGGER story_evolution_events_immutable_update
+    BEFORE UPDATE ON story_evolution_events
+    BEGIN
+        SELECT RAISE(ABORT, 'story evolution events are append-only');
+    END
+    """,
+    """
+    CREATE TRIGGER story_evolution_events_immutable_delete
+    BEFORE DELETE ON story_evolution_events
+    BEGIN
+        SELECT RAISE(ABORT, 'story evolution events are append-only');
+    END
+    """,
+    """
+    CREATE TRIGGER story_revision_documents_immutable_update
+    BEFORE UPDATE ON story_revision_documents
+    BEGIN
+        SELECT RAISE(ABORT, 'story revision document links are append-only');
+    END
+    """,
+    """
+    CREATE TRIGGER story_revision_documents_immutable_delete
+    BEFORE DELETE ON story_revision_documents
+    BEGIN
+        SELECT RAISE(ABORT, 'story revision document links are append-only');
+    END
+    """,
+)
+
+MIGRATION_0008_CHECKSUM = hashlib.sha256(
+    "\n".join(MIGRATION_0008_STATEMENTS).encode("utf-8")
+).hexdigest()
+
+
 @dataclass(frozen=True)
 class MigrationResult:
     applied_versions: tuple[int, ...]
@@ -832,6 +952,7 @@ def apply_migrations(db_path: Optional[str | Path] = None) -> MigrationResult:
                 5: MIGRATION_0005_STATEMENTS,
                 6: MIGRATION_0006_STATEMENTS,
                 7: MIGRATION_0007_STATEMENTS,
+                8: MIGRATION_0008_STATEMENTS,
             }
             for version, statements in migrations.items():
                 if version in existing:

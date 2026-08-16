@@ -548,6 +548,29 @@ class EvidenceService:
                 "story_revision_claims",
                 {"revision_id": revision_id, "claim_id": claim_id, "position": position},
             )
+        conn.execute(
+            """
+            INSERT OR IGNORE INTO story_documents
+                (story_id, document_id, event_key, entities_json, locations_json, linked_at)
+            SELECT ?, dv.document_id, NULL, '[]', '[]', ?
+            FROM claim_evidence ce
+            JOIN evidence_spans es ON es.id = ce.evidence_span_id
+            JOIN document_versions dv ON dv.id = es.document_version_id
+            WHERE ce.claim_id IN ({})
+            """.format(", ".join("?" for _ in claim_ids)),
+            [story_id, now, *claim_ids],
+        )
+        conn.execute(
+            """
+            INSERT OR IGNORE INTO story_revision_documents (revision_id, document_id, role, created_at)
+            SELECT ?, dv.document_id, 'provenance', ?
+            FROM claim_evidence ce
+            JOIN evidence_spans es ON es.id = ce.evidence_span_id
+            JOIN document_versions dv ON dv.id = es.document_version_id
+            WHERE ce.claim_id IN ({})
+            """.format(", ".join("?" for _ in claim_ids)),
+            [revision_id, now, *claim_ids],
+        )
         conn.execute("UPDATE stories SET updated_at = ? WHERE id = ?", (now, story_id))
         return revision_id, computed_hash
 
@@ -799,6 +822,14 @@ class EvidenceService:
                     story_data.setdefault("headline", data["document"]["title"])
                     story_id = self._create_story_tx(conn, story_data)
                     resolution = "new"
+                conn.execute(
+                    """
+                    INSERT OR IGNORE INTO story_documents
+                        (story_id, document_id, event_key, entities_json, locations_json, linked_at)
+                    VALUES (?, ?, NULL, '[]', '[]', ?)
+                    """,
+                    (story_id, document_id, utc_now()),
+                )
                 for claim_data in data["claims"]:
                     claim_id = self._create_claim_tx(conn, story_id, claim_data)
                     for evidence_data in claim_data.get("evidence", []):
@@ -825,6 +856,25 @@ class EvidenceService:
                         for proposition in revision_data.get("propositions", [])
                     ]
                     revision_id, _ = self._create_revision_tx(conn, story_id, revision)
+                evolution_class = "new_story" if resolution == "new" else (
+                    "material_update" if revision_data and revision_data.get("material_change") else "corroboration"
+                )
+                conn.execute(
+                    """
+                    INSERT INTO story_evolution_events
+                        (id, story_id, document_id, update_class, material_change, decision_json, created_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        new_id("evo"),
+                        story_id,
+                        document_id,
+                        evolution_class,
+                        int(bool(revision_data and revision_data.get("material_change"))),
+                        json.dumps({"source": "manual_run", "resolution": resolution}, sort_keys=True),
+                        utc_now(),
+                    ),
+                )
         finally:
             conn.close()
         result = {
