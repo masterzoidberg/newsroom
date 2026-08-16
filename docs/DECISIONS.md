@@ -26,6 +26,11 @@ Formal ADR records are under `docs/adr/`.
   budget reservations in SQLite. Claims are lease-based and transactional;
   retries, cancellation, idempotency, and budget exhaustion are explicit state
   transitions. Paid dispatch remains disabled by default. See ADR-005.
+- **D-011:** Phase 08 keeps monitor policy, target integrity, approved scope
+  snapshots, activity history, and vocabulary suggestions in SQLite. Relevance
+  is a deterministic cascade from exact terms through local semantic and AI
+  classification; suggestions remain pending until explicitly reviewed, and
+  scheduler work carries only the monitor policy budget. See ADR-006.
 
 Phase 0 established the evaluation subsystem (`newsroom.evals`), a 30-case
 labeled corpus, deterministic replay, reproducible metrics, and the v1 baseline.

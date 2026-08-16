@@ -342,6 +342,10 @@ class CoreService:
                 )
         finally:
             conn.close()
+        # A direct user vocabulary edit is an explicit scope change. Persist it
+        # for existing topic monitors without making pending AI suggestions active.
+        from .monitoring import MonitorService
+        MonitorService(self.db_path).refresh_topic_scopes(topic_id, change_type="manual")
         return self.get_vocabulary_item(identifier)
 
     def get_vocabulary_item(self, identifier: str) -> dict[str, Any]:
@@ -469,6 +473,9 @@ class CoreService:
                 )
         finally:
             conn.close()
+        if approved:
+            from .monitoring import MonitorService
+            MonitorService(self.db_path).refresh_topic_scopes(row[1], changed_by=reviewed_by, change_type="approved")
         return self.get_scope_suggestion(identifier)
 
     def create_subject(self, data: Mapping[str, Any]) -> dict[str, Any]:
@@ -768,25 +775,36 @@ class CoreService:
                 raise DomainValidation("term must not be empty")
             values["term_normalized"] = normalized_text(values["term"])
         conn = storage.connect(self.db_path)
+        topic_id = None
         try:
             with storage.write_tx(conn):
-                row = conn.execute("SELECT 1 FROM topic_terms WHERE id = ?", (identifier,)).fetchone()
+                row = conn.execute("SELECT topic_id FROM topic_terms WHERE id = ?", (identifier,)).fetchone()
                 if row is None:
                     raise DomainNotFound("vocabulary term not found")
+                topic_id = row[0]
                 self._update(conn, "topic_terms", identifier, values)
         finally:
             conn.close()
+        from .monitoring import MonitorService
+        MonitorService(self.db_path).refresh_topic_scopes(topic_id, change_type="manual")
         return self.get_vocabulary_item(identifier)
 
     def delete_vocabulary(self, identifier: str) -> None:
         conn = storage.connect(self.db_path)
+        topic_id = None
         try:
             with storage.write_tx(conn):
+                row = conn.execute("SELECT topic_id FROM topic_terms WHERE id = ?", (identifier,)).fetchone()
+                if row is None:
+                    raise DomainNotFound("vocabulary term not found")
+                topic_id = row[0]
                 result = conn.execute("DELETE FROM topic_terms WHERE id = ?", (identifier,))
                 if result.rowcount != 1:
                     raise DomainNotFound("vocabulary term not found")
         finally:
             conn.close()
+        from .monitoring import MonitorService
+        MonitorService(self.db_path).refresh_topic_scopes(topic_id, change_type="manual")
 
     def create_story(self, data: Mapping[str, Any]) -> dict[str, Any]:
         identifier = new_id("st")

@@ -29,6 +29,22 @@ suggestions are created under `/topics/{topic_id}/scope-suggestions` and an
 AI-sourced suggestion remains `pending` until an explicit approve or reject
 mutation is made.
 
+Phase 08 also exposes `/topics/{topic_id}/vocabulary-suggestions` for typed
+synonym, acronym, alias, broader, narrower, related-concept, ambiguity, and
+exclusion candidates. `POST /topics/{topic_id}/scope-suggestions/assist` creates
+local pending candidates from supplied context. Approval is the only operation
+that can add an activating term to a topic; rejected candidates remain inert.
+
+`GET/POST /monitoring-policies` and `GET/PATCH /monitoring-policies/{id}` manage
+allowed channels, cadence bounds, backoff/retirement rules, and acquisition,
+local-model, and paid budgets. `GET/POST /monitors`, `GET/PATCH /monitors/{id}`,
+and the `/disable`, `/enable`, `/activity`, and `/scope-history` subroutes manage
+validated Topic, Subject, Story, Source, and Research Question monitors.
+`POST /relevance/evaluate` runs the local exact-term → vocabulary → entity →
+concept → semantic → AI relevance cascade. All monitor mutations remain behind
+session and CSRF protection, and paid routing remains disabled unless the
+existing explicit budget controls allow it.
+
 Stories create immutable seed revision 1. Later generated revisions must use
 the evidence-bound `POST /stories/{story_id}/revisions` contract described
 below. Tags attach through `/stories/{story_id}/tags`.

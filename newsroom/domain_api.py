@@ -18,6 +18,13 @@ from .acquisition import (
 from .domain import CoreService, DomainValidation
 from .evidence import EvidenceService
 from .jobs import BudgetService, JobService, SchedulerService
+from .monitoring import (
+    MonitorService,
+    MonitoringPolicyService,
+    RelevanceCascade,
+    RelevanceScope,
+    ScopeSuggestionService,
+)
 
 
 class StrictModel(BaseModel):
@@ -102,6 +109,79 @@ class ScopeSuggestionCreate(StrictModel):
     value: str = Field(min_length=1, max_length=300)
     rationale: str = Field(default="", max_length=2000)
     source: str = Field(default="ai", pattern="^(ai|user)$")
+
+
+class ScopeSuggestionAssist(StrictModel):
+    text: str = Field(min_length=1, max_length=20_000)
+    limit: int = Field(default=10, ge=1, le=50)
+
+
+class VocabularySuggestionCreate(StrictModel):
+    suggestion_type: str = Field(pattern="^(term|synonym|acronym|alias|broader|narrower|related_concept|ambiguity|exclude)$")
+    value: str = Field(min_length=1, max_length=300)
+    rationale: str = Field(default="", max_length=2000)
+    source: str = Field(default="ai", pattern="^(ai|user)$")
+
+
+class MonitoringPolicyCreate(StrictModel):
+    name: str = Field(min_length=1, max_length=200)
+    allowed_channels: list[str] = Field(default_factory=list, max_length=20)
+    base_cadence_seconds: int = Field(ge=1, le=31_536_000)
+    min_cadence_seconds: int = Field(ge=1, le=31_536_000)
+    max_cadence_seconds: int = Field(ge=1, le=31_536_000)
+    priority: str = Field(default="normal", pattern="^(low|normal|high|urgent)$")
+    query_budget: int = Field(default=0, ge=0)
+    paid_budget_usd: float = Field(default=0.0, ge=0.0)
+    local_model_budget: int = Field(default=0, ge=0)
+    escalation_rules: dict[str, Any] = Field(default_factory=dict)
+    backoff_rules: dict[str, Any] = Field(default_factory=dict)
+    retirement_criteria: dict[str, Any] = Field(default_factory=dict)
+
+
+class MonitoringPolicyPatch(StrictModel):
+    name: Optional[str] = Field(default=None, min_length=1, max_length=200)
+    allowed_channels: Optional[list[str]] = Field(default=None, max_length=20)
+    base_cadence_seconds: Optional[int] = Field(default=None, ge=1, le=31_536_000)
+    min_cadence_seconds: Optional[int] = Field(default=None, ge=1, le=31_536_000)
+    max_cadence_seconds: Optional[int] = Field(default=None, ge=1, le=31_536_000)
+    priority: Optional[str] = Field(default=None, pattern="^(low|normal|high|urgent)$")
+    query_budget: Optional[int] = Field(default=None, ge=0)
+    paid_budget_usd: Optional[float] = Field(default=None, ge=0.0)
+    local_model_budget: Optional[int] = Field(default=None, ge=0)
+    escalation_rules: Optional[dict[str, Any]] = None
+    backoff_rules: Optional[dict[str, Any]] = None
+    retirement_criteria: Optional[dict[str, Any]] = None
+
+
+class MonitorCreate(StrictModel):
+    target_type: str = Field(pattern="^(topic|subject|story|source|research_question)$")
+    target_id: str = Field(min_length=1, max_length=200)
+    policy_id: str = Field(min_length=1, max_length=200)
+    enabled: bool = True
+    next_check_at: Optional[str] = Field(default=None, max_length=64)
+
+
+class MonitorPatch(StrictModel):
+    policy_id: Optional[str] = Field(default=None, min_length=1, max_length=200)
+    enabled: Optional[bool] = None
+    next_check_at: Optional[str] = Field(default=None, max_length=64)
+
+    @model_validator(mode="after")
+    def reject_empty_patch(self):
+        if not self.model_fields_set:
+            raise ValueError("at least one monitor field must be supplied")
+        return self
+
+
+class RelevanceEvaluate(StrictModel):
+    text: str = Field(min_length=1, max_length=100_000)
+    exact_terms: list[str] = Field(default_factory=list, max_length=100)
+    vocabulary: list[str] = Field(default_factory=list, max_length=100)
+    entities: list[str] = Field(default_factory=list, max_length=100)
+    concepts: list[str] = Field(default_factory=list, max_length=100)
+    semantic_terms: list[str] = Field(default_factory=list, max_length=100)
+    exclusions: list[str] = Field(default_factory=list, max_length=100)
+    semantic_threshold: float = Field(default=0.6, ge=0.0, le=1.0)
 
 
 class SubjectCreate(StrictModel):
@@ -406,6 +486,9 @@ def create_domain_router(
     jobs = JobService(service.db_path)
     budgets = BudgetService(service.db_path)
     scheduler = SchedulerService(service.db_path)
+    policies = MonitoringPolicyService(service.db_path)
+    monitors = MonitorService(service.db_path)
+    vocabulary_service = ScopeSuggestionService(service.db_path)
 
     def read_guard(request: Request):
         return require_user(request)
@@ -514,6 +597,39 @@ def create_domain_router(
     async def create_scope_suggestion(request: Request, topic_id: str, payload: ScopeSuggestionCreate):
         write_guard(request)
         return service.create_scope_suggestion(topic_id, payload.model_dump())
+
+    @router.post("/topics/{topic_id}/scope-suggestions/assist", status_code=201)
+    async def assist_scope_suggestions(request: Request, topic_id: str, payload: ScopeSuggestionAssist):
+        write_guard(request)
+        return {"items": vocabulary_service.suggest_from_text(topic_id, payload.text, limit=payload.limit)}
+
+    @router.get("/topics/{topic_id}/vocabulary-suggestions")
+    async def vocabulary_suggestions(request: Request, topic_id: str, page: int = Query(1, ge=1), page_size: int = Query(25, ge=1, le=100)):
+        read_guard(request)
+        return vocabulary_service.list(topic_id, page=page, page_size=page_size)
+
+    @router.post("/topics/{topic_id}/vocabulary-suggestions", status_code=201)
+    async def create_vocabulary_suggestion(request: Request, topic_id: str, payload: VocabularySuggestionCreate):
+        write_guard(request)
+        return vocabulary_service.create(topic_id, payload.model_dump())
+
+    @router.post("/topics/{topic_id}/vocabulary-suggestions/{suggestion_id}/approve")
+    async def approve_vocabulary_suggestion(request: Request, topic_id: str, suggestion_id: str):
+        user = write_guard(request)
+        suggestion = vocabulary_service.get(suggestion_id)
+        if suggestion["topic_id"] != topic_id:
+            from .domain import DomainNotFound
+            raise DomainNotFound("vocabulary suggestion not found")
+        return vocabulary_service.review(suggestion_id, approved=True, reviewed_by=user.user_id)
+
+    @router.post("/topics/{topic_id}/vocabulary-suggestions/{suggestion_id}/reject")
+    async def reject_vocabulary_suggestion(request: Request, topic_id: str, suggestion_id: str):
+        user = write_guard(request)
+        suggestion = vocabulary_service.get(suggestion_id)
+        if suggestion["topic_id"] != topic_id:
+            from .domain import DomainNotFound
+            raise DomainNotFound("vocabulary suggestion not found")
+        return vocabulary_service.review(suggestion_id, approved=False, reviewed_by=user.user_id)
 
     @router.get("/topics/{topic_id}/scope-suggestions")
     async def scope_suggestions(request: Request, topic_id: str, page: int = Query(1, ge=1), page_size: int = Query(25, ge=1, le=100)):
@@ -832,6 +948,72 @@ def create_domain_router(
     async def rerun_job(request: Request, identifier: str):
         write_guard(request)
         return jobs.rerun(identifier)
+
+    @router.get("/monitoring-policies")
+    async def list_monitoring_policies(request: Request, page: int = Query(1, ge=1), page_size: int = Query(25, ge=1, le=100)):
+        read_guard(request)
+        return policies.list(page=page, page_size=page_size)
+
+    @router.post("/monitoring-policies", status_code=201)
+    async def create_monitoring_policy(request: Request, payload: MonitoringPolicyCreate):
+        write_guard(request)
+        return policies.create(payload.model_dump())
+
+    @router.get("/monitoring-policies/{identifier}")
+    async def get_monitoring_policy(request: Request, identifier: str):
+        read_guard(request)
+        return policies.get(identifier)
+
+    @router.patch("/monitoring-policies/{identifier}")
+    async def patch_monitoring_policy(request: Request, identifier: str, payload: MonitoringPolicyPatch):
+        write_guard(request)
+        return policies.update(identifier, _patch_data(payload))
+
+    @router.get("/monitors")
+    async def list_monitors(request: Request, enabled: Optional[bool] = None, target_type: Optional[str] = None, page: int = Query(1, ge=1), page_size: int = Query(25, ge=1, le=100)):
+        read_guard(request)
+        return monitors.list(enabled=enabled, target_type=target_type, page=page, page_size=page_size)
+
+    @router.post("/monitors", status_code=201)
+    async def create_monitor(request: Request, payload: MonitorCreate):
+        write_guard(request)
+        return monitors.create(payload.model_dump(exclude_none=True))
+
+    @router.get("/monitors/{identifier}")
+    async def get_monitor(request: Request, identifier: str):
+        read_guard(request)
+        return monitors.get(identifier)
+
+    @router.patch("/monitors/{identifier}")
+    async def patch_monitor(request: Request, identifier: str, payload: MonitorPatch):
+        write_guard(request)
+        return monitors.update(identifier, _patch_data(payload))
+
+    @router.post("/monitors/{identifier}/disable")
+    async def disable_monitor(request: Request, identifier: str):
+        write_guard(request)
+        return monitors.disable(identifier)
+
+    @router.post("/monitors/{identifier}/enable")
+    async def enable_monitor(request: Request, identifier: str):
+        write_guard(request)
+        return monitors.enable(identifier)
+
+    @router.get("/monitors/{identifier}/activity")
+    async def monitor_activity(request: Request, identifier: str, page: int = Query(1, ge=1), page_size: int = Query(25, ge=1, le=100)):
+        read_guard(request)
+        return monitors.activity(identifier, page=page, page_size=page_size)
+
+    @router.get("/monitors/{identifier}/scope-history")
+    async def monitor_scope_history(request: Request, identifier: str, page: int = Query(1, ge=1), page_size: int = Query(25, ge=1, le=100)):
+        read_guard(request)
+        return monitors.scope_history(identifier, page=page, page_size=page_size)
+
+    @router.post("/relevance/evaluate")
+    async def evaluate_relevance(request: Request, payload: RelevanceEvaluate):
+        read_guard(request)
+        scope = RelevanceScope(**payload.model_dump(exclude={"text"}))
+        return RelevanceCascade().evaluate(payload.text, scope).as_dict()
 
     @router.get("/runs")
     async def list_runs(request: Request, page: int = Query(1, ge=1), page_size: int = Query(25, ge=1, le=200)):

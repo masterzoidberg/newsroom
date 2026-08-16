@@ -38,7 +38,10 @@ The worker is restart-safe and obtains all authoritative work state from SQLite.
 Category, Topic, TopicTerm, Subject, SubjectAlias and relationships.
 
 ### Monitoring
-Monitor, MonitoringPolicy, due scheduling, budgets, retirement/backoff.
+Monitor, MonitoringPolicy, due scheduling, budgets, retirement/backoff, immutable
+activity history, and versioned approved scope snapshots. A monitor target must
+be a live Topic, Subject, Story, Source, or Research Question; disabled or
+unavailable targets are suppressed before queue insertion.
 
 ### Acquisition
 Connectors produce normalized candidate observations/documents. Provider-specific
@@ -78,6 +81,20 @@ leases, retry/backoff, cancellation, idempotency, and terminal Run aggregation;
 `WorkerProcess` executes only an explicitly registered handler map outside the
 queue transaction. Budget limits and active reservations are evaluated during
 claim, while `provider_usage` remains the actual cost ledger.
+
+Phase 08 monitor jobs carry the policy's acquisition, local-model, and USD
+budget only; they cannot silently broaden scope or recursively create work.
+
+### Relevance and scope governance
+
+Topic scope is represented as exact terms, vocabulary, entities, concepts,
+semantic terms, and explicit exclusions. The local cascade checks those layers
+in order, then uses a bounded local classifier only when earlier stages do not
+decide. An exclusion wins over every positive signal. Scope suggestions support
+synonyms, acronyms, aliases, broader/narrower/related concepts, ambiguity, and
+exclusions; pending or rejected suggestions are never included in a monitor
+scope. Approved suggestions and direct vocabulary edits append a new visible
+scope-history version.
 
 ### Review
 Saved/dismissed/not-useful/tags plus last-reviewed revision and material-update
@@ -131,6 +148,9 @@ The first standalone migration should include at least:
 - topic_subjects
 - monitors
 - monitoring_policies
+- monitor_scope_history
+- monitor_activity
+- vocabulary_suggestions
 - jobs
 - job_attempts
 - runs
@@ -183,7 +203,9 @@ UI displays `SAVED` and `NEW UPDATE`; it does not rewrite the review status.
 
 A small scheduler tick queries due Monitors by `next_check_at` and creates jobs.
 The worker claims queued jobs with a lease. Jobs have hard retry/query/model/cost
-budgets. Monitor policy determines next cadence based on result/activity.
+budgets. Monitor policy determines next cadence from recorded activity, bounded
+by the configured minimum and maximum; no-change and error backoff, retirement,
+and relevant-change acceleration are explicit state transitions.
 
 No monitor is allowed to recursively create unbounded work.
 

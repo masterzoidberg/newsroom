@@ -958,7 +958,8 @@ class SchedulerService:
                 due = conn.execute(
                     """
                     SELECT m.*, p.priority AS policy_priority,
-                           p.base_cadence_seconds, p.min_cadence_seconds, p.max_cadence_seconds
+                           p.base_cadence_seconds, p.min_cadence_seconds, p.max_cadence_seconds,
+                           p.query_budget, p.local_model_budget, p.paid_budget_usd
                     FROM monitors AS m
                     JOIN monitoring_policies AS p ON p.id = m.policy_id
                     WHERE m.enabled = 1 AND m.next_check_at IS NOT NULL AND m.next_check_at <= ?
@@ -968,6 +969,31 @@ class SchedulerService:
                     """,
                     (timestamp, limit),
                 ).fetchall()
+                target_tables = {
+                    "topic": "topics",
+                    "subject": "subjects",
+                    "story": "stories",
+                    "source": "sources",
+                    "research_question": "research_questions",
+                }
+                eligible = []
+                for monitor in due:
+                    table = target_tables[monitor["target_type"]]
+                    target = conn.execute(f"SELECT * FROM {table} WHERE id = ?", (monitor["target_id"],)).fetchone()
+                    unavailable = target is None
+                    if target is not None:
+                        columns = set(target.keys())
+                        unavailable = ("deleted_at" in columns and target["deleted_at"] is not None) or (
+                            "enabled" in columns and target["enabled"] == 0
+                        ) or ("status" in columns and target["status"] == "abandoned")
+                    if unavailable:
+                        conn.execute(
+                            "UPDATE monitors SET enabled = 0, next_check_at = NULL, last_result = 'target_unavailable', updated_at = ? WHERE id = ?",
+                            (timestamp, monitor["id"]),
+                        )
+                        continue
+                    eligible.append(monitor)
+                due = eligible
                 conn.execute(
                     """
                     INSERT INTO scheduler_state(id, last_tick_at, updated_at) VALUES (1, ?, ?)
@@ -996,7 +1022,11 @@ class SchedulerService:
                                 "monitor_id": monitor["id"],
                                 "target_type": monitor["target_type"],
                                 "target_id": monitor["target_id"],
-                                "budget": {},
+                                "budget": {
+                                    "acquisition_units": max(0, int(monitor["query_budget"] or 0)),
+                                    "local_model_units": max(0, int(monitor["local_model_budget"] or 0)),
+                                    "usd": max(0.0, float(monitor["paid_budget_usd"] or 0.0)),
+                                },
                             },
                             sort_keys=True,
                             separators=(",", ":"),

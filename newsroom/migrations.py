@@ -703,6 +703,85 @@ MIGRATION_0006_CHECKSUM = hashlib.sha256(
     "\n".join(MIGRATION_0006_STATEMENTS).encode("utf-8")
 ).hexdigest()
 
+MIGRATION_0007_STATEMENTS: tuple[str, ...] = (
+    """
+    CREATE TABLE monitor_scope_history (
+        id TEXT PRIMARY KEY,
+        monitor_id TEXT NOT NULL REFERENCES monitors(id) ON DELETE CASCADE,
+        version INTEGER NOT NULL,
+        scope_json TEXT NOT NULL,
+        change_type TEXT NOT NULL CHECK (change_type IN ('initial', 'approved', 'manual')),
+        changed_by TEXT,
+        created_at TEXT NOT NULL,
+        UNIQUE (monitor_id, version)
+    )
+    """,
+    "CREATE INDEX monitor_scope_history_monitor_idx ON monitor_scope_history(monitor_id, version DESC)",
+    """
+    CREATE TABLE monitor_activity (
+        id TEXT PRIMARY KEY,
+        monitor_id TEXT NOT NULL REFERENCES monitors(id) ON DELETE CASCADE,
+        outcome TEXT NOT NULL CHECK (outcome IN ('no_change', 'relevant_change', 'partial', 'error')),
+        new_items INTEGER NOT NULL DEFAULT 0 CHECK (new_items >= 0),
+        changed_items INTEGER NOT NULL DEFAULT 0 CHECK (changed_items >= 0),
+        relevant_items INTEGER NOT NULL DEFAULT 0 CHECK (relevant_items >= 0),
+        error_code TEXT,
+        observed_at TEXT NOT NULL,
+        created_at TEXT NOT NULL
+    )
+    """,
+    "CREATE INDEX monitor_activity_monitor_idx ON monitor_activity(monitor_id, observed_at DESC, id DESC)",
+    """
+    CREATE TABLE vocabulary_suggestions (
+        id TEXT PRIMARY KEY,
+        topic_id TEXT NOT NULL REFERENCES topics(id) ON DELETE CASCADE,
+        suggestion_type TEXT NOT NULL CHECK (suggestion_type IN ('term', 'synonym', 'acronym', 'alias', 'broader', 'narrower', 'related_concept', 'ambiguity', 'exclude')),
+        value TEXT NOT NULL,
+        value_normalized TEXT NOT NULL,
+        rationale TEXT NOT NULL DEFAULT '',
+        source TEXT NOT NULL CHECK (source IN ('ai', 'user')),
+        status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'approved', 'rejected')),
+        created_at TEXT NOT NULL,
+        reviewed_at TEXT,
+        reviewed_by TEXT,
+        UNIQUE (topic_id, suggestion_type, value_normalized)
+    )
+    """,
+    "CREATE INDEX vocabulary_suggestions_topic_idx ON vocabulary_suggestions(topic_id, status, created_at DESC)",
+    """
+    CREATE TRIGGER monitor_activity_immutable_update
+    BEFORE UPDATE ON monitor_activity
+    BEGIN
+        SELECT RAISE(ABORT, 'monitor activity is immutable');
+    END
+    """,
+    """
+    CREATE TRIGGER monitor_activity_immutable_delete
+    BEFORE DELETE ON monitor_activity
+    BEGIN
+        SELECT RAISE(ABORT, 'monitor activity is immutable');
+    END
+    """,
+    """
+    CREATE TRIGGER monitor_scope_history_immutable_update
+    BEFORE UPDATE ON monitor_scope_history
+    BEGIN
+        SELECT RAISE(ABORT, 'monitor scope history is immutable');
+    END
+    """,
+    """
+    CREATE TRIGGER monitor_scope_history_immutable_delete
+    BEFORE DELETE ON monitor_scope_history
+    BEGIN
+        SELECT RAISE(ABORT, 'monitor scope history is immutable');
+    END
+    """,
+)
+
+MIGRATION_0007_CHECKSUM = hashlib.sha256(
+    "\n".join(MIGRATION_0007_STATEMENTS).encode("utf-8")
+).hexdigest()
+
 
 @dataclass(frozen=True)
 class MigrationResult:
@@ -752,6 +831,7 @@ def apply_migrations(db_path: Optional[str | Path] = None) -> MigrationResult:
                 4: MIGRATION_0004_STATEMENTS,
                 5: MIGRATION_0005_STATEMENTS,
                 6: MIGRATION_0006_STATEMENTS,
+                7: MIGRATION_0007_STATEMENTS,
             }
             for version, statements in migrations.items():
                 if version in existing:
