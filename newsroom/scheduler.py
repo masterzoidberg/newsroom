@@ -5,16 +5,26 @@ import threading
 from pathlib import Path
 
 from .jobs import SchedulerService
+from .research_questions import ResearchQuestionService
 
 
 class SchedulerProcess:
     """Run one persisted scheduler tick at a time."""
 
-    def __init__(self, db_path: str | Path, *, scheduler: SchedulerService | None = None):
+    def __init__(
+        self,
+        db_path: str | Path,
+        *,
+        scheduler: SchedulerService | None = None,
+        research_questions: ResearchQuestionService | None = None,
+    ):
         self.scheduler = scheduler or SchedulerService(db_path)
+        self.research_questions = research_questions or ResearchQuestionService(db_path)
 
     def run_once(self) -> dict:
-        return self.scheduler.tick()
+        result = self.scheduler.tick()
+        result["research_pursuit"] = self.research_questions.pursue_due()
+        return result
 
     def run_forever(self, stop_event: threading.Event, *, interval_seconds: float = 30.0) -> None:
         if interval_seconds <= 0:

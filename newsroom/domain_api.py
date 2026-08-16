@@ -25,6 +25,7 @@ from .monitoring import (
     RelevanceScope,
     ScopeSuggestionService,
 )
+from .research_questions import ResearchQuestionService
 from .story_evolution import StoryCandidate, StoryEvolutionService
 
 
@@ -293,6 +294,79 @@ class ClaimEvidenceCreate(StrictModel):
     relationship: str = Field(pattern="^(supports|contradicts|contextualizes)$")
 
 
+class ResearchQuestionCreate(StrictModel):
+    question: str = Field(min_length=1, max_length=10_000)
+    origin_type: str = Field(default="user", pattern="^(story|claim|subject|user|monitor)$")
+    origin_id: Optional[str] = Field(default=None, max_length=200)
+    priority: str = Field(default="normal", pattern="^(low|normal|high|urgent)$")
+    search_attempt_budget: int = Field(default=0, ge=0, le=1000)
+    query_budget: int = Field(default=0, ge=0, le=100_000)
+    local_model_budget: int = Field(default=0, ge=0, le=100_000)
+    paid_budget_usd: float = Field(default=0.0, ge=0.0, le=1_000_000)
+    next_attempt_at: Optional[str] = Field(default=None, max_length=64)
+
+
+class ResearchQuestionPatch(StrictModel):
+    question: Optional[str] = Field(default=None, min_length=1, max_length=10_000)
+    priority: Optional[str] = Field(default=None, pattern="^(low|normal|high|urgent)$")
+    search_attempt_budget: Optional[int] = Field(default=None, ge=0, le=1000)
+    query_budget: Optional[int] = Field(default=None, ge=0, le=100_000)
+    local_model_budget: Optional[int] = Field(default=None, ge=0, le=100_000)
+    paid_budget_usd: Optional[float] = Field(default=None, ge=0.0, le=1_000_000)
+    next_attempt_at: Optional[str] = Field(default=None, max_length=64)
+
+    @model_validator(mode="after")
+    def reject_empty_patch(self):
+        if not self.model_fields_set:
+            raise ValueError("at least one research question field must be supplied")
+        return self
+
+
+class ResearchQuestionTransition(StrictModel):
+    reason: str = Field(min_length=1, max_length=4_000)
+    claim_ids: list[str] = Field(default_factory=list, max_length=100)
+    evidence_span_ids: list[str] = Field(default_factory=list, max_length=100)
+
+
+class ResearchQuestionClaimLinkCreate(StrictModel):
+    claim_id: str = Field(min_length=1, max_length=200)
+    relationship: str = Field(default="resolves", pattern="^(supports|contradicts|contextualizes|resolves)$")
+
+
+class ResearchQuestionEvidenceLinkCreate(StrictModel):
+    evidence_span_id: str = Field(min_length=1, max_length=200)
+    relationship: str = Field(default="resolves", pattern="^(supports|contradicts|contextualizes|resolves)$")
+
+
+class ResearchQuestionNoteCreate(StrictModel):
+    body: str = Field(min_length=1, max_length=10_000)
+    note_type: str = Field(default="note", pattern="^(note|hypothesis)$")
+
+
+class ResearchQuestionPursuitCreate(StrictModel):
+    mode: str = Field(default="manual", pattern="^(manual|policy)$")
+    query_units: int = Field(default=0, ge=0, le=100_000)
+    local_model_units: int = Field(default=0, ge=0, le=100_000)
+    estimated_cost_usd: float = Field(default=0.0, ge=0.0, le=1_000_000)
+    query: Optional[str] = Field(default=None, max_length=4_000)
+
+
+class ResearchQuestionAttemptWrite(StrictModel):
+    status: str = Field(pattern="^(planned|running|succeeded|partial|failed|cancelled)$")
+    outcome_note: str = Field(default="", max_length=4_000)
+    started_at: Optional[str] = Field(default=None, max_length=64)
+    completed_at: Optional[str] = Field(default=None, max_length=64)
+
+
+class ResearchGapSuggestionReview(StrictModel):
+    status: str = Field(pattern="^(accepted|rejected)$")
+
+
+class ResearchGapSuggestionConvert(StrictModel):
+    priority: str = Field(default="normal", pattern="^(low|normal|high|urgent)$")
+    search_attempt_budget: int = Field(default=0, ge=0, le=1000)
+
+
 class RevisionProposition(StrictModel):
     text: str = Field(min_length=1, max_length=4000)
     claim_ids: list[str] = Field(min_length=1, max_length=100)
@@ -542,6 +616,7 @@ def create_domain_router(
     monitors = MonitorService(service.db_path)
     vocabulary_service = ScopeSuggestionService(service.db_path)
     evolution = StoryEvolutionService(service.db_path)
+    research = ResearchQuestionService(service.db_path)
 
     def read_guard(request: Request):
         return require_user(request)
@@ -879,6 +954,142 @@ def create_domain_router(
     async def evidence_span(request: Request, identifier: str):
         read_guard(request)
         return ledger.get_evidence_span(identifier)
+
+    @router.get("/research-questions")
+    async def research_questions(
+        request: Request,
+        status: Optional[str] = None,
+        priority: Optional[str] = None,
+        origin_type: Optional[str] = None,
+        page: int = Query(1, ge=1),
+        page_size: int = Query(25, ge=1, le=100),
+    ):
+        read_guard(request)
+        return research.list(status=status, priority=priority, origin_type=origin_type, page=page, page_size=page_size)
+
+    @router.post("/research-questions", status_code=201)
+    async def create_research_question(request: Request, payload: ResearchQuestionCreate):
+        user = write_guard(request)
+        return research.create(payload.model_dump(), actor=user.user_id)
+
+    @router.post("/research-questions/pursue-due")
+    async def pursue_due_research_questions(request: Request):
+        write_guard(request)
+        return research.pursue_due()
+
+    @router.get("/research-questions/{identifier}/history")
+    async def research_question_history(request: Request, identifier: str):
+        read_guard(request)
+        return {"items": research.get(identifier)["history"]}
+
+    @router.get("/research-questions/{identifier}/attempts")
+    async def research_question_attempts(request: Request, identifier: str):
+        read_guard(request)
+        return {"items": research.get(identifier)["attempts"]}
+
+    @router.get("/research-questions/{identifier}/notes")
+    async def research_question_notes(request: Request, identifier: str):
+        read_guard(request)
+        return {"items": research.get(identifier)["notes"]}
+
+    @router.get("/research-questions/{identifier}")
+    async def get_research_question(request: Request, identifier: str):
+        read_guard(request)
+        return research.get(identifier)
+
+    @router.patch("/research-questions/{identifier}")
+    async def patch_research_question(request: Request, identifier: str, payload: ResearchQuestionPatch):
+        write_guard(request)
+        return research.update(identifier, _patch_data(payload))
+
+    @router.post("/research-questions/{identifier}/resolve")
+    async def resolve_research_question(request: Request, identifier: str, payload: ResearchQuestionTransition):
+        user = write_guard(request)
+        for claim_id in payload.claim_ids:
+            research.link_claim(identifier, claim_id, "resolves")
+        for evidence_span_id in payload.evidence_span_ids:
+            research.link_evidence(identifier, evidence_span_id, "resolves")
+        return research.resolve(identifier, payload.reason, actor=user.user_id)
+
+    @router.post("/research-questions/{identifier}/abandon")
+    async def abandon_research_question(request: Request, identifier: str, payload: ResearchQuestionTransition):
+        user = write_guard(request)
+        return research.abandon(identifier, payload.reason, actor=user.user_id)
+
+    @router.post("/research-questions/{identifier}/reopen")
+    async def reopen_research_question(request: Request, identifier: str, payload: ResearchQuestionTransition):
+        user = write_guard(request)
+        return research.reopen(identifier, payload.reason, actor=user.user_id)
+
+    @router.post("/research-questions/{identifier}/claims", status_code=201)
+    async def link_research_question_claim(request: Request, identifier: str, payload: ResearchQuestionClaimLinkCreate):
+        write_guard(request)
+        return research.link_claim(identifier, payload.claim_id, payload.relationship)
+
+    @router.post("/research-questions/{identifier}/evidence", status_code=201)
+    async def link_research_question_evidence(request: Request, identifier: str, payload: ResearchQuestionEvidenceLinkCreate):
+        write_guard(request)
+        return research.link_evidence(identifier, payload.evidence_span_id, payload.relationship)
+
+    @router.post("/research-questions/{identifier}/notes", status_code=201)
+    async def add_research_question_note(request: Request, identifier: str, payload: ResearchQuestionNoteCreate):
+        write_guard(request)
+        return research.add_note(identifier, payload.body, note_type=payload.note_type)
+
+    @router.post("/research-questions/{identifier}/pursue", status_code=201)
+    async def pursue_research_question(request: Request, identifier: str, payload: ResearchQuestionPursuitCreate):
+        write_guard(request)
+        return research.pursue(identifier, **payload.model_dump())
+
+    @router.post("/research-question-attempts/{attempt_id}")
+    async def record_research_question_attempt(request: Request, attempt_id: str, payload: ResearchQuestionAttemptWrite):
+        write_guard(request)
+        return research.record_attempt(attempt_id, **payload.model_dump())
+
+    @router.get("/stories/{story_id}/research-gaps")
+    async def story_research_gaps(request: Request, story_id: str):
+        read_guard(request)
+        return {"items": research.detect_gaps(story_id=story_id)}
+
+    @router.get("/claims/{claim_id}/research-gaps")
+    async def claim_research_gaps(request: Request, claim_id: str):
+        read_guard(request)
+        return {"items": research.detect_gaps(claim_id=claim_id)}
+
+    @router.get("/research-gap-suggestions")
+    async def research_gap_suggestions(
+        request: Request,
+        origin_type: Optional[str] = None,
+        origin_id: Optional[str] = None,
+        question_id: Optional[str] = None,
+        status: Optional[str] = None,
+        page: int = Query(1, ge=1),
+        page_size: int = Query(50, ge=1, le=200),
+    ):
+        read_guard(request)
+        return research.list_suggestions(
+            origin_type=origin_type,
+            origin_id=origin_id,
+            question_id=question_id,
+            status=status,
+            page=page,
+            page_size=page_size,
+        )
+
+    @router.post("/research-gap-suggestions/{identifier}/review")
+    async def review_research_gap_suggestion(request: Request, identifier: str, payload: ResearchGapSuggestionReview):
+        user = write_guard(request)
+        return research.review_suggestion(identifier, payload.status, reviewed_by=user.user_id)
+
+    @router.post("/research-gap-suggestions/{identifier}/convert", status_code=201)
+    async def convert_research_gap_suggestion(request: Request, identifier: str, payload: ResearchGapSuggestionConvert):
+        user = write_guard(request)
+        return research.convert_suggestion(
+            identifier,
+            priority=payload.priority,
+            search_attempt_budget=payload.search_attempt_budget,
+            actor=user.user_id,
+        )
 
     @router.get("/stories")
     async def stories(

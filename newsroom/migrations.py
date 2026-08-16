@@ -903,6 +903,159 @@ MIGRATION_0008_CHECKSUM = hashlib.sha256(
 ).hexdigest()
 
 
+MIGRATION_0009_STATEMENTS: tuple[str, ...] = (
+    "ALTER TABLE research_questions ADD COLUMN query_budget INTEGER NOT NULL DEFAULT 0",
+    "ALTER TABLE research_questions ADD COLUMN local_model_budget INTEGER NOT NULL DEFAULT 0",
+    "ALTER TABLE research_questions ADD COLUMN paid_budget_usd REAL NOT NULL DEFAULT 0.0",
+    """
+    CREATE TABLE research_question_history (
+        id TEXT PRIMARY KEY,
+        question_id TEXT NOT NULL REFERENCES research_questions(id) ON DELETE CASCADE,
+        from_status TEXT CHECK (from_status IS NULL OR from_status IN ('open', 'resolved', 'abandoned')),
+        to_status TEXT NOT NULL CHECK (to_status IN ('open', 'resolved', 'abandoned')),
+        reason TEXT NOT NULL DEFAULT '',
+        actor TEXT NOT NULL DEFAULT 'system',
+        created_at TEXT NOT NULL
+    )
+    """,
+    "CREATE INDEX research_question_history_question_idx ON research_question_history(question_id, created_at, id)",
+    """
+    CREATE TABLE research_question_claims (
+        question_id TEXT NOT NULL REFERENCES research_questions(id) ON DELETE CASCADE,
+        claim_id TEXT NOT NULL REFERENCES claims(id) ON DELETE RESTRICT,
+        relationship TEXT NOT NULL CHECK (relationship IN ('supports', 'contradicts', 'contextualizes', 'resolves')),
+        created_at TEXT NOT NULL,
+        PRIMARY KEY (question_id, claim_id, relationship)
+    )
+    """,
+    "CREATE INDEX research_question_claims_claim_idx ON research_question_claims(claim_id, created_at)",
+    """
+    CREATE TABLE research_question_evidence (
+        question_id TEXT NOT NULL REFERENCES research_questions(id) ON DELETE CASCADE,
+        evidence_span_id TEXT NOT NULL REFERENCES evidence_spans(id) ON DELETE RESTRICT,
+        relationship TEXT NOT NULL CHECK (relationship IN ('supports', 'contradicts', 'contextualizes', 'resolves')),
+        created_at TEXT NOT NULL,
+        PRIMARY KEY (question_id, evidence_span_id, relationship)
+    )
+    """,
+    "CREATE INDEX research_question_evidence_span_idx ON research_question_evidence(evidence_span_id, created_at)",
+    """
+    CREATE TABLE research_question_attempts (
+        id TEXT PRIMARY KEY,
+        question_id TEXT NOT NULL REFERENCES research_questions(id) ON DELETE CASCADE,
+        job_id TEXT REFERENCES jobs(id) ON DELETE SET NULL,
+        attempt_no INTEGER NOT NULL CHECK (attempt_no > 0),
+        mode TEXT NOT NULL CHECK (mode IN ('manual', 'policy')),
+        status TEXT NOT NULL DEFAULT 'planned' CHECK (status IN ('planned', 'running', 'succeeded', 'partial', 'failed', 'cancelled')),
+        query_units INTEGER NOT NULL DEFAULT 0 CHECK (query_units >= 0),
+        local_model_units INTEGER NOT NULL DEFAULT 0 CHECK (local_model_units >= 0),
+        estimated_cost_usd REAL NOT NULL DEFAULT 0.0 CHECK (estimated_cost_usd >= 0.0),
+        query TEXT,
+        outcome_note TEXT,
+        started_at TEXT,
+        completed_at TEXT,
+        created_at TEXT NOT NULL,
+        UNIQUE (question_id, attempt_no)
+    )
+    """,
+    "CREATE INDEX research_question_attempts_question_idx ON research_question_attempts(question_id, attempt_no)",
+    """
+    CREATE TABLE research_question_notes (
+        id TEXT PRIMARY KEY,
+        question_id TEXT NOT NULL REFERENCES research_questions(id) ON DELETE CASCADE,
+        note_type TEXT NOT NULL CHECK (note_type IN ('note', 'hypothesis')),
+        body TEXT NOT NULL,
+        created_at TEXT NOT NULL
+    )
+    """,
+    "CREATE INDEX research_question_notes_question_idx ON research_question_notes(question_id, created_at, id)",
+    """
+    CREATE TABLE research_gap_suggestions (
+        id TEXT PRIMARY KEY,
+        question_id TEXT REFERENCES research_questions(id) ON DELETE SET NULL,
+        origin_type TEXT NOT NULL CHECK (origin_type IN ('story', 'claim')),
+        origin_id TEXT NOT NULL,
+        gap_type TEXT NOT NULL CHECK (gap_type IN (
+            'missing_claims', 'pending_claim', 'unsubstantiated_claim',
+            'missing_support', 'contradiction', 'weak_independence',
+            'missing_primary_source'
+        )),
+        suggestion_type TEXT NOT NULL CHECK (suggestion_type IN ('question', 'search', 'source')),
+        suggestion TEXT NOT NULL,
+        rationale TEXT NOT NULL,
+        expected_information_value REAL NOT NULL CHECK (expected_information_value >= 0.0 AND expected_information_value <= 1.0),
+        payload_json TEXT NOT NULL DEFAULT '{}',
+        status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'accepted', 'rejected', 'converted')),
+        created_at TEXT NOT NULL,
+        reviewed_at TEXT,
+        reviewed_by TEXT
+    )
+    """,
+    "CREATE INDEX research_gap_suggestions_origin_idx ON research_gap_suggestions(origin_type, origin_id, status, created_at)",
+    "CREATE INDEX research_gap_suggestions_question_idx ON research_gap_suggestions(question_id, status, created_at)",
+    """
+    CREATE TRIGGER research_question_history_immutable_update
+    BEFORE UPDATE ON research_question_history
+    BEGIN
+        SELECT RAISE(ABORT, 'research question history is append-only');
+    END
+    """,
+    """
+    CREATE TRIGGER research_question_history_immutable_delete
+    BEFORE DELETE ON research_question_history
+    BEGIN
+        SELECT RAISE(ABORT, 'research question history is append-only');
+    END
+    """,
+    """
+    CREATE TRIGGER research_question_claims_immutable_update
+    BEFORE UPDATE ON research_question_claims
+    BEGIN
+        SELECT RAISE(ABORT, 'research question claim links are append-only');
+    END
+    """,
+    """
+    CREATE TRIGGER research_question_claims_immutable_delete
+    BEFORE DELETE ON research_question_claims
+    BEGIN
+        SELECT RAISE(ABORT, 'research question claim links are append-only');
+    END
+    """,
+    """
+    CREATE TRIGGER research_question_evidence_immutable_update
+    BEFORE UPDATE ON research_question_evidence
+    BEGIN
+        SELECT RAISE(ABORT, 'research question evidence links are append-only');
+    END
+    """,
+    """
+    CREATE TRIGGER research_question_evidence_immutable_delete
+    BEFORE DELETE ON research_question_evidence
+    BEGIN
+        SELECT RAISE(ABORT, 'research question evidence links are append-only');
+    END
+    """,
+    """
+    CREATE TRIGGER research_question_notes_immutable_update
+    BEFORE UPDATE ON research_question_notes
+    BEGIN
+        SELECT RAISE(ABORT, 'research question notes are append-only');
+    END
+    """,
+    """
+    CREATE TRIGGER research_question_notes_immutable_delete
+    BEFORE DELETE ON research_question_notes
+    BEGIN
+        SELECT RAISE(ABORT, 'research question notes are append-only');
+    END
+    """,
+)
+
+MIGRATION_0009_CHECKSUM = hashlib.sha256(
+    "\n".join(MIGRATION_0009_STATEMENTS).encode("utf-8")
+).hexdigest()
+
+
 @dataclass(frozen=True)
 class MigrationResult:
     applied_versions: tuple[int, ...]
@@ -953,6 +1106,7 @@ def apply_migrations(db_path: Optional[str | Path] = None) -> MigrationResult:
                 6: MIGRATION_0006_STATEMENTS,
                 7: MIGRATION_0007_STATEMENTS,
                 8: MIGRATION_0008_STATEMENTS,
+                9: MIGRATION_0009_STATEMENTS,
             }
             for version, statements in migrations.items():
                 if version in existing:

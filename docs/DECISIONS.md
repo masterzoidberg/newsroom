@@ -37,6 +37,11 @@ Formal ADR records are under `docs/adr/`.
   prefer a new Story. Lineage groups repeated publications so publication count
   cannot masquerade as independent corroboration, while review attention remains
   independent from saved/dismissed state.
+- **D-013:** Phase 10 keeps Research Questions separate from Claims. Evidence
+  gaps are derived from stored Claim/Evidence/source/lineage state and produce
+  reviewable suggestions; user hypotheses remain notes. Manual and policy pursuit
+  enqueue one durable, idempotent Job at a time and enforce Question-level
+  attempt/query/local-model/cost budgets before dispatch.
 
 Phase 0 established the evaluation subsystem (`newsroom.evals`), a 30-case
 labeled corpus, deterministic replay, reproducible metrics, and the v1 baseline.

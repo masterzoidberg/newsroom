@@ -80,7 +80,12 @@ Review status remains independent from revision attention; a material revision
 sets `review.new_update` without changing saved/dismissed/not-useful state.
 
 ### Research Questions
-Persistent gaps that can generate targeted follow-up jobs.
+Persistent gaps that can generate targeted follow-up jobs. Question status,
+reopen/abandon history, Claim/Evidence links, notes, and bounded attempts are
+stored in SQLite. Gap suggestions are derived from persisted Claim state,
+evidence relationships, source composition, contradiction, and lineage-aware
+independence; they remain suggestions until explicitly reviewed or converted.
+User hypotheses are stored as notes and never enter the Claim Ledger directly.
 
 ### Jobs / Runs
 Durable Job + Attempt records, research Runs, telemetry and provider usage.
@@ -177,6 +182,8 @@ The first standalone migration should include at least:
 - evidence_spans
 - claim_evidence
 - research_questions
+- research_question_history / claims / evidence / attempts / notes
+- research_gap_suggestions
 - tags
 - story_tags
 - feedback_events
@@ -218,6 +225,11 @@ by the configured minimum and maximum; no-change and error backoff, retirement,
 and relevant-change acceleration are explicit state transitions.
 
 No monitor is allowed to recursively create unbounded work.
+
+Due Research Questions use a separate bounded scheduler path: each tick can
+enqueue at most one durable `research_question` Job per due Question, and the
+Question's attempt/query/local-model/cost budgets are checked before insertion.
+There is no recursive enqueue path or open-ended research loop.
 
 ## Direct-source strategy
 

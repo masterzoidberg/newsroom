@@ -155,6 +155,28 @@ events, lineage edges, Story-document links, and revision-document links are
 append-only; corrections are represented by the existing Claim supersession
 chain and immutable Story revisions.
 
+## Research Questions and evidence gaps
+
+Phase 10 adds authenticated Research Question lifecycle and follow-up routes:
+
+- `GET/POST /research-questions` and `GET/PATCH /research-questions/{id}`;
+- `POST /research-questions/{id}/resolve`, `/abandon`, and `/reopen`;
+- `POST /research-questions/{id}/claims`, `/evidence`, `/notes`, and `/pursue`;
+- `POST /research-question-attempts/{attempt_id}` records a bounded attempt
+  outcome;
+- `GET /stories/{story_id}/research-gaps` and
+  `GET /claims/{claim_id}/research-gaps` derive suggestions from stored ledger
+  state;
+- `GET /research-gap-suggestions`, plus explicit review and question conversion
+  routes; and
+- `POST /research-questions/pursue-due` runs the bounded policy path.
+
+Question lifecycle history and Claim/Evidence links are append-only. A Question
+has separate attempt, query, local-model, and paid-cost budgets. Pursuit creates
+one idempotent durable `research_question` Job with `max_attempts=1`; no route
+creates a recursive or open-ended research loop. Notes with `note_type`
+`hypothesis` remain user notes and cannot silently create Claims.
+
 ## Manual run
 
 `POST /runs/manual` accepts a deterministic frozen fixture and transactionally
