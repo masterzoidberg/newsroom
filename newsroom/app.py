@@ -29,6 +29,7 @@ from .auth import (
 from .config import RuntimeConfig
 from .domain import CoreService, DomainError
 from .domain_api import create_domain_router
+from .evidence import EvidenceService
 from .integrity import check_database
 from .migrations import apply_migrations
 
@@ -209,6 +210,7 @@ def create_app(
             raise HTTPException(status_code=403, detail="csrf validation failed")
 
     domain_service = CoreService(runtime.database_path)
+    evidence_service = EvidenceService(runtime.database_path)
 
     @api.post("/auth/setup", status_code=201)
     async def setup(payload: AuthCredentials):
@@ -269,7 +271,12 @@ def create_app(
 
     app.include_router(api)
     app.include_router(
-        create_domain_router(domain_service, require_user, require_csrf),
+        create_domain_router(
+            domain_service,
+            require_user,
+            require_csrf,
+            evidence_service=evidence_service,
+        ),
         prefix="/api/v1",
     )
 

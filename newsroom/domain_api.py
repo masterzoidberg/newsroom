@@ -1,12 +1,13 @@
 """Validated API contracts for the Phase 03 core domain."""
 from __future__ import annotations
 
-from typing import Callable, Optional
+from typing import Any, Callable, Optional
 
 from fastapi import APIRouter, Query, Request, Response
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from .domain import CoreService
+from .evidence import CLAIM_STATES, EvidenceService
 
 
 class StrictModel(BaseModel):
@@ -168,6 +169,74 @@ class DocumentPatch(StrictModel):
         return self
 
 
+class DocumentVersionCreate(StrictModel):
+    retrieved_at: Optional[str] = Field(default=None, max_length=64)
+    content_hash: str = Field(min_length=1, max_length=256)
+    content_kind: str = Field(default="metadata", pattern="^(metadata|excerpt|full_text)$")
+    locator_type: Optional[str] = Field(default=None, max_length=100)
+    locator_value: Optional[str] = Field(default=None, max_length=1000)
+    normalized_json: Optional[dict[str, Any] | list[Any]] = None
+    etag: Optional[str] = Field(default=None, max_length=500)
+    last_modified: Optional[str] = Field(default=None, max_length=100)
+
+
+class EvidenceSpanCreate(StrictModel):
+    excerpt: str = Field(min_length=1, max_length=10000)
+    locator_type: Optional[str] = Field(default=None, max_length=100)
+    locator_value: Optional[str] = Field(default=None, max_length=1000)
+
+
+class ClaimCreate(StrictModel):
+    proposition: str = Field(min_length=1, max_length=4000)
+    importance: str = Field(default="relevant", pattern="^(major|relevant|peripheral)$")
+    supersedes_claim_id: Optional[str] = Field(default=None, max_length=200)
+
+
+class ClaimStateWrite(StrictModel):
+    state: str = Field(pattern="^(pending|supported|partially_supported|disputed|unsubstantiated|superseded)$")
+    reason: str = Field(default="", max_length=2000)
+
+
+class ClaimEvidenceCreate(StrictModel):
+    evidence_span_id: str = Field(min_length=1, max_length=200)
+    relationship: str = Field(pattern="^(supports|contradicts|contextualizes)$")
+
+
+class RevisionProposition(StrictModel):
+    text: str = Field(min_length=1, max_length=4000)
+    claim_ids: list[str] = Field(min_length=1, max_length=100)
+
+
+class ManualClaimEvidence(StrictModel):
+    excerpt: str = Field(min_length=1, max_length=10000)
+    locator_type: Optional[str] = Field(default=None, max_length=100)
+    locator_value: Optional[str] = Field(default=None, max_length=1000)
+    relationship: str = Field(pattern="^(supports|contradicts|contextualizes)$")
+
+
+class ManualClaim(StrictModel):
+    proposition: str = Field(min_length=1, max_length=4000)
+    importance: str = Field(default="relevant", pattern="^(major|relevant|peripheral)$")
+    evidence: list[ManualClaimEvidence] = Field(default_factory=list, max_length=100)
+    state: str = Field(default="pending", pattern="^(pending|supported|partially_supported|disputed|unsubstantiated|superseded)$")
+    accept: bool = False
+    supersedes_claim_id: Optional[str] = Field(default=None, max_length=200)
+
+
+class ManualRevisionProposition(StrictModel):
+    text: str = Field(min_length=1, max_length=4000)
+    claim_indexes: list[int] = Field(min_length=1, max_length=100)
+
+
+class ManualRevision(StrictModel):
+    headline: str = Field(min_length=1, max_length=500)
+    summary: str = Field(default="", max_length=10000)
+    why_it_matters: str = Field(default="", max_length=10000)
+    material_change: bool = False
+    claim_indexes: list[int] = Field(min_length=1, max_length=100)
+    propositions: list[ManualRevisionProposition] = Field(min_length=1, max_length=100)
+
+
 class StoryCreate(StrictModel):
     headline: str = Field(min_length=1, max_length=500)
     summary: str = Field(default="", max_length=10000)
@@ -179,12 +248,39 @@ class StoryCreate(StrictModel):
     subject_ids: list[str] = Field(default_factory=list, max_length=100)
 
 
+class ManualDocument(StrictModel):
+    canonical_url: str = Field(min_length=1, max_length=2048)
+    title: str = Field(min_length=1, max_length=500)
+    published_at: Optional[str] = Field(default=None, max_length=64)
+
+
+class ManualRunCreate(StrictModel):
+    source_id: Optional[str] = Field(default=None, max_length=200)
+    source: Optional[SourceCreate] = None
+    document_id: Optional[str] = Field(default=None, max_length=200)
+    document: Optional[ManualDocument] = None
+    document_version: DocumentVersionCreate
+    story_id: Optional[str] = Field(default=None, max_length=200)
+    story: Optional[StoryCreate] = None
+    claims: list[ManualClaim] = Field(min_length=1, max_length=100)
+    revision: Optional[ManualRevision] = None
+
+    @model_validator(mode="after")
+    def require_new_or_existing_parents(self):
+        if (self.source_id is None) == (self.source is None):
+            raise ValueError("provide exactly one of source_id or source")
+        if (self.document_id is None) == (self.document is None):
+            raise ValueError("provide exactly one of document_id or document")
+        return self
+
+
 class StoryRevisionCreate(StrictModel):
     headline: str = Field(min_length=1, max_length=500)
     summary: str = Field(default="", max_length=10000)
     why_it_matters: str = Field(default="", max_length=10000)
     material_change: bool = False
-    claim_set_hash: Optional[str] = Field(default=None, max_length=128)
+    claim_ids: list[str] = Field(default_factory=list, max_length=100)
+    propositions: list[RevisionProposition] = Field(default_factory=list, max_length=100)
 
 
 class StoryPatch(StrictModel):
@@ -219,8 +315,10 @@ def create_domain_router(
     service: CoreService,
     require_user: Callable,
     require_csrf: Callable,
+    evidence_service: EvidenceService | None = None,
 ) -> APIRouter:
     router = APIRouter()
+    ledger = evidence_service or EvidenceService(service.db_path)
 
     def read_guard(request: Request):
         return require_user(request)
@@ -449,6 +547,46 @@ def create_domain_router(
         write_guard(request)
         return service.update_document(identifier, _patch_data(payload))
 
+    @router.get("/documents/{document_id}/versions")
+    async def document_versions(
+        request: Request,
+        document_id: str,
+        page: int = Query(1, ge=1),
+        page_size: int = Query(25, ge=1, le=100),
+    ):
+        read_guard(request)
+        return ledger.list_document_versions(document_id, page=page, page_size=page_size)
+
+    @router.post("/documents/{document_id}/versions", status_code=201)
+    async def create_document_version(request: Request, document_id: str, payload: DocumentVersionCreate):
+        write_guard(request)
+        return ledger.create_document_version(document_id, payload.model_dump())
+
+    @router.get("/document-versions/{identifier}")
+    async def document_version(request: Request, identifier: str):
+        read_guard(request)
+        return ledger.get_document_version(identifier)
+
+    @router.get("/document-versions/{document_version_id}/evidence-spans")
+    async def evidence_spans(
+        request: Request,
+        document_version_id: str,
+        page: int = Query(1, ge=1),
+        page_size: int = Query(100, ge=1, le=100),
+    ):
+        read_guard(request)
+        return ledger.list_evidence_spans(document_version_id, page=page, page_size=page_size)
+
+    @router.post("/document-versions/{document_version_id}/evidence-spans", status_code=201)
+    async def create_evidence_span(request: Request, document_version_id: str, payload: EvidenceSpanCreate):
+        write_guard(request)
+        return ledger.create_evidence_span(document_version_id, payload.model_dump())
+
+    @router.get("/evidence-spans/{identifier}")
+    async def evidence_span(request: Request, identifier: str):
+        read_guard(request)
+        return ledger.get_evidence_span(identifier)
+
     @router.get("/stories")
     async def stories(
         request: Request,
@@ -466,6 +604,26 @@ def create_domain_router(
         write_guard(request)
         return service.create_story(payload.model_dump())
 
+    @router.get("/stories/{story_id}/claims")
+    async def story_claims(
+        request: Request,
+        story_id: str,
+        page: int = Query(1, ge=1),
+        page_size: int = Query(100, ge=1, le=100),
+    ):
+        read_guard(request)
+        return ledger.list_claims(story_id, page=page, page_size=page_size)
+
+    @router.post("/stories/{story_id}/claims", status_code=201)
+    async def create_claim(request: Request, story_id: str, payload: ClaimCreate):
+        write_guard(request)
+        return ledger.create_claim(story_id, payload.model_dump())
+
+    @router.get("/stories/{story_id}/evidence")
+    async def story_evidence(request: Request, story_id: str):
+        read_guard(request)
+        return ledger.get_story_evidence(story_id)
+
     @router.get("/stories/{identifier}")
     async def story(request: Request, identifier: str, include_deleted: bool = False):
         read_guard(request)
@@ -482,10 +640,45 @@ def create_domain_router(
         service.delete_story(identifier)
         return Response(status_code=204)
 
+    @router.get("/stories/{identifier}/revisions")
+    async def story_revisions(request: Request, identifier: str):
+        read_guard(request)
+        return {"items": ledger.get_story_revisions(identifier)}
+
     @router.post("/stories/{identifier}/revisions", status_code=201)
     async def create_story_revision(request: Request, identifier: str, payload: StoryRevisionCreate):
         write_guard(request)
-        return service.create_story_revision(identifier, payload.model_dump())
+        return ledger.create_story_revision(identifier, payload.model_dump())
+
+    @router.get("/claims/{identifier}")
+    async def claim(request: Request, identifier: str):
+        read_guard(request)
+        return ledger.get_claim(identifier)
+
+    @router.post("/claims/{identifier}/state")
+    async def set_claim_state(request: Request, identifier: str, payload: ClaimStateWrite):
+        write_guard(request)
+        return ledger.set_claim_state(identifier, payload.state, payload.reason)
+
+    @router.post("/claims/{identifier}/accept")
+    async def accept_claim(request: Request, identifier: str):
+        write_guard(request)
+        return ledger.accept_claim(identifier)
+
+    @router.get("/claims/{identifier}/evidence")
+    async def claim_evidence(request: Request, identifier: str):
+        read_guard(request)
+        return {"items": ledger.get_claim(identifier)["evidence"]}
+
+    @router.post("/claims/{identifier}/evidence", status_code=201)
+    async def link_claim_evidence(request: Request, identifier: str, payload: ClaimEvidenceCreate):
+        write_guard(request)
+        return ledger.link_claim_evidence(identifier, payload.model_dump())
+
+    @router.post("/runs/manual", status_code=201)
+    async def manual_run(request: Request, payload: ManualRunCreate):
+        write_guard(request)
+        return ledger.run_manual(payload.model_dump())
 
     @router.post("/stories/{story_id}/tags", status_code=201)
     async def tag_story(request: Request, story_id: str, payload: StoryTagCreate):

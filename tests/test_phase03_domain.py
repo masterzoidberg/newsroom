@@ -198,6 +198,41 @@ def test_subject_sources_documents_story_tags_and_settings(tmp_path):
         headers=headers,
     )
     assert story.status_code == 201
+    version = client.post(
+        f"/api/v1/documents/{document.json()['id']}/versions",
+        json={"content_hash": "phase03-revision", "content_kind": "excerpt"},
+        headers=headers,
+    )
+    assert version.status_code == 201
+    span = client.post(
+        f"/api/v1/document-versions/{version.json()['id']}/evidence-spans",
+        json={"excerpt": "A story was updated."},
+        headers=headers,
+    )
+    assert span.status_code == 201
+    claim = client.post(
+        f"/api/v1/stories/{story.json()['id']}/claims",
+        json={"proposition": "A story was updated", "importance": "major"},
+        headers=headers,
+    )
+    assert claim.status_code == 201
+    linked = client.post(
+        f"/api/v1/claims/{claim.json()['id']}/evidence",
+        json={"evidence_span_id": span.json()["id"], "relationship": "supports"},
+        headers=headers,
+    )
+    assert linked.status_code == 201
+    supported = client.post(
+        f"/api/v1/claims/{claim.json()['id']}/state",
+        json={"state": "supported"},
+        headers=headers,
+    )
+    assert supported.status_code == 200
+    accepted = client.post(
+        f"/api/v1/claims/{claim.json()['id']}/accept",
+        headers=headers,
+    )
+    assert accepted.status_code == 200
     tag = client.post("/api/v1/tags", json={"name": "Important"}, headers=headers)
     assert tag.status_code == 201
     tagged = client.post(
@@ -221,7 +256,14 @@ def test_subject_sources_documents_story_tags_and_settings(tmp_path):
     assert secret.status_code == 422
     revision = client.post(
         f"/api/v1/stories/{story.json()['id']}/revisions",
-        json={"headline": "An updated story", "material_change": True},
+        json={
+            "headline": "An updated story",
+            "material_change": True,
+            "claim_ids": [claim.json()["id"]],
+            "propositions": [
+                {"text": "A story was updated", "claim_ids": [claim.json()["id"]]}
+            ],
+        },
         headers=headers,
     )
     assert revision.status_code == 201

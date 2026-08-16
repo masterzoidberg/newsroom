@@ -447,6 +447,123 @@ MIGRATION_0002_CHECKSUM = hashlib.sha256(
     "\n".join(MIGRATION_0002_STATEMENTS).encode("utf-8")
 ).hexdigest()
 
+MIGRATION_0003_STATEMENTS: tuple[str, ...] = (
+    """
+    CREATE TABLE story_revision_claims (
+        revision_id TEXT NOT NULL REFERENCES story_revisions(id) ON DELETE CASCADE,
+        claim_id TEXT NOT NULL REFERENCES claims(id) ON DELETE RESTRICT,
+        position INTEGER NOT NULL CHECK (position >= 0),
+        PRIMARY KEY (revision_id, claim_id),
+        UNIQUE (revision_id, position)
+    )
+    """,
+    "CREATE INDEX story_revision_claims_claim_idx ON story_revision_claims(claim_id)",
+    """
+    CREATE TRIGGER document_versions_immutable_update
+    BEFORE UPDATE ON document_versions
+    BEGIN
+        SELECT RAISE(ABORT, 'document versions are immutable');
+    END
+    """,
+    """
+    CREATE TRIGGER document_versions_immutable_delete
+    BEFORE DELETE ON document_versions
+    BEGIN
+        SELECT RAISE(ABORT, 'document versions are immutable');
+    END
+    """,
+    """
+    CREATE TRIGGER evidence_spans_immutable_update
+    BEFORE UPDATE ON evidence_spans
+    BEGIN
+        SELECT RAISE(ABORT, 'evidence spans are immutable');
+    END
+    """,
+    """
+    CREATE TRIGGER evidence_spans_immutable_delete
+    BEFORE DELETE ON evidence_spans
+    BEGIN
+        SELECT RAISE(ABORT, 'evidence spans are immutable');
+    END
+    """,
+    """
+    CREATE TRIGGER claims_accepted_text_immutable
+    BEFORE UPDATE OF proposition, proposition_hash ON claims
+    WHEN OLD.accepted_at IS NOT NULL
+         AND (NEW.proposition IS NOT OLD.proposition OR NEW.proposition_hash IS NOT OLD.proposition_hash)
+    BEGIN
+        SELECT RAISE(ABORT, 'accepted claim text is immutable');
+    END
+    """,
+    """
+    CREATE TRIGGER claims_immutable_delete
+    BEFORE DELETE ON claims
+    BEGIN
+        SELECT RAISE(ABORT, 'claims are append-only');
+    END
+    """,
+    """
+    CREATE TRIGGER claim_state_history_immutable_update
+    BEFORE UPDATE ON claim_state_history
+    BEGIN
+        SELECT RAISE(ABORT, 'claim state history is append-only');
+    END
+    """,
+    """
+    CREATE TRIGGER claim_state_history_immutable_delete
+    BEFORE DELETE ON claim_state_history
+    BEGIN
+        SELECT RAISE(ABORT, 'claim state history is append-only');
+    END
+    """,
+    """
+    CREATE TRIGGER claim_evidence_immutable_update
+    BEFORE UPDATE ON claim_evidence
+    BEGIN
+        SELECT RAISE(ABORT, 'claim evidence links are append-only');
+    END
+    """,
+    """
+    CREATE TRIGGER claim_evidence_immutable_delete
+    BEFORE DELETE ON claim_evidence
+    BEGIN
+        SELECT RAISE(ABORT, 'claim evidence links are append-only');
+    END
+    """,
+    """
+    CREATE TRIGGER story_revisions_immutable_update
+    BEFORE UPDATE ON story_revisions
+    BEGIN
+        SELECT RAISE(ABORT, 'story revisions are immutable');
+    END
+    """,
+    """
+    CREATE TRIGGER story_revisions_immutable_delete
+    BEFORE DELETE ON story_revisions
+    BEGIN
+        SELECT RAISE(ABORT, 'story revisions are immutable');
+    END
+    """,
+    """
+    CREATE TRIGGER story_revision_claims_immutable_update
+    BEFORE UPDATE ON story_revision_claims
+    BEGIN
+        SELECT RAISE(ABORT, 'story revision claim sets are immutable');
+    END
+    """,
+    """
+    CREATE TRIGGER story_revision_claims_immutable_delete
+    BEFORE DELETE ON story_revision_claims
+    BEGIN
+        SELECT RAISE(ABORT, 'story revision claim sets are immutable');
+    END
+    """,
+)
+
+MIGRATION_0003_CHECKSUM = hashlib.sha256(
+    "\n".join(MIGRATION_0003_STATEMENTS).encode("utf-8")
+).hexdigest()
+
 
 @dataclass(frozen=True)
 class MigrationResult:
@@ -492,6 +609,7 @@ def apply_migrations(db_path: Optional[str | Path] = None) -> MigrationResult:
             migrations = {
                 1: MIGRATION_0001_STATEMENTS,
                 2: MIGRATION_0002_STATEMENTS,
+                3: MIGRATION_0003_STATEMENTS,
             }
             for version, statements in migrations.items():
                 if version in existing:
