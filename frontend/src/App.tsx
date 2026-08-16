@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { EvidenceView } from "./components/EvidenceView";
 
 type ServiceState = "checking" | "online" | "offline";
 
@@ -37,25 +38,23 @@ export default function App() {
         <p className="eyebrow">Evidence-first intelligence</p>
         <h1 id="welcome-heading">A clearer view of what is changing.</h1>
         <p className="hero-copy">
-          Your monitoring workspace is ready for the first research vertical slice.
-          Stories, sources, and evidence will gather here as the system comes online.
+          Newsroom keeps every substantive proposition attached to a Claim, an exact
+          excerpt, and the versioned document that contained it.
         </p>
-        <div className="hero-actions">
-          <button type="button" disabled>Open workspace</button>
-          <span className="quiet-note">Foundation shell · Phase 02</span>
-        </div>
       </section>
+
+      <EvidenceView />
 
       <section className="foundation-grid" aria-label="Foundation status">
         <article className="status-card">
           <p className="card-label">Storage</p>
-          <h2>SQLite foundation</h2>
+          <h3>SQLite foundation</h3>
           <p>WAL mode, migrations, integrity checks, and online recovery primitives are in place.</p>
         </article>
         <article className="status-card accent-card">
           <p className="card-label">Next layer</p>
-          <h2>Evidence workflow</h2>
-          <p>The next phase will connect monitored targets to retrieved documents and reviewable claims.</p>
+          <h3>Manual research slice</h3>
+          <p>Frozen fixtures can now travel through provenance, state review, contradiction, and closed-world revision audit.</p>
         </article>
       </section>
     </main>
