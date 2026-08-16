@@ -7,7 +7,7 @@ from fastapi import APIRouter, Query, Request, Response
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from .domain import CoreService
-from .evidence import CLAIM_STATES, EvidenceService
+from .evidence import EvidenceService
 
 
 class StrictModel(BaseModel):
