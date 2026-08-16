@@ -22,6 +22,10 @@ Formal ADR records are under `docs/adr/`.
   Profiles, and explicitly reviewed suggestions; it does not crawl openly,
   execute browser JavaScript, store article bodies by default, or assign a
   universal trust score. See ADR-004.
+- **D-010:** Phase 07 keeps durable Jobs, Attempts, Runs, scheduler state, and
+  budget reservations in SQLite. Claims are lease-based and transactional;
+  retries, cancellation, idempotency, and budget exhaustion are explicit state
+  transitions. Paid dispatch remains disabled by default. See ADR-005.
 
 Phase 0 established the evaluation subsystem (`newsroom.evals`), a 30-case
 labeled corpus, deterministic replay, reproducible metrics, and the v1 baseline.

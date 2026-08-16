@@ -658,6 +658,51 @@ MIGRATION_0005_CHECKSUM = hashlib.sha256(
     "\n".join(MIGRATION_0005_STATEMENTS).encode("utf-8")
 ).hexdigest()
 
+MIGRATION_0006_STATEMENTS: tuple[str, ...] = (
+    "ALTER TABLE jobs ADD COLUMN run_id TEXT REFERENCES runs(id)",
+    "ALTER TABLE jobs ADD COLUMN cancel_requested_at TEXT",
+    "CREATE INDEX jobs_run_idx ON jobs(run_id, created_at DESC)",
+    """
+    CREATE TABLE budget_limits (
+        id TEXT PRIMARY KEY,
+        scope_type TEXT NOT NULL CHECK (scope_type IN ('global', 'policy', 'job', 'research_question')),
+        scope_id TEXT NOT NULL DEFAULT '',
+        period TEXT NOT NULL CHECK (period IN ('daily', 'monthly', 'lifetime')),
+        cap_type TEXT NOT NULL CHECK (cap_type IN ('acquisition_units', 'local_model_units', 'paid_requests', 'usd')),
+        cap_value REAL NOT NULL CHECK (cap_value >= 0),
+        enabled INTEGER NOT NULL DEFAULT 1 CHECK (enabled IN (0, 1)),
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        UNIQUE (scope_type, scope_id, period, cap_type)
+    )
+    """,
+    """
+    CREATE TABLE budget_reservations (
+        id TEXT PRIMARY KEY,
+        job_id TEXT NOT NULL UNIQUE REFERENCES jobs(id) ON DELETE CASCADE,
+        acquisition_units INTEGER NOT NULL DEFAULT 0 CHECK (acquisition_units >= 0),
+        local_model_units INTEGER NOT NULL DEFAULT 0 CHECK (local_model_units >= 0),
+        paid_requests INTEGER NOT NULL DEFAULT 0 CHECK (paid_requests >= 0),
+        estimated_cost_usd REAL NOT NULL DEFAULT 0.0 CHECK (estimated_cost_usd >= 0),
+        status TEXT NOT NULL CHECK (status IN ('reserved', 'released')),
+        reserved_at TEXT NOT NULL,
+        released_at TEXT
+    )
+    """,
+    "CREATE INDEX budget_reservations_status_idx ON budget_reservations(status, reserved_at)",
+    """
+    CREATE TABLE scheduler_state (
+        id INTEGER PRIMARY KEY CHECK (id = 1),
+        last_tick_at TEXT,
+        updated_at TEXT NOT NULL
+    )
+    """,
+)
+
+MIGRATION_0006_CHECKSUM = hashlib.sha256(
+    "\n".join(MIGRATION_0006_STATEMENTS).encode("utf-8")
+).hexdigest()
+
 
 @dataclass(frozen=True)
 class MigrationResult:
@@ -706,6 +751,7 @@ def apply_migrations(db_path: Optional[str | Path] = None) -> MigrationResult:
                 3: MIGRATION_0003_STATEMENTS,
                 4: MIGRATION_0004_STATEMENTS,
                 5: MIGRATION_0005_STATEMENTS,
+                6: MIGRATION_0006_STATEMENTS,
             }
             for version, statements in migrations.items():
                 if version in existing:

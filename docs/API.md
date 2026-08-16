@@ -81,6 +81,34 @@ DocumentVersion; a changed response creates a new immutable version, while an
 unchanged body records only an `unchanged` acquisition event. The acquisition
 layer stores bounded metadata and hashes, not the retrieved article body.
 
+## Durable jobs, runs, and budgets
+
+Phase 07 exposes the SQLite-backed queue and operator controls. Protected
+mutations require the normal session and CSRF header:
+
+- `GET/POST /jobs` lists or enqueues bounded Jobs. Payloads may include a
+  `budget` object with `acquisition_units`, `local_model_units`,
+  `paid_requests`, and `usd` estimates. An `idempotency_key` deduplicates
+  repeated enqueue requests.
+- `GET /jobs/{job_id}` returns lease state, attempt history, failure cause, and
+  reservation state.
+- `POST /jobs/{job_id}/cancel` requests cooperative cancellation or cancels a
+  queued Job immediately.
+- `POST /jobs/{job_id}/rerun` creates a fresh queued Job from terminal work.
+- `GET /runs` and `GET /runs/{run_id}` return human-visible Run status and child
+  Job outcomes.
+- `POST /scheduler/tick` performs one persisted due-Monitor tick; the separate
+  scheduler process uses the same service outside HTTP.
+- `GET /provider-usage` returns attributable usage, optionally filtered by
+  Job.
+- `GET /budgets/limits`, `PUT /budgets/limits`, and
+  `PUT /budgets/paid-enabled` expose caps and the explicit global paid-route
+  switch. Paid routing is disabled by default.
+
+Workers claim Jobs transactionally with leases; expired claims are recovered
+with bounded backoff. Budget reservations are checked before dispatch, and
+actual usage remains in `provider_usage` after a reservation is released.
+
 Generated revisions require `claim_ids` and structured `propositions`, each
 with one or more cited Claim IDs. The server checks that every cited Claim is
 accepted, belongs to the Story, and is part of the revision Claim set. It then

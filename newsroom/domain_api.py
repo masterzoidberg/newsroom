@@ -17,6 +17,7 @@ from .acquisition import (
 )
 from .domain import CoreService, DomainValidation
 from .evidence import EvidenceService
+from .jobs import BudgetService, JobService, SchedulerService
 
 
 class StrictModel(BaseModel):
@@ -330,6 +331,30 @@ class SourceSuggestionReview(StrictModel):
     status: str = Field(pattern="^(approved|rejected)$")
 
 
+class JobCreate(StrictModel):
+    job_type: str = Field(min_length=1, max_length=120)
+    payload: dict[str, Any] = Field(default_factory=dict)
+    idempotency_key: Optional[str] = Field(default=None, max_length=300)
+    monitor_id: Optional[str] = Field(default=None, max_length=200)
+    research_question_id: Optional[str] = Field(default=None, max_length=200)
+    priority: int = Field(default=0, ge=-1000, le=1000)
+    max_attempts: int = Field(default=3, ge=1, le=10)
+    run_id: Optional[str] = Field(default=None, max_length=200)
+
+
+class BudgetLimitWrite(StrictModel):
+    scope_type: str = Field(pattern="^(global|policy|job|research_question)$")
+    scope_id: Optional[str] = Field(default=None, max_length=200)
+    period: str = Field(pattern="^(daily|monthly|lifetime)$")
+    cap_type: str = Field(pattern="^(acquisition_units|local_model_units|paid_requests|usd)$")
+    cap_value: float = Field(ge=0)
+    enabled: bool = True
+
+
+class PaidEnabledWrite(StrictModel):
+    enabled: bool
+
+
 class StoryRevisionCreate(StrictModel):
     headline: str = Field(min_length=1, max_length=500)
     summary: str = Field(default="", max_length=10000)
@@ -378,6 +403,9 @@ def create_domain_router(
     acquisition = AcquisitionService(service.db_path)
     profiles = SourceProfileService(service.db_path)
     suggestions = SourceSuggestionService(service.db_path)
+    jobs = JobService(service.db_path)
+    budgets = BudgetService(service.db_path)
+    scheduler = SchedulerService(service.db_path)
 
     def read_guard(request: Request):
         return require_user(request)
@@ -774,6 +802,76 @@ def create_domain_router(
     async def review_source_suggestion(request: Request, identifier: str, payload: SourceSuggestionReview):
         user = write_guard(request)
         return suggestions.review(identifier, payload.status, user.user_id)
+
+    @router.get("/jobs")
+    async def list_jobs(
+        request: Request,
+        status: Optional[str] = None,
+        page: int = Query(1, ge=1),
+        page_size: int = Query(25, ge=1, le=200),
+    ):
+        read_guard(request)
+        return jobs.list(status=status, page=page, page_size=page_size)
+
+    @router.post("/jobs", status_code=201)
+    async def create_job(request: Request, payload: JobCreate):
+        write_guard(request)
+        return jobs.enqueue(**payload.model_dump(exclude_none=True))
+
+    @router.get("/jobs/{identifier}")
+    async def get_job(request: Request, identifier: str):
+        read_guard(request)
+        return jobs.get(identifier)
+
+    @router.post("/jobs/{identifier}/cancel")
+    async def cancel_job(request: Request, identifier: str):
+        write_guard(request)
+        return jobs.cancel(identifier)
+
+    @router.post("/jobs/{identifier}/rerun", status_code=201)
+    async def rerun_job(request: Request, identifier: str):
+        write_guard(request)
+        return jobs.rerun(identifier)
+
+    @router.get("/runs")
+    async def list_runs(request: Request, page: int = Query(1, ge=1), page_size: int = Query(25, ge=1, le=200)):
+        read_guard(request)
+        return jobs.list_runs(page=page, page_size=page_size)
+
+    @router.get("/runs/{identifier}")
+    async def get_run(request: Request, identifier: str):
+        read_guard(request)
+        return jobs.get_run(identifier)
+
+    @router.get("/provider-usage")
+    async def provider_usage(
+        request: Request,
+        job_id: Optional[str] = None,
+        page: int = Query(1, ge=1),
+        page_size: int = Query(50, ge=1, le=200),
+    ):
+        read_guard(request)
+        return budgets.list_usage(job_id=job_id, page=page, page_size=page_size)
+
+    @router.get("/budgets/limits")
+    async def list_budget_limits(request: Request):
+        read_guard(request)
+        return {"items": budgets.list_limits(), "paid_enabled": budgets.paid_enabled()}
+
+    @router.put("/budgets/limits")
+    async def configure_budget_limit(request: Request, payload: BudgetLimitWrite):
+        write_guard(request)
+        return budgets.configure_limit(**payload.model_dump())
+
+    @router.put("/budgets/paid-enabled")
+    async def set_paid_enabled(request: Request, payload: PaidEnabledWrite):
+        write_guard(request)
+        return budgets.set_paid_enabled(payload.enabled)
+
+    @router.post("/scheduler/tick")
+    async def scheduler_tick(request: Request):
+        write_guard(request)
+        return scheduler.tick()
 
     @router.post("/runs/ai", status_code=201)
     async def ai_run(request: Request, payload: AIRunCreate):

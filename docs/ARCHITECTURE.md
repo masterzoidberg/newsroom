@@ -72,6 +72,13 @@ Persistent gaps that can generate targeted follow-up jobs.
 ### Jobs / Runs
 Durable Job + Attempt records, research Runs, telemetry and provider usage.
 
+Phase 07 uses SQLite as the initial queue. `JobService` owns atomic claims,
+leases, retry/backoff, cancellation, idempotency, and terminal Run aggregation;
+`SchedulerService` advances persisted Monitor schedules and enqueues due work.
+`WorkerProcess` executes only an explicitly registered handler map outside the
+queue transaction. Budget limits and active reservations are evaluated during
+claim, while `provider_usage` remains the actual cost ledger.
+
 ### Review
 Saved/dismissed/not-useful/tags plus last-reviewed revision and material-update
 attention state.

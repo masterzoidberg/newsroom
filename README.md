@@ -11,8 +11,8 @@ reference implementation. **Hermes is not a runtime dependency.**
 
 The standalone deterministic core, evaluation foundation, evidence-ledger
 vertical slice, Phase 05 local-first AI routing, and Phase 06 bounded source
-discovery/acquisition are implemented. Hosted providers remain optional and
-disabled by default; durable scheduling is deferred to Phase 07.
+discovery/acquisition, and Phase 07 durable jobs/scheduling are implemented.
+Hosted providers remain optional and disabled by default.
 
 ## Authority
 
