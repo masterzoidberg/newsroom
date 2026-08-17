@@ -78,11 +78,22 @@ Reviewed range:
 ## Verification
 
 - `npm.cmd run build` from `frontend` — pass;
+- `npm.cmd run typecheck` from `frontend` — pass;
+- `npm.cmd audit --audit-level=high` from `frontend` — 0 vulnerabilities;
 - `python -m pytest tests/test_phase12_frontend.py -q` — pass;
+- `python -m pytest --tb=no` — 267 passed, 28 existing HTTPX deprecation
+  warnings;
+- `python -m compileall -q newsroom` — pass;
+- `python -m newsroom.evals validate` — corpus valid, 30 cases;
 - `scripts/phase12_browser_smoke.py` through `with_server.py` — pass;
+- same-origin production probe for `/`, `/manifest.webmanifest`, and
+  `/api/v1/health` — pass;
 - desktop and phone screenshots — captured and visually inspected;
-- full backend tests, compile/evaluation checks, and the available frontend
-  check fallbacks are recorded in the completion record below.
+- `git diff --check` — pass;
+- `pnpm format`, `pnpm lint`, and `pnpm types` were attempted per the frontend
+  check procedure but are unavailable because `frontend/package.json` defines
+  only `build`, `typecheck`, and `dev`; direct typecheck/build/audit checks
+  above pass.
 
-Accepted implementation and review checkpoints are recorded in
-`plan/phases/PHASE_12_PRODUCT_UI_AND_PWA.md` after the final verification run.
+Accepted implementation checkpoint:
+`e6b7115f8c1eb97988decfc9e95b1839bb313d4a`.

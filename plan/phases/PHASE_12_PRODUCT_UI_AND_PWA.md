@@ -34,7 +34,8 @@ All mutations use the canonical API and require confirmation when destructive.
 
 Completed 2026-08-16.
 
-- Implementation checkpoint: recorded after the Phase 12 UI/PWA commit.
+- Implementation checkpoint: `e6b7115f8c1eb97988decfc9e95b1839bb313d4a`
+  (`Complete Phase 12 product UI and PWA`).
 - Added the authenticated responsive React shell with Inbox, Story/Evidence,
   Documents, Saved, History, Reports, Alerts, Topics, Subjects, Sources,
   Monitors, Research Questions, Runs/Jobs, and Settings/Cost views.
@@ -52,6 +53,12 @@ Completed 2026-08-16.
 - Added `tests/test_phase12_frontend.py`, `scripts/phase12_server.py`, and
   `scripts/phase12_browser_smoke.py` for production build, PWA contract,
   authenticated navigation, responsive, offline, and console-error coverage.
-- Verification: frontend build and focused frontend test pass; browser smoke
-  pass with desktop/phone screenshots; full backend checks and final review
-  are recorded in `docs/reviews/PHASE_12_REVIEW.md`.
+- Verification: `npm.cmd run typecheck`, `npm.cmd run build`, focused frontend
+  contract test, `npm.cmd audit --audit-level=high` (0 vulnerabilities),
+  authenticated browser smoke with desktop/phone screenshots, same-origin
+  production probe, `python -m pytest --tb=no` (267 passed, 28 existing HTTPX
+  deprecation warnings), `python -m compileall -q newsroom`,
+  `python -m newsroom.evals validate` (30 cases), and `git diff --check` pass.
+  The frontend `pnpm format`, `pnpm lint`, and `pnpm types` scripts are not
+  defined in this package; direct checks pass. Review: approved in
+  `docs/reviews/PHASE_12_REVIEW.md`.
