@@ -18,7 +18,10 @@ resurfacing are implemented. Phase 10 Research Questions, evidence-gap
 suggestions, and bounded follow-up Jobs are implemented. Phase 11
 evidence-bound Living Reports, timezone-aware Monitor briefings, durable alert
 rules, acknowledgement, deduplication, and optional browser delivery state are
-implemented.
+implemented. Phase 12 adds the responsive authenticated product workspace,
+evidence/provenance inspection views, operator/admin surfaces, accessible
+keyboard navigation, and an installable same-origin PWA shell with offline
+fallback behavior.
 Hosted providers remain optional and disabled by default.
 
 ## Authority

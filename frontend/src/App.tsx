@@ -1,62 +1,63 @@
 import { useEffect, useState } from "react";
-import { EvidenceView } from "./components/EvidenceView";
+import { apiFetch } from "./lib/api";
+import type { ServiceState, ViewKey } from "./lib/types";
+import { AppShell } from "./components/AppShell";
+import { AuthView } from "./components/AuthView";
+import { PwaStatus } from "./components/PwaStatus";
+import { LoadingState } from "./components/ViewPrimitives";
+import { AlertsView } from "./views/AlertsView";
+import { CollectionView, MonitorsView, QuestionsView, RunsView, SettingsView } from "./views/AdminViews";
+import { DocumentView } from "./views/DocumentView";
+import { InboxView } from "./views/InboxView";
+import { ReportsView } from "./views/ReportsView";
+import { StoryEvidenceView } from "./views/StoryEvidenceView";
+import { HistoryView, SavedView } from "./views/ReviewViews";
 
-type ServiceState = "checking" | "online" | "offline";
+function initialView(): ViewKey {
+  const value = window.location.hash.replace(/^#/, "") as ViewKey;
+  return ["inbox", "stories", "documents", "reports", "saved", "history", "topics", "subjects", "sources", "monitors", "questions", "runs", "alerts", "settings"].includes(value) ? value : "inbox";
+}
 
 export default function App() {
+  const [view, setViewState] = useState<ViewKey>(initialView);
   const [serviceState, setServiceState] = useState<ServiceState>("checking");
+  const [username, setUsername] = useState<string | null>(null);
+  const [authReady, setAuthReady] = useState(false);
+  const [online, setOnline] = useState(navigator.onLine);
 
   useEffect(() => {
-    let active = true;
-    fetch("/api/v1/health")
-      .then((response) => {
-        if (!response.ok) throw new Error("health check failed");
-        if (active) setServiceState("online");
-      })
-      .catch(() => {
-        if (active) setServiceState("offline");
-      });
-    return () => {
-      active = false;
-    };
+    const onHash = () => setViewState(initialView());
+    const onOnline = () => setOnline(true);
+    const onOffline = () => setOnline(false);
+    window.addEventListener("hashchange", onHash); window.addEventListener("online", onOnline); window.addEventListener("offline", onOffline);
+    return () => { window.removeEventListener("hashchange", onHash); window.removeEventListener("online", onOnline); window.removeEventListener("offline", onOffline); };
   }, []);
+  useEffect(() => { apiFetch<{ username: string }>("/auth/me").then((user) => setUsername(user.username)).catch(() => setUsername(null)).finally(() => setAuthReady(true)); }, []);
+  useEffect(() => { apiFetch<{ status: string }>("/health").then(() => setServiceState("online")).catch(() => setServiceState("offline")); }, [online]);
 
-  return (
-    <main className="app-shell">
-      <nav className="topbar" aria-label="Primary navigation">
-        <div className="brand-mark">
-          <span className="brand-dot" aria-hidden="true" />
-          <span>Newsroom</span>
-        </div>
-        <span className={`service-pill ${serviceState}`}>
-          <span className="status-dot" aria-hidden="true" />
-          {serviceState === "checking" ? "Checking service" : serviceState === "online" ? "Service online" : "Service offline"}
-        </span>
-      </nav>
+  function setView(next: ViewKey) { window.location.hash = next; setViewState(next); }
+  async function logout() { try { await apiFetch("/auth/logout", { method: "POST" }); } finally { setUsername(null); setAuthReady(true); } }
 
-      <section className="hero" aria-labelledby="welcome-heading">
-        <p className="eyebrow">Evidence-first intelligence</p>
-        <h1 id="welcome-heading">A clearer view of what is changing.</h1>
-        <p className="hero-copy">
-          Newsroom keeps every substantive proposition attached to a Claim, an exact
-          excerpt, and the versioned document that contained it.
-        </p>
-      </section>
+  if (!authReady) return <main className="auth-page"><LoadingState label="Opening Newsroom" /></main>;
+  if (!username) return <AuthView onAuthenticated={setUsername} />;
+  return <AppShell view={view} serviceState={serviceState} username={username} onLogout={() => void logout()}><div className="utility-row"><span className={online ? "online-label" : "offline-label"}>{online ? "Live connection" : "Offline · cached shell only"}</span><PwaStatus /></div>{renderView(view, setView)}</AppShell>;
+}
 
-      <EvidenceView />
-
-      <section className="foundation-grid" aria-label="Foundation status">
-        <article className="status-card">
-          <p className="card-label">Storage</p>
-          <h3>SQLite foundation</h3>
-          <p>WAL mode, migrations, integrity checks, and online recovery primitives are in place.</p>
-        </article>
-        <article className="status-card accent-card">
-          <p className="card-label">Next layer</p>
-          <h3>Manual research slice</h3>
-          <p>Frozen fixtures can now travel through provenance, state review, contradiction, and closed-world revision audit.</p>
-        </article>
-      </section>
-    </main>
-  );
+function renderView(view: ViewKey, setView: (view: ViewKey) => void) {
+  switch (view) {
+    case "inbox": return <InboxView openView={setView} />;
+    case "stories": return <StoryEvidenceView />;
+    case "documents": return <DocumentView />;
+    case "reports": return <ReportsView />;
+    case "alerts": return <AlertsView />;
+    case "topics": return <CollectionView kind="topics" />;
+    case "subjects": return <CollectionView kind="subjects" />;
+    case "sources": return <CollectionView kind="sources" />;
+    case "monitors": return <MonitorsView />;
+    case "questions": return <QuestionsView />;
+    case "runs": return <RunsView />;
+    case "settings": return <SettingsView />;
+    case "saved": return <SavedView />;
+    case "history": return <HistoryView />;
+  }
 }

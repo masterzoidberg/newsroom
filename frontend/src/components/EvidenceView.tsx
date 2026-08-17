@@ -92,10 +92,12 @@ export function EvidenceView() {
         <div className="evidence-form-row">
           <input
             id="story-id"
+            name="story_id"
             value={storyId}
             onChange={(event) => setStoryId(event.target.value)}
             placeholder="st_…"
             autoComplete="off"
+            spellCheck={false}
           />
           <button type="submit" disabled={loading}>
             {loading ? "Loading…" : "Inspect evidence"}

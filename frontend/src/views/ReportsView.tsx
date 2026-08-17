@@ -1,0 +1,38 @@
+import { FormEvent, useCallback, useEffect, useState } from "react";
+import { apiFetch, apiList, formatDate, jsonBody, shortId } from "../lib/api";
+import type { Report, ReportRevision } from "../lib/types";
+import { Badge, EmptyState, ErrorState, LoadingState, PageHeader, SectionCard } from "../components/ViewPrimitives";
+
+const label = (value: string) => value.split("_").join(" ");
+
+export function ReportsView() {
+  const [reports, setReports] = useState<Report[]>([]);
+  const [selected, setSelected] = useState<Report | null>(null);
+  const [name, setName] = useState("");
+  const [targetType, setTargetType] = useState("story");
+  const [targetId, setTargetId] = useState("");
+  const [error, setError] = useState<unknown>(null);
+  const [working, setWorking] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const load = useCallback(async () => { setLoading(true); setError(null); try { setReports((await apiList<Report>("/reports?page_size=100")).items); } catch (caught) { setError(caught); } finally { setLoading(false); } }, []);
+  useEffect(() => { void load(); }, [load]);
+  async function create(event: FormEvent) { event.preventDefault(); if (!name.trim() || !targetId.trim()) { setError(new Error("A report name and target ID are required.")); return; } setWorking(true); setError(null); try { const report = await apiFetch<Report>("/reports", { method: "POST", body: jsonBody({ name, target_type: targetType, target_id: targetId, timezone_name: Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC" }) }); setReports((items) => [report, ...items]); setSelected(report); setName(""); setTargetId(""); } catch (caught) { setError(caught); } finally { setWorking(false); } }
+  async function generate(report: Report) { setWorking(true); setError(null); try { const result = await apiFetch<Report>(`/reports/${report.id}/generate`, { method: "POST" }); setSelected(result); setReports((items) => items.map((item) => item.id === result.id ? result : item)); } catch (caught) { setError(caught); } finally { setWorking(false); } }
+  async function archive(report: Report) { if (!window.confirm(`Archive “${report.name}”? It will stop generating new revisions.`)) return; setWorking(true); try { const result = await apiFetch<Report>(`/reports/${report.id}/archive`, { method: "POST" }); setSelected(result); setReports((items) => items.map((item) => item.id === result.id ? result : item)); } catch (caught) { setError(caught); } finally { setWorking(false); } }
+  if (loading) return <><PageHeader eyebrow="Review" title="Reports" description="Versioned status pages grounded in exact accepted Claims." /><LoadingState />{error && <ErrorState error={error} />}</>;
+  return <><PageHeader eyebrow="Review / evidence-bound" title="Living Reports" description="Inspect current status, what changed, active Stories, evidence strength, contradictions, questions, and recommended investigations." />
+    {error && <ErrorState error={error} retry={() => void load()} />}
+    <div className="content-grid reports-layout"><SectionCard title="Create a report" description="Choose an existing canonical target. No client-only domain objects are created."><form className="stack-form" onSubmit={create}><label htmlFor="report-name">Name</label><input id="report-name" name="report_name" autoComplete="off" value={name} onChange={(event) => setName(event.target.value)} placeholder="Policy watch — Atlas" /><label htmlFor="report-target-type">Target type</label><select id="report-target-type" name="target_type" value={targetType} onChange={(event) => setTargetType(event.target.value)}><option value="story">Story</option><option value="monitor">Monitor</option><option value="topic">Topic</option><option value="subject">Subject</option><option value="source">Source</option><option value="research_question">Research Question</option></select><label htmlFor="report-target-id">Target ID</label><input id="report-target-id" name="target_id" autoComplete="off" value={targetId} onChange={(event) => setTargetId(event.target.value)} placeholder="st_…" /><button className="primary-button" type="submit" disabled={working}>{working ? "Creating…" : "Create Living Report"}</button></form></SectionCard>
+      <SectionCard title="Saved reports" description="Select a report to inspect its latest immutable revision.">{reports.length ? <div className="resource-list">{reports.map((report) => <button type="button" className={`resource-row ${selected?.id === report.id ? "selected" : ""}`} key={report.id} onClick={() => setSelected(report)}><span><strong>{report.name}</strong><small>{report.target_type} · {shortId(report.target_id)}</small></span><Badge tone={report.status === "active" ? "mint" : "neutral"}>{report.status}</Badge></button>)}</div> : <EmptyState title="No reports yet" description="Create a report for a Story or Monitor to begin." />}</SectionCard></div>
+    {selected && <ReportDetail report={selected} onGenerate={() => void generate(selected)} onArchive={() => void archive(selected)} working={working} />}
+  </>;
+}
+
+function ReportDetail({ report, onGenerate, onArchive, working }: { report: Report; onGenerate: () => void; onArchive: () => void; working: boolean }) {
+  const revision = report.current_revision;
+  return <SectionCard title={report.name} description={`${report.target_type} · ${report.target_id} · ${report.timezone_name}`} action={<div className="button-row"><button className="secondary-button" type="button" onClick={onGenerate} disabled={working || report.status !== "active"}>Generate revision</button>{report.status === "active" && <button className="danger-button" type="button" onClick={onArchive} disabled={working}>Archive</button>}</div>}>
+    {!revision ? <EmptyState title="No revision yet" description="Generate the first revision once the target has accepted evidence." /> : <div className="report-detail"><div className="detail-toolbar"><Badge tone={revision.audit.passed ? "mint" : "coral"}>{revision.audit.passed ? "Closed-world audit passed" : "Audit failed"}</Badge><span>Revision {revision.revision_number} · {formatDate(revision.generated_at)}</span><code>{shortId(revision.claim_set_hash)}</code></div><div className="report-section-grid">{["current_status", "what_changed", "active_stories", "evidence_strength", "contradictions", "unresolved_questions", "recommended_investigations"].map((key) => <section className="report-section" key={key}><h3>{label(key)}</h3>{key === "current_status" ? <p>{revision.sections.current_status || "No status text."}</p> : <ReportSectionValue value={revision.sections[key as keyof ReportRevision["sections"]]} />}</section>)}</div><div className="evidence-cause-list"><h3>Why this revision changed</h3>{revision.change_causes.length ? revision.change_causes.map((cause) => <div className="cause-row" key={cause.id}><Badge tone={cause.cause_type === "contradiction" || cause.cause_type === "correction" ? "coral" : "mint"}>{label(cause.cause_type)}</Badge><span>{cause.rationale}</span><code>{cause.evidence_span_id ? `Evidence ${shortId(cause.evidence_span_id)}` : "Unresolved provenance"}</code></div>) : <p className="muted">No material cause recorded.</p>}</div></div>}
+  </SectionCard>;
+}
+
+function ReportSectionValue({ value }: { value: unknown }) { if (!Array.isArray(value) || value.length === 0) return <p className="muted">None recorded.</p>; return <ul className="compact-list">{value.slice(0, 8).map((item, index) => <li key={index}>{typeof item === "string" ? item : <>{String((item as Record<string, unknown>).text ?? (item as Record<string, unknown>).question ?? (item as Record<string, unknown>).suggestion ?? (item as Record<string, unknown>).headline ?? JSON.stringify(item))}</>}</li>)}</ul>; }

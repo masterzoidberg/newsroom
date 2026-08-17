@@ -251,6 +251,30 @@ state. In-app delivery is durable. Browser delivery is an optional pending,
 sent, denied, offline, failed, or skipped state; no email/SMS or public
 publishing path is introduced.
 
+## Product UI and PWA
+
+The authenticated React application is a thin, responsive projection over the
+canonical API. The shell groups review, configuration, and operations views in
+a keyboard-accessible sidebar and uses hash routes so a reviewer can deep-link
+to a surface without inventing client-only resource state. Story/Evidence and
+Document views keep Claims, exact Evidence Span locators, contradictions,
+revisions, timelines, lineage, and source links visible; Reports and Alerts
+render their server-side provenance and delivery state.
+
+Monitor creation, Source suggestion approval, Research Question creation,
+report generation, alert acknowledgement, and notification preferences call
+the existing authenticated API. The UI supplies bounded defaults for forms but
+does not decide relevance, novelty, evidence support, budgets, or publication
+state. Destructive operations require confirmation.
+
+FastAPI serves the built `frontend/dist` output from the same origin as
+`/api/v1`. The PWA manifest requests a standalone installable window. The
+service worker caches the application shell and successful static assets, falls
+back to the cached entry document when offline, and deliberately bypasses API
+requests so stale domain data is never presented as authoritative. Offline mode
+therefore preserves navigation and cached UI while labeling unavailable live
+data explicitly.
+
 ## Direct-source strategy
 
 Publication discovery and document-change monitoring are separate capabilities.

@@ -99,6 +99,27 @@ Report propositions and change causes are derived from accepted Claims and
 supporting Evidence Spans only. Revision and cause records are append-only;
 raw article volume cannot create a report revision or alert.
 
+## Product UI and PWA
+
+Phase 12 uses the same authenticated `/api/v1` contract from a React workspace
+served by FastAPI in production. The shell exposes deep-linkable hash routes for
+Inbox, Story & Evidence, Documents, Reports, Saved, History, Topics, Subjects,
+Sources, Monitors, Research Questions, Runs & Jobs, Alerts, and Settings & Cost.
+
+The UI is a review surface, not a second domain layer: it reads and mutates
+canonical resources through the API, sends the CSRF header for mutations, and
+keeps destructive actions behind confirmation. Loading, empty, API-error,
+offline, permission, and stale/attention states remain explicit. Exact Claim
+evidence, Evidence Span locators, Story revisions, timelines, lineage, report
+causes, alert delivery status, and durable review state are rendered without
+requiring article-body storage in the browser.
+
+`frontend/public/manifest.webmanifest` defines the installable standalone app;
+`frontend/public/sw.js` caches the built shell and successful same-origin static
+assets while bypassing `/api/` requests. Browser notification permission is
+optional and does not replace durable in-app alerts. Production is same-origin,
+so the PWA has no CORS dependency.
+
 ## Source discovery and acquisition
 
 Phase 06 adds authenticated, manually invoked acquisition endpoints. They use

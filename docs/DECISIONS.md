@@ -48,6 +48,13 @@ Formal ADR records are under `docs/adr/`.
   browser delivery state. Repeated evidence is deduplicated by stable revision
   causes; notification denial or offline state never removes the in-app record.
   See ADR-009.
+- **D-015:** Phase 12 keeps the product UI as a thin authenticated projection
+  over canonical API resources. Hash-deep-linkable React views expose evidence,
+  provenance, operations, and administration across responsive desktop, tablet,
+  and phone layouts. The same-origin PWA service worker caches only the shell
+  and static assets, bypasses API requests, and labels offline state; browser
+  notification permission is optional and never replaces durable in-app alerts.
+  See ADR-010.
 
 Phase 0 established the evaluation subsystem (`newsroom.evals`), a 30-case
 labeled corpus, deterministic replay, reproducible metrics, and the v1 baseline.
