@@ -1056,6 +1056,216 @@ MIGRATION_0009_CHECKSUM = hashlib.sha256(
 ).hexdigest()
 
 
+MIGRATION_0010_STATEMENTS: tuple[str, ...] = (
+    """
+    CREATE TABLE living_reports (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        target_type TEXT NOT NULL CHECK (target_type IN ('monitor', 'story', 'topic', 'subject', 'source', 'research_question')),
+        target_id TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'archived')),
+        timezone_name TEXT NOT NULL DEFAULT 'UTC',
+        current_revision_id TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        UNIQUE (target_type, target_id)
+    )
+    """,
+    "CREATE INDEX living_reports_target_idx ON living_reports(target_type, target_id, status)",
+    """
+    CREATE TABLE report_revisions (
+        id TEXT PRIMARY KEY,
+        report_id TEXT NOT NULL REFERENCES living_reports(id) ON DELETE CASCADE,
+        revision_number INTEGER NOT NULL CHECK (revision_number > 0),
+        claim_set_hash TEXT NOT NULL,
+        material_change INTEGER NOT NULL DEFAULT 0 CHECK (material_change IN (0, 1)),
+        current_status TEXT NOT NULL,
+        what_changed TEXT NOT NULL DEFAULT '',
+        sections_json TEXT NOT NULL DEFAULT '{}',
+        propositions_json TEXT NOT NULL DEFAULT '[]',
+        audit_json TEXT NOT NULL DEFAULT '{}',
+        generated_at TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        UNIQUE (report_id, revision_number)
+    )
+    """,
+    "CREATE INDEX report_revisions_report_idx ON report_revisions(report_id, revision_number DESC)",
+    """
+    CREATE TABLE report_revision_claims (
+        revision_id TEXT NOT NULL REFERENCES report_revisions(id) ON DELETE CASCADE,
+        claim_id TEXT NOT NULL REFERENCES claims(id) ON DELETE RESTRICT,
+        position INTEGER NOT NULL CHECK (position >= 0),
+        created_at TEXT NOT NULL,
+        PRIMARY KEY (revision_id, claim_id),
+        UNIQUE (revision_id, position)
+    )
+    """,
+    "CREATE INDEX report_revision_claims_claim_idx ON report_revision_claims(claim_id)",
+    """
+    CREATE TABLE report_revision_causes (
+        id TEXT PRIMARY KEY,
+        revision_id TEXT NOT NULL REFERENCES report_revisions(id) ON DELETE CASCADE,
+        cause_type TEXT NOT NULL CHECK (cause_type IN ('new_primary_evidence', 'contradiction', 'correction', 'corroboration', 'material_update')),
+        cause_id TEXT NOT NULL,
+        story_id TEXT REFERENCES stories(id) ON DELETE SET NULL,
+        claim_id TEXT REFERENCES claims(id) ON DELETE SET NULL,
+        evidence_span_id TEXT REFERENCES evidence_spans(id) ON DELETE SET NULL,
+        document_id TEXT REFERENCES documents(id) ON DELETE SET NULL,
+        rationale TEXT NOT NULL DEFAULT '',
+        created_at TEXT NOT NULL
+    )
+    """,
+    "CREATE INDEX report_revision_causes_revision_idx ON report_revision_causes(revision_id, cause_type, created_at)",
+    "CREATE INDEX report_revision_causes_evidence_idx ON report_revision_causes(evidence_span_id)",
+    """
+    CREATE TABLE briefings (
+        id TEXT PRIMARY KEY,
+        period TEXT NOT NULL CHECK (period IN ('daily', 'weekly')),
+        timezone_name TEXT NOT NULL,
+        period_start TEXT NOT NULL,
+        period_end TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'published' CHECK (status IN ('draft', 'published')),
+        created_at TEXT NOT NULL,
+        UNIQUE (period, timezone_name, period_start, period_end)
+    )
+    """,
+    """
+    CREATE TABLE briefing_monitors (
+        briefing_id TEXT NOT NULL REFERENCES briefings(id) ON DELETE CASCADE,
+        monitor_id TEXT NOT NULL REFERENCES monitors(id) ON DELETE RESTRICT,
+        created_at TEXT NOT NULL,
+        PRIMARY KEY (briefing_id, monitor_id)
+    )
+    """,
+    """
+    CREATE TABLE briefing_items (
+        id TEXT PRIMARY KEY,
+        briefing_id TEXT NOT NULL REFERENCES briefings(id) ON DELETE CASCADE,
+        report_id TEXT NOT NULL REFERENCES living_reports(id) ON DELETE RESTRICT,
+        report_revision_id TEXT NOT NULL REFERENCES report_revisions(id) ON DELETE RESTRICT,
+        story_id TEXT REFERENCES stories(id) ON DELETE SET NULL,
+        rank INTEGER NOT NULL CHECK (rank > 0),
+        importance_score REAL NOT NULL CHECK (importance_score >= 0.0 AND importance_score <= 1.0),
+        reason TEXT NOT NULL DEFAULT '',
+        claim_ids_json TEXT NOT NULL DEFAULT '[]',
+        evidence_span_ids_json TEXT NOT NULL DEFAULT '[]',
+        created_at TEXT NOT NULL,
+        UNIQUE (briefing_id, report_revision_id, story_id)
+    )
+    """,
+    "CREATE INDEX briefing_items_briefing_idx ON briefing_items(briefing_id, rank, id)",
+    """
+    CREATE TABLE alert_rules (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        target_type TEXT NOT NULL CHECK (target_type IN ('all', 'report', 'monitor', 'story')),
+        target_id TEXT,
+        event_types_json TEXT NOT NULL DEFAULT '[]',
+        min_importance REAL NOT NULL DEFAULT 0.0 CHECK (min_importance >= 0.0 AND min_importance <= 1.0),
+        browser_enabled INTEGER NOT NULL DEFAULT 0 CHECK (browser_enabled IN (0, 1)),
+        enabled INTEGER NOT NULL DEFAULT 1 CHECK (enabled IN (0, 1)),
+        dedupe_window_seconds INTEGER NOT NULL DEFAULT 86400 CHECK (dedupe_window_seconds >= 0),
+        timezone_name TEXT NOT NULL DEFAULT 'UTC',
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+    )
+    """,
+    "CREATE INDEX alert_rules_target_idx ON alert_rules(target_type, target_id, enabled)",
+    """
+    CREATE TABLE alerts (
+        id TEXT PRIMARY KEY,
+        rule_id TEXT NOT NULL REFERENCES alert_rules(id) ON DELETE RESTRICT,
+        report_id TEXT REFERENCES living_reports(id) ON DELETE SET NULL,
+        report_revision_id TEXT REFERENCES report_revisions(id) ON DELETE SET NULL,
+        story_id TEXT REFERENCES stories(id) ON DELETE SET NULL,
+        event_type TEXT NOT NULL CHECK (event_type IN ('new_primary_evidence', 'contradiction', 'correction', 'corroboration', 'material_update')),
+        title TEXT NOT NULL,
+        body TEXT NOT NULL,
+        importance_score REAL NOT NULL CHECK (importance_score >= 0.0 AND importance_score <= 1.0),
+        dedupe_key TEXT NOT NULL UNIQUE,
+        cause_json TEXT NOT NULL DEFAULT '[]',
+        status TEXT NOT NULL DEFAULT 'unread' CHECK (status IN ('unread', 'acknowledged')),
+        created_at TEXT NOT NULL,
+        acknowledged_at TEXT,
+        acknowledged_by TEXT
+    )
+    """,
+    "CREATE INDEX alerts_status_idx ON alerts(status, created_at DESC, id)",
+    "CREATE INDEX alerts_report_idx ON alerts(report_id, created_at DESC, id)",
+    """
+    CREATE TABLE alert_deliveries (
+        id TEXT PRIMARY KEY,
+        alert_id TEXT NOT NULL REFERENCES alerts(id) ON DELETE CASCADE,
+        channel TEXT NOT NULL CHECK (channel IN ('in_app', 'browser')),
+        status TEXT NOT NULL CHECK (status IN ('pending', 'sent', 'failed', 'denied', 'offline', 'skipped')),
+        attempt_count INTEGER NOT NULL DEFAULT 0 CHECK (attempt_count >= 0),
+        error_detail TEXT,
+        delivered_at TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        UNIQUE (alert_id, channel)
+    )
+    """,
+    "CREATE INDEX alert_deliveries_status_idx ON alert_deliveries(status, updated_at, id)",
+    """
+    CREATE TABLE notification_preferences (
+        id INTEGER PRIMARY KEY CHECK (id = 1),
+        browser_enabled INTEGER NOT NULL DEFAULT 0 CHECK (browser_enabled IN (0, 1)),
+        permission_state TEXT NOT NULL DEFAULT 'default' CHECK (permission_state IN ('default', 'granted', 'denied')),
+        online INTEGER NOT NULL DEFAULT 1 CHECK (online IN (0, 1)),
+        updated_at TEXT NOT NULL
+    )
+    """,
+    "INSERT INTO notification_preferences(id, updated_at) VALUES (1, '1970-01-01T00:00:00Z')",
+    """
+    CREATE TRIGGER report_revisions_immutable_update
+    BEFORE UPDATE ON report_revisions
+    BEGIN
+        SELECT RAISE(ABORT, 'report revisions are immutable');
+    END
+    """,
+    """
+    CREATE TRIGGER report_revisions_immutable_delete
+    BEFORE DELETE ON report_revisions
+    BEGIN
+        SELECT RAISE(ABORT, 'report revisions are immutable');
+    END
+    """,
+    """
+    CREATE TRIGGER report_revision_claims_immutable_update
+    BEFORE UPDATE ON report_revision_claims
+    BEGIN
+        SELECT RAISE(ABORT, 'report revision claim links are immutable');
+    END
+    """,
+    """
+    CREATE TRIGGER report_revision_claims_immutable_delete
+    BEFORE DELETE ON report_revision_claims
+    BEGIN
+        SELECT RAISE(ABORT, 'report revision claim links are immutable');
+    END
+    """,
+    """
+    CREATE TRIGGER report_revision_causes_immutable_update
+    BEFORE UPDATE ON report_revision_causes
+    BEGIN
+        SELECT RAISE(ABORT, 'report revision causes are immutable');
+    END
+    """,
+    """
+    CREATE TRIGGER report_revision_causes_immutable_delete
+    BEFORE DELETE ON report_revision_causes
+    BEGIN
+        SELECT RAISE(ABORT, 'report revision causes are immutable');
+    END
+    """,
+)
+
+MIGRATION_0010_CHECKSUM = hashlib.sha256(
+    "\n".join(MIGRATION_0010_STATEMENTS).encode("utf-8")
+).hexdigest()
+
+
 @dataclass(frozen=True)
 class MigrationResult:
     applied_versions: tuple[int, ...]
@@ -1107,6 +1317,7 @@ def apply_migrations(db_path: Optional[str | Path] = None) -> MigrationResult:
                 7: MIGRATION_0007_STATEMENTS,
                 8: MIGRATION_0008_STATEMENTS,
                 9: MIGRATION_0009_STATEMENTS,
+                10: MIGRATION_0010_STATEMENTS,
             }
             for version, statements in migrations.items():
                 if version in existing:

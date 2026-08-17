@@ -15,7 +15,10 @@ discovery/acquisition, Phase 07 durable jobs/scheduling, and Phase 08 persistent
 monitors with semantic relevance are implemented. Phase 09 Story evolution,
 lineage, novelty classification, and review-independent material-update
 resurfacing are implemented. Phase 10 Research Questions, evidence-gap
-suggestions, and bounded follow-up Jobs are implemented.
+suggestions, and bounded follow-up Jobs are implemented. Phase 11
+evidence-bound Living Reports, timezone-aware Monitor briefings, durable alert
+rules, acknowledgement, deduplication, and optional browser delivery state are
+implemented.
 Hosted providers remain optional and disabled by default.
 
 ## Authority

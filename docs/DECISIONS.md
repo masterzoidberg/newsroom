@@ -42,6 +42,12 @@ Formal ADR records are under `docs/adr/`.
   reviewable suggestions; user hypotheses remain notes. Manual and policy pursuit
   enqueue one durable, idempotent Job at a time and enforce Question-level
   attempt/query/local-model/cost budgets before dispatch.
+- **D-014:** Phase 11 makes Living Report revisions immutable projections of
+  exact accepted Claim sets. Briefings rank material report changes across
+  Monitors, while alerts are rule-driven durable in-app records with optional
+  browser delivery state. Repeated evidence is deduplicated by stable revision
+  causes; notification denial or offline state never removes the in-app record.
+  See ADR-009.
 
 Phase 0 established the evaluation subsystem (`newsroom.evals`), a 30-case
 labeled corpus, deterministic replay, reproducible metrics, and the v1 baseline.

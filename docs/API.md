@@ -72,6 +72,33 @@ Accepted Claims must be `supported` or `partially_supported` and have a
 supporting Evidence Span. Accepted Claim proposition text cannot be edited;
 corrections create a new Claim with `supersedes_claim_id`.
 
+## Reports, briefings, and alerts
+
+Phase 11 adds authenticated, evidence-bound output paths:
+
+- `GET/POST /reports` lists and creates a Living Report for one Monitor, Story,
+  Topic, Subject, Source, or Research Question target.
+- `GET /reports/{id}` returns the current immutable revision and revision
+  history. `POST /reports/{id}/generate` creates a new revision from the exact
+  accepted Claim set, and `POST /reports/{id}/archive` stops generation.
+- `POST /briefings/generate` creates or returns a deterministic daily or weekly
+  briefing for selected Monitors. The request may provide an IANA timezone and
+  an explicit UTC window; repeated requests for the same period are idempotent.
+  `GET /briefings/{id}` returns ranked material report items.
+- `GET/POST /alert-rules` and `PATCH /alert-rules/{id}` manage targeted or
+  global rules for primary evidence, contradiction, correction, corroboration,
+  and material-update events.
+- `GET /alerts`, `GET /alerts/{id}`, and
+  `POST /alerts/{id}/acknowledge` expose durable in-app alert state.
+  `POST /alert-deliveries/{id}` records browser delivery outcomes.
+- `GET/PUT /notification-preferences` stores browser opt-in, permission, and
+  online state. Browser denial or offline delivery never removes the in-app
+  alert.
+
+Report propositions and change causes are derived from accepted Claims and
+supporting Evidence Spans only. Revision and cause records are append-only;
+raw article volume cannot create a report revision or alert.
+
 ## Source discovery and acquisition
 
 Phase 06 adds authenticated, manually invoked acquisition endpoints. They use

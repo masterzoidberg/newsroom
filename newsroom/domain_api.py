@@ -26,6 +26,7 @@ from .monitoring import (
     ScopeSuggestionService,
 )
 from .research_questions import ResearchQuestionService
+from .reports import AlertService, BriefingService, LivingReportService
 from .story_evolution import StoryCandidate, StoryEvolutionService
 
 
@@ -358,6 +359,62 @@ class ResearchQuestionAttemptWrite(StrictModel):
     completed_at: Optional[str] = Field(default=None, max_length=64)
 
 
+class LivingReportCreate(StrictModel):
+    name: str = Field(min_length=1, max_length=200)
+    target_type: str = Field(pattern="^(monitor|story|topic|subject|source|research_question)$")
+    target_id: str = Field(min_length=1, max_length=200)
+    timezone_name: str = Field(default="UTC", min_length=1, max_length=100)
+
+
+class BriefingGenerate(StrictModel):
+    period: str = Field(pattern="^(daily|weekly)$")
+    monitor_ids: list[str] = Field(default_factory=list, max_length=100)
+    period_start: Optional[str] = Field(default=None, max_length=64)
+    period_end: Optional[str] = Field(default=None, max_length=64)
+    timezone_name: str = Field(default="UTC", min_length=1, max_length=100)
+
+
+class AlertRuleCreate(StrictModel):
+    name: str = Field(min_length=1, max_length=200)
+    target_type: str = Field(default="all", pattern="^(all|report|monitor|story)$")
+    target_id: Optional[str] = Field(default=None, max_length=200)
+    event_types: list[str] = Field(default_factory=list, max_length=10)
+    min_importance: float = Field(default=0.0, ge=0.0, le=1.0)
+    browser_enabled: bool = False
+    enabled: bool = True
+    dedupe_window_seconds: int = Field(default=86400, ge=0, le=2_592_000)
+    timezone_name: str = Field(default="UTC", min_length=1, max_length=100)
+
+
+class AlertRulePatch(StrictModel):
+    name: Optional[str] = Field(default=None, min_length=1, max_length=200)
+    target_type: Optional[str] = Field(default=None, pattern="^(all|report|monitor|story)$")
+    target_id: Optional[str] = Field(default=None, max_length=200)
+    event_types: Optional[list[str]] = Field(default=None, max_length=10)
+    min_importance: Optional[float] = Field(default=None, ge=0.0, le=1.0)
+    browser_enabled: Optional[bool] = None
+    enabled: Optional[bool] = None
+    dedupe_window_seconds: Optional[int] = Field(default=None, ge=0, le=2_592_000)
+    timezone_name: Optional[str] = Field(default=None, min_length=1, max_length=100)
+
+    @model_validator(mode="after")
+    def reject_empty_patch(self):
+        if not self.model_fields_set:
+            raise ValueError("at least one alert rule field must be supplied")
+        return self
+
+
+class NotificationPreferencesWrite(StrictModel):
+    browser_enabled: bool
+    permission_state: str = Field(pattern="^(default|granted|denied)$")
+    online: bool = True
+
+
+class AlertDeliveryWrite(StrictModel):
+    status: str = Field(pattern="^(pending|sent|failed|denied|offline|skipped)$")
+    error_detail: Optional[str] = Field(default=None, max_length=2000)
+
+
 class ResearchGapSuggestionReview(StrictModel):
     status: str = Field(pattern="^(accepted|rejected)$")
 
@@ -617,6 +674,9 @@ def create_domain_router(
     vocabulary_service = ScopeSuggestionService(service.db_path)
     evolution = StoryEvolutionService(service.db_path)
     research = ResearchQuestionService(service.db_path)
+    reports = LivingReportService(service.db_path)
+    briefings = BriefingService(service.db_path)
+    alerts = AlertService(service.db_path)
 
     def read_guard(request: Request):
         return require_user(request)
@@ -1045,6 +1105,102 @@ def create_domain_router(
     async def record_research_question_attempt(request: Request, attempt_id: str, payload: ResearchQuestionAttemptWrite):
         write_guard(request)
         return research.record_attempt(attempt_id, **payload.model_dump())
+
+    @router.get("/reports")
+    async def living_reports(
+        request: Request,
+        status: Optional[str] = None,
+        target_type: Optional[str] = None,
+        page: int = Query(1, ge=1),
+        page_size: int = Query(25, ge=1, le=100),
+    ):
+        read_guard(request)
+        return reports.list(status=status, target_type=target_type, page=page, page_size=page_size)
+
+    @router.post("/reports", status_code=201)
+    async def create_living_report(request: Request, payload: LivingReportCreate):
+        write_guard(request)
+        return reports.create(payload.model_dump())
+
+    @router.get("/reports/{identifier}")
+    async def get_living_report(request: Request, identifier: str):
+        read_guard(request)
+        return reports.get(identifier)
+
+    @router.post("/reports/{identifier}/generate")
+    async def generate_living_report(request: Request, identifier: str):
+        write_guard(request)
+        return reports.generate(identifier)
+
+    @router.get("/reports/{identifier}/revisions")
+    async def living_report_revisions(request: Request, identifier: str):
+        read_guard(request)
+        return {"items": reports.get(identifier)["revisions"]}
+
+    @router.post("/reports/{identifier}/archive")
+    async def archive_living_report(request: Request, identifier: str):
+        write_guard(request)
+        return reports.archive(identifier)
+
+    @router.post("/briefings/generate", status_code=201)
+    async def generate_briefing(request: Request, payload: BriefingGenerate):
+        write_guard(request)
+        return briefings.generate(**payload.model_dump())
+
+    @router.get("/briefings/{identifier}")
+    async def get_briefing(request: Request, identifier: str):
+        read_guard(request)
+        return briefings.get(identifier)
+
+    @router.get("/alert-rules")
+    async def alert_rules(request: Request, enabled: Optional[bool] = None):
+        read_guard(request)
+        return {"items": alerts.list_rules(enabled=enabled)}
+
+    @router.post("/alert-rules", status_code=201)
+    async def create_alert_rule(request: Request, payload: AlertRuleCreate):
+        write_guard(request)
+        return alerts.create_rule(payload.model_dump())
+
+    @router.patch("/alert-rules/{identifier}")
+    async def patch_alert_rule(request: Request, identifier: str, payload: AlertRulePatch):
+        write_guard(request)
+        return alerts.update_rule(identifier, _patch_data(payload))
+
+    @router.get("/alerts")
+    async def list_alerts(
+        request: Request,
+        status: Optional[str] = None,
+        page: int = Query(1, ge=1),
+        page_size: int = Query(25, ge=1, le=100),
+    ):
+        read_guard(request)
+        return alerts.list_alerts(status=status, page=page, page_size=page_size)
+
+    @router.get("/alerts/{identifier}")
+    async def get_alert(request: Request, identifier: str):
+        read_guard(request)
+        return alerts.get_alert(identifier)
+
+    @router.post("/alerts/{identifier}/acknowledge")
+    async def acknowledge_alert(request: Request, identifier: str):
+        user = write_guard(request)
+        return alerts.acknowledge(identifier, acknowledged_by=user.user_id)
+
+    @router.post("/alert-deliveries/{identifier}")
+    async def record_alert_delivery(request: Request, identifier: str, payload: AlertDeliveryWrite):
+        write_guard(request)
+        return alerts.record_delivery(identifier, **payload.model_dump())
+
+    @router.get("/notification-preferences")
+    async def notification_preferences(request: Request):
+        read_guard(request)
+        return alerts.get_notification_preferences()
+
+    @router.put("/notification-preferences")
+    async def put_notification_preferences(request: Request, payload: NotificationPreferencesWrite):
+        write_guard(request)
+        return alerts.set_notification_preferences(payload.model_dump())
 
     @router.get("/stories/{story_id}/research-gaps")
     async def story_research_gaps(request: Request, story_id: str):

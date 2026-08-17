@@ -231,6 +231,26 @@ enqueue at most one durable `research_question` Job per due Question, and the
 Question's attempt/query/local-model/cost budgets are checked before insertion.
 There is no recursive enqueue path or open-ended research loop.
 
+## Reports, briefings, and alerts
+
+Living Reports are projections over the evidence ledger, not free-standing
+articles. Each revision stores the exact accepted Claim set, a deterministic
+Claim-set hash, closed-world audit results, section payloads, propositions, and
+append-only evidence causes. A report revision can explain a material change
+only through accepted Claim/Evidence Span provenance or a material Story
+evolution event linked back to accepted evidence.
+
+Briefings select material current report revisions for Monitor targets within a
+daily or weekly timezone-aware window. Importance ranking is derived from
+primary evidence, contradictions, corrections, corroboration, and material
+updates; a unique period key makes regeneration idempotent.
+
+Alert rules match report, Monitor, Story, or all targets and persist an alert
+dedupe key, cause payload, acknowledgement state, and per-channel delivery
+state. In-app delivery is durable. Browser delivery is an optional pending,
+sent, denied, offline, failed, or skipped state; no email/SMS or public
+publishing path is introduced.
+
 ## Direct-source strategy
 
 Publication discovery and document-change monitoring are separate capabilities.
