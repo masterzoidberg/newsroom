@@ -1,99 +1,142 @@
-# Phase 12 Review — Product UI and PWA
+# Phase 12 Review — Story Intelligence Through Product UI
 
 ## Verdict
 
-**Approved.** No Critical or Required findings remain.
+**Approved.** No Critical or Required findings remain. Phase 13 may begin.
 
-Reviewed range:
+Accepted implementation checkpoint:
+`8ca018fe01a2e77dfc6817b47b285febe9f57283`.
 
-- Phase 09 Story evolution, lineage, novelty, and review state;
-- Phase 10 Research Questions and evidence gaps;
-- Phase 11 Reports, Briefings, and Alerts;
-- Phase 12 responsive product UI, operator surfaces, and PWA shell.
+Reviewed range: Phase 09 Story evolution and lineage, Phase 10 Research
+Questions, Phase 11 Reports/Briefings/Alerts, and Phase 12 product UI/PWA,
+integrated with the accepted monitoring system.
 
 ## Findings
 
-### Required — resolved
+### Required — resolved in the accepted checkpoint
 
-1. **Offline shell caching initially covered only the entry document.** The
-   service worker now caches successful same-origin static responses while still
-   bypassing `/api/`, so an installed shell can reload its built JavaScript and
-   CSS offline. The UI labels the state as “Offline · cached shell only” and
-   does not treat API failure as authoritative cached domain data.
-2. **Navigation semantics needed to remain link-based.** The sidebar now uses
-   semantic anchors with `aria-current="page"`, a named primary navigation, a
-   skip link, focus-visible styling, and hash deep links. The browser smoke test
-   follows the same accessible contract.
-3. **Saved Story review needed the API’s nested revision shape.** The view now
-   renders `current_revision.headline` and `current_revision.summary` when the
-   Story record provides them, while preserving the durable review state and
-   `new_update` marker.
+1. **Exact-identity Story resolution depended on caller order.** When multiple
+   candidates shared a URL or document identity, the resolver returned the
+   first input. Candidates are now ordered by stable Story ID before identity
+   and score evaluation. Reversed-input regression coverage proves the same
+   winner and resolution path.
+2. **Alert-rule dedupe windows were persisted but not enforced.** A repeated
+   material observation could create an equivalent alert from a later report
+   revision. Alert evaluation now compares bounded semantic cause identities
+   within the configured window while retaining exact revision retry
+   idempotency. Regression coverage confirms one durable alert.
+3. **Product report generation did not evaluate alert rules.** The UI generated
+   evidence-bound revisions, but alert emission was reachable only by direct
+   service calls. The authenticated generation API now evaluates rules after a
+   successful revision, with deduplication protecting retries. API and browser
+   tests prove the durable in-app alert appears.
+4. **Structured report values could overflow the viewport.** Long evidence
+   strength records expanded the report beyond desktop and responsive bounds.
+   Report sections now allow grid shrinkage and wrap long values. Regenerated
+   desktop/tablet/phone screenshots confirm containment.
+
+### Required — previously resolved and reverified
+
+1. The service worker caches successful same-origin static assets, bypasses all
+   `/api/` requests, and falls back to the cached shell for offline navigation.
+2. Primary navigation uses links, `aria-current`, a named navigation landmark,
+   a skip link, hash deep links, and visible keyboard focus.
+3. Saved Stories render the API's nested current-revision shape without
+   conflating review state with `new_update` attention.
 
 ### Optional / non-blocking
 
-1. The mobile menu intentionally overlays the workspace. A future iteration
-   could add a backdrop and close-on-outside-click behavior, but the current
-   menu is keyboard-focusable, exposes its expanded state, and leaves the full
-   navigation reachable.
-2. The local PWA manifest uses the repository SVG mark. Platform-specific icon
-   rasterization can be added if distribution requirements later require
-   explicit 192px/512px PNG assets.
+1. The phone menu intentionally overlays the workspace. It remains keyboard
+   reachable and exposes expanded state; a backdrop and outside-click close can
+   be added later.
+2. The manifest uses the local SVG mark. Distribution-specific raster icons can
+   be added if a target platform requires explicit 192px/512px PNG assets.
 
 ## Logical review
 
-### Product surfaces and evidence safety
+### Story correctness and lineage
 
-- Inbox, Story/Evidence, Documents, Saved, History, Topics, Subjects, Sources,
-  Monitors, Research Questions, Runs/Jobs, Reports, Alerts, and Settings/Cost
-  are available from one authenticated shell.
-- Story and Document views expose Claims, accepted/disputed state, exact spans,
-  contradictions, source links, revisions, timeline events, and lineage.
-- Reports render immutable revisions, causes, propositions, and evidence span
-  identifiers. Alerts render acknowledgement and per-channel delivery state;
-  browser permission does not remove the in-app record.
-- Mutations use `apiFetch` against `/api/v1` with same-origin credentials and
-  CSRF headers. The UI provides bounded form defaults but does not implement
-  relevance, novelty, evidence support, budgets, or publication rules.
+- Frozen false-merge/false-split fixtures, ambiguous candidates, temporal
+  compatibility, corrections, mutable documents, event exclusions, shared
+  Claims, and deterministic tie ordering pass. Exact URL/document identity is
+  deterministic; unresolved ambiguity splits to a new Story.
+- Duplicate, corroboration, contradiction, qualification, correction, material
+  update, and new-Story classifications remain evidence-derived. Syndication,
+  wire propagation, rewrites, citations, and common-primary-document lineage
+  are inspectable and do not inflate independent corroboration.
+- Immutable Story evolution events and revision-document links preserve the
+  evidence trail. Saved/dismissed state remains independent from material-update
+  resurfacing.
 
-### Responsive and accessibility review
+### Research and report integrity
 
-- Desktop and phone screenshots were captured from the authenticated product
-  shell. The sidebar collapses into a mobile menu at the responsive breakpoint.
-- All visible form fields have labels and stable names; navigation is semantic;
-  focus-visible styles, reduced-motion behavior, skip navigation, status/error
-  states, table scopes, and decorative icon hiding are present.
-- Loading, empty, error, offline, permission, and stale/attention states are
-  rendered as explicit product states rather than blank or silent failures.
+- Gap detection derives from stored Claim state, support/contradiction links,
+  missing primary evidence, and lineage-aware independence. Question lifecycle,
+  immutable history, evidence links, schedules, and attempt/query/model/cost
+  budgets survive retries; hypotheses remain notes and never become Claims.
+- Living Report propositions resolve only to the exact accepted supported Claim
+  set. Material-change explanations require accepted Claim and Evidence Span
+  provenance; unsupported content aborts generation transactionally.
+- Report revisions are immutable. Current status, changes, Stories, evidence
+  strength, contradictions, unresolved Questions, and investigations remain
+  auditable against the stored ledger.
 
-### PWA and deployment review
+### Importance and alerts
 
-- `manifest.webmanifest` requests a standalone app with a same-origin `/`
-  start URL and theme metadata.
-- `sw.js` caches the shell and successful static assets, bypasses API requests,
-  cleans old cache versions, and falls back to `index.html` for offline
-  navigation.
-- FastAPI production serving and the Vite production build share one origin;
-  no CORS-only production path was introduced.
+- Briefing windows validate IANA timezones and deduplicate daily/weekly periods.
+  Ranking uses material evidence causes rather than article or keyword volume.
+- Alert rules enforce target, event, importance, and bounded semantic dedupe
+  windows. Exact retries and equivalent later revisions do not create storms.
+  Acknowledgement and delivery attempts retain durable state.
+- Permission denial, browser disablement, offline delivery, and failure never
+  remove the in-app record. Browser delivery remains opt-in and no notification
+  payload is dispatched beyond the stored delivery policy/state in this phase.
+
+### UI, security, accessibility, and performance
+
+- Product surfaces use canonical authenticated same-origin APIs. Mutations send
+  CSRF tokens; destructive report archival requires confirmation. React output
+  encoding is preserved and no raw HTML injection path was introduced.
+- Loading, empty, error, stale/update, permission, and offline states are
+  explicit. Story evidence provides direct source navigation and exact locators.
+- Desktop, tablet, and phone layouts, keyboard navigation, focus visibility,
+  semantic headings/forms/tables, reduced motion, PWA registration, offline
+  workspace state, and cached-shell reload were exercised.
+- List APIs use bounded pagination. Story/report collection queries are bounded;
+  alert dedupe inspection is capped at 1,000 recent rule/report records. The
+  production bundle is 196.43 kB JavaScript (59.15 kB gzip) with no new runtime
+  dependency and no high-severity npm vulnerability.
+
+## End-to-end evidence
+
+- [Login — desktop](phase12-screenshots/01-login-desktop.png)
+- [Story and exact evidence — desktop](phase12-screenshots/02-story-evidence-desktop.png)
+- [Bounded Research Question — desktop](phase12-screenshots/03-question-desktop.png)
+- [Closed-world Living Report — desktop](phase12-screenshots/04-report-desktop.png)
+- [Durable Alert — desktop](phase12-screenshots/05-alert-desktop.png)
+- [Alert layout — tablet](phase12-screenshots/06-alert-tablet.png)
+- [Alert and navigation — phone](phase12-screenshots/07-alert-phone.png)
+- [Offline workspace — phone](phase12-screenshots/08-offline-workspace-phone.png)
+- [Cached offline shell reload — phone](phase12-screenshots/09-offline-shell-phone.png)
+
+The browser run creates an accepted Claim and exact Evidence Span, inspects its
+Story, creates a bounded Question, creates an alert rule and Living Report,
+generates an audited revision, verifies the resulting in-app alert, exercises
+responsive layouts, verifies an active service worker, then reloads offline.
+No unexpected browser console errors remain.
 
 ## Verification
 
-- `npm.cmd run build` from `frontend` — pass;
-- `npm.cmd run typecheck` from `frontend` — pass;
-- `npm.cmd audit --audit-level=high` from `frontend` — 0 vulnerabilities;
-- `python -m pytest tests/test_phase12_frontend.py -q` — pass;
-- `python -m pytest --tb=no` — 267 passed, 28 existing HTTPX deprecation
-  warnings;
-- `python -m compileall -q newsroom` — pass;
+- `python -m pytest --tb=short` — **270 passed**, 29 HTTPX deprecation warnings;
+- `python -m compileall -q newsroom scripts` — pass;
 - `python -m newsroom.evals validate` — corpus valid, 30 cases;
-- `scripts/phase12_browser_smoke.py` through `with_server.py` — pass;
-- same-origin production probe for `/`, `/manifest.webmanifest`, and
-  `/api/v1/health` — pass;
-- desktop and phone screenshots — captured and visually inspected;
-- `git diff --check` — pass;
-- `pnpm format`, `pnpm lint`, and `pnpm types` were attempted per the frontend
-  check procedure but are unavailable because `frontend/package.json` defines
-  only `build`, `typecheck`, and `dev`; direct typecheck/build/audit checks
-  above pass.
+- `npm.cmd run typecheck` — pass;
+- `npm.cmd run build` — pass;
+- `npm.cmd audit --audit-level=high` — 0 vulnerabilities;
+- production same-origin browser workflow through `with_server.py` — pass;
+- desktop/tablet/phone/offline screenshots — captured and visually inspected;
+- `git diff --check` — pass.
 
-Accepted implementation checkpoint:
-`e6b7115f8c1eb97988decfc9e95b1839bb313d4a`.
+The prescribed `poetry run format`, `poetry run test`, `pnpm format`, `pnpm
+lint`, and `pnpm types` wrappers were attempted but are unavailable or
+misconfigured in this repository. The direct project gates above pass.
