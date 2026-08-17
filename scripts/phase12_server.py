@@ -12,4 +12,4 @@ if __name__ == "__main__":
         "dev",
         root=Path(tempfile.mkdtemp(prefix="newsroom-phase12-")) / "dev",
     )
-    uvicorn.run(create_app(config=config), host="127.0.0.1", port=8000)
+    uvicorn.run(create_app(config=config), host="127.0.0.1", port=8127)

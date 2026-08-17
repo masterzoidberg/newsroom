@@ -146,6 +146,42 @@ def test_repeated_report_generation_does_not_create_material_alerts(tmp_db):
     assert rule["id"]
 
 
+def test_alert_rule_dedupe_window_suppresses_equivalent_later_revision(tmp_db):
+    apply_migrations(tmp_db)
+    _, _, story, _, _, document = _accepted_story(tmp_db)
+    evolution = StoryEvolutionService(tmp_db)
+    reports = LivingReportService(tmp_db)
+    report = reports.create(
+        {"name": "Deduplicated report", "target_type": "story", "target_id": story["id"]}
+    )
+    alerts = AlertService(tmp_db)
+    alerts.create_rule(
+        {
+            "name": "Deduplicate material changes",
+            "target_type": "report",
+            "target_id": report["id"],
+            "event_types": ["material_update"],
+            "dedupe_window_seconds": 86400,
+        }
+    )
+
+    evolution.record_observation(
+        story["id"], document["id"], "material_update", material_change=True
+    )
+    first_revision = reports.generate(report["id"])["current_revision"]
+    first = alerts.emit_for_report_revision(report["id"], first_revision["id"])
+
+    evolution.record_observation(
+        story["id"], document["id"], "material_update", material_change=True
+    )
+    second_revision = reports.generate(report["id"])["current_revision"]
+    repeated = alerts.emit_for_report_revision(report["id"], second_revision["id"])
+
+    assert first["created_count"] == 1
+    assert repeated["created_count"] == 0
+    assert alerts.list_alerts()["total"] == 1
+
+
 def test_material_change_alert_has_durable_in_app_ack_and_browser_fallback(tmp_db):
     apply_migrations(tmp_db)
     core, ledger, story, _, _, _ = _accepted_story(tmp_db)
@@ -268,3 +304,39 @@ def test_report_and_alert_api_require_authentication_and_csrf(tmp_path):
     ).status_code == 200
     payload = {"name": "Protected report", "target_type": "story", "target_id": "missing"}
     assert client.post("/api/v1/reports", json=payload).status_code == 403
+
+
+def test_report_generation_api_evaluates_alert_rules(tmp_path):
+    config = RuntimeConfig.for_environment("dev", root=tmp_path / "dev")
+    client = TestClient(create_app(config=config, frontend_dist=tmp_path / "missing-dist"))
+    assert client.post(
+        "/api/v1/auth/setup", json={"username": "admin", "password": PASSWORD}
+    ).status_code == 201
+    assert client.post(
+        "/api/v1/auth/login", json={"username": "admin", "password": PASSWORD}
+    ).status_code == 200
+    headers = {"X-CSRF-Token": client.cookies.get("newsroom_csrf")}
+
+    _, _, story, _, _, document = _accepted_story(config.database_path)
+    StoryEvolutionService(config.database_path).record_observation(
+        story["id"], document["id"], "material_update", material_change=True
+    )
+    reports = LivingReportService(config.database_path)
+    report = reports.create(
+        {"name": "API alert report", "target_type": "story", "target_id": story["id"]}
+    )
+    AlertService(config.database_path).create_rule(
+        {
+            "name": "API material changes",
+            "target_type": "report",
+            "target_id": report["id"],
+            "event_types": ["material_update", "new_primary_evidence"],
+        }
+    )
+
+    generated = client.post(f"/api/v1/reports/{report['id']}/generate", headers=headers)
+
+    assert generated.status_code == 200, generated.text
+    alerts = client.get("/api/v1/alerts").json()
+    assert alerts["total"] == 1
+    assert alerts["items"][0]["report_id"] == report["id"]

@@ -132,7 +132,7 @@ button.resource-row { cursor: pointer; }
 .resource-row:hover, .resource-row.selected { padding-right: 10px; padding-left: 10px; border-color: rgba(140, 227, 203, .22); background: rgba(34, 74, 79, .28); }
 .detail-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; padding-bottom: 16px; border-bottom: 1px solid var(--line); color: var(--muted); font-size: .76rem; }
 .report-section-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1px; margin-top: 16px; border: 1px solid var(--line); background: var(--line); }
-.report-section { min-height: 120px; padding: 15px; background: var(--surface); }
+.report-section { min-width: 0; min-height: 120px; padding: 15px; overflow-wrap: anywhere; background: var(--surface); }
 .report-section h3, .evidence-cause-list h3 { margin-bottom: 8px; color: var(--mint); font-size: .7rem; letter-spacing: .1em; text-transform: uppercase; }
 .report-section p, .report-section li { color: #b7c9d7; font-size: .8rem; line-height: 1.5; }
 .compact-list { margin: 0; padding-left: 17px; }

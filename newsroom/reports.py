@@ -842,7 +842,6 @@ class AlertService:
                     return {"created_count": 0, "items": []}
                 event_type = max(causes, key=lambda cause: (CAUSE_WEIGHTS.get(cause["cause_type"], 0.0), cause["id"]))["cause_type"]
                 importance = min(1.0, max(CAUSE_WEIGHTS.get(cause["cause_type"], 0.0) for cause in causes) + max(0, len({cause["cause_type"] for cause in causes}) - 1) * 0.02)
-                cause_keys = sorted((cause["id"], cause.get("evidence_span_id"), cause.get("claim_id")) for cause in causes)
                 prefs = conn.execute("SELECT * FROM notification_preferences WHERE id = 1").fetchone()
                 rules = conn.execute("SELECT * FROM alert_rules WHERE enabled = 1 ORDER BY created_at, id").fetchall()
                 for rule in rules:
@@ -853,7 +852,50 @@ class AlertService:
                     if importance < rule["min_importance"] or not self._matches(rule, report, causes):
                         continue
                     event_type = max(matching_causes, key=lambda cause: (CAUSE_WEIGHTS.get(cause["cause_type"], 0.0), cause["id"]))["cause_type"]
-                    dedupe_key = hashlib.sha256(_encode({"rule_id": rule["id"], "report_revision_id": revision_id, "causes": cause_keys}).encode("utf-8")).hexdigest()
+                    matching_cause_keys = sorted((cause["id"], cause.get("evidence_span_id"), cause.get("claim_id")) for cause in matching_causes)
+                    semantic_cause_keys = sorted(
+                        (
+                            cause["cause_type"],
+                            cause.get("story_id"),
+                            cause.get("claim_id"),
+                            cause.get("evidence_span_id"),
+                            cause.get("document_id"),
+                        )
+                        for cause in matching_causes
+                    )
+                    dedupe_window = int(rule["dedupe_window_seconds"])
+                    if dedupe_window > 0:
+                        threshold = _timestamp(
+                            datetime.fromisoformat(utc_now().replace("Z", "+00:00"))
+                            - timedelta(seconds=dedupe_window)
+                        )
+                        recent = conn.execute(
+                            "SELECT cause_json FROM alerts WHERE rule_id = ? AND report_id = ? AND created_at >= ? ORDER BY created_at DESC LIMIT 1000",
+                            (rule["id"], report_id, threshold),
+                        ).fetchall()
+                        duplicate = False
+                        for prior in recent:
+                            prior_causes = [
+                                cause
+                                for cause in _decode(prior["cause_json"], [])
+                                if not configured_events or cause["cause_type"] in configured_events
+                            ]
+                            prior_semantic_keys = sorted(
+                                (
+                                    cause["cause_type"],
+                                    cause.get("story_id"),
+                                    cause.get("claim_id"),
+                                    cause.get("evidence_span_id"),
+                                    cause.get("document_id"),
+                                )
+                                for cause in prior_causes
+                            )
+                            if prior_semantic_keys == semantic_cause_keys:
+                                duplicate = True
+                                break
+                        if duplicate:
+                            continue
+                    dedupe_key = hashlib.sha256(_encode({"rule_id": rule["id"], "report_revision_id": revision_id, "causes": matching_cause_keys}).encode("utf-8")).hexdigest()
                     if conn.execute("SELECT 1 FROM alerts WHERE dedupe_key = ?", (dedupe_key,)).fetchone() is not None:
                         continue
                     alert_id, now = new_id("alert"), utc_now()

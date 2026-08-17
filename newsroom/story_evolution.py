@@ -221,7 +221,10 @@ def resolve_candidate(
 ) -> Resolution:
     """Resolve one candidate conservatively against already-retrieved Stories."""
     incoming_candidate = incoming if isinstance(incoming, StoryCandidate) else StoryCandidate.from_mapping(incoming)
-    candidates = [item if isinstance(item, StoryCandidate) else StoryCandidate.from_mapping(item) for item in existing]
+    candidates = sorted(
+        (item if isinstance(item, StoryCandidate) else StoryCandidate.from_mapping(item) for item in existing),
+        key=lambda item: item.id,
+    )
     scored: list[tuple[float, StoryCandidate, dict[str, Any], str]] = []
     for candidate in candidates:
         signals = _candidate_signals(incoming_candidate, candidate, time_window_hours)

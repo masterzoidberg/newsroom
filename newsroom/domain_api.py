@@ -1130,7 +1130,11 @@ def create_domain_router(
     @router.post("/reports/{identifier}/generate")
     async def generate_living_report(request: Request, identifier: str):
         write_guard(request)
-        return reports.generate(identifier)
+        result = reports.generate(identifier)
+        revision = result.get("current_revision")
+        if revision is not None:
+            alerts.emit_for_report_revision(identifier, revision["id"])
+        return result
 
     @router.get("/reports/{identifier}/revisions")
     async def living_report_revisions(request: Request, identifier: str):

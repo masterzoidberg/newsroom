@@ -99,6 +99,32 @@ def test_update_classifier_distinguishes_repetition_corroboration_correction_and
     assert classify_update(prior, changed) == "material_update"
 
 
+def test_exact_identity_resolution_is_deterministic_across_candidate_order():
+    incoming = {
+        "id": "incoming",
+        "headline": "Acme release",
+        "canonical_url": "https://example.test/releases/acme",
+    }
+    candidates = [
+        {
+            "id": "story-z",
+            "headline": "Acme release",
+            "canonical_url": "https://example.test/releases/acme",
+        },
+        {
+            "id": "story-a",
+            "headline": "Acme release",
+            "canonical_url": "https://example.test/releases/acme",
+        },
+    ]
+
+    forward = resolve_candidate(incoming, candidates)
+    reversed_result = resolve_candidate(incoming, list(reversed(candidates)))
+
+    assert forward.story_id == reversed_result.story_id == "story-a"
+    assert forward.via == reversed_result.via == "url_identity"
+
+
 def test_frozen_evolution_corpus_has_no_false_merges_or_false_splits():
     root = Path(__file__).resolve().parents[1]
     for fixture_path in sorted((root / "evals" / "fixtures").glob("*.json")):
