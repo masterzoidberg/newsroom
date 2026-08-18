@@ -41,7 +41,7 @@ _EXPORT_COLUMNS: dict[str, tuple[str, ...]] = {
     "topic_subjects": ("topic_id", "subject_id", "created_at"),
     "sources": ("id", "slug", "name", "domain", "homepage_url", "feed_url", "source_kind", "default_quality", "created_at", "updated_at", "deleted_at"),
     "documents": ("id", "source_id", "canonical_url", "canonical_url_hash", "title", "title_normalized", "published_at", "first_seen_at", "created_at", "updated_at", "deleted_at"),
-    "document_versions": ("id", "document_id", "retrieved_at", "content_hash", "content_kind", "etag", "last_modified", "created_at"),
+    "document_versions": ("id", "document_id", "retrieved_at", "content_hash", "content_kind", "artifact_id", "etag", "last_modified", "created_at"),
     "stories": ("id", "current_revision_id", "lifecycle", "review_status", "created_at", "updated_at", "deleted_at"),
     "story_revisions": ("id", "story_id", "revision_number", "headline", "material_change", "created_at"),
     "story_topics": ("story_id", "topic_id", "created_at"),

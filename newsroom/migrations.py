@@ -1450,6 +1450,44 @@ MIGRATION_0014_CHECKSUM = hashlib.sha256(
     "\n".join(MIGRATION_0014_STATEMENTS).encode("utf-8")
 ).hexdigest()
 
+# Phase 18 — durable normalized content artifact. Acquired normalized content
+# (visible text for HTML/text pages, normalized feed-entry metadata, or the
+# bounded fallback text of non-extractable responses) is persisted once in a
+# content-addressed, immutable artifact table. document_versions gains a
+# nullable artifact_id reference: pre-Phase-18 historical versions legitimately
+# have no artifact (NULL), and no content is manufactured for them. FK
+# enforcement protects against dangling references; a BEFORE UPDATE trigger
+# makes stored content immutable while leaving metadata columns (e.g. future
+# retention eligibility) open; referenced artifacts cannot be deleted because
+# the document_versions FK has RESTRICT semantics.
+MIGRATION_0015_STATEMENTS: tuple[str, ...] = (
+    """
+    CREATE TABLE content_artifacts (
+        id TEXT PRIMARY KEY,
+        normalized_content_hash TEXT NOT NULL UNIQUE,
+        content_kind TEXT NOT NULL CHECK (content_kind IN ('visible_text', 'feed_metadata', 'fallback_text')),
+        norm_version TEXT NOT NULL,
+        normalized_text TEXT NOT NULL,
+        text_length INTEGER NOT NULL CHECK (text_length >= 0),
+        retention_eligible INTEGER NOT NULL DEFAULT 1 CHECK (retention_eligible IN (0, 1)),
+        created_at TEXT NOT NULL
+    )
+    """,
+    """
+    CREATE TRIGGER content_artifacts_immutable_content
+    BEFORE UPDATE OF normalized_content_hash, content_kind, norm_version, normalized_text, text_length ON content_artifacts
+    BEGIN
+        SELECT RAISE(ABORT, 'content artifact content is immutable');
+    END
+    """,
+    "ALTER TABLE document_versions ADD COLUMN artifact_id TEXT REFERENCES content_artifacts(id)",
+    "CREATE INDEX document_versions_artifact_idx ON document_versions(artifact_id)",
+)
+
+MIGRATION_0015_CHECKSUM = hashlib.sha256(
+    "\n".join(MIGRATION_0015_STATEMENTS).encode("utf-8")
+).hexdigest()
+
 
 @dataclass(frozen=True)
 class MigrationResult:
@@ -1507,6 +1545,7 @@ def apply_migrations(db_path: Optional[str | Path] = None) -> MigrationResult:
                 12: MIGRATION_0012_STATEMENTS,
                 13: MIGRATION_0013_STATEMENTS,
                 14: MIGRATION_0014_STATEMENTS,
+                15: MIGRATION_0015_STATEMENTS,
             }
             for version, statements in migrations.items():
                 if version in existing:

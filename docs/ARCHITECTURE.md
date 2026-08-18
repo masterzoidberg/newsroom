@@ -67,6 +67,26 @@ require explicit human review.
 Source -> Document -> DocumentVersion. Version identity is content/provenance
 state at retrieval time.
 
+#### Durable normalized content artifacts (Phase 18)
+Every newly acquired DocumentVersion references exactly one durable, immutable,
+content-addressed normalized content artifact (`content_artifacts`,
+`document_versions.artifact_id`). The artifact stores the exact bounded
+normalized text that acquisition produced — SafeHTMLExtractor visible text for
+HTML/text pages (`visible_text_v1`), the exact feed-entry metadata JSON for
+RSS/Atom entries (`feed_metadata_v1`), or the bounded fallback normalization of
+non-extractable responses (`fallback_text_v1`) — together with its
+`normalized_content_hash` (sha256 of the exact stored text), length, kind,
+normalization version, and creation time. Same normalized text reuses the same
+artifact row; the content columns are protected by an immutability trigger and
+the DocumentVersion FK prevents deleting a referenced artifact. A worker reloads
+verified content via `ContentArtifactService.load_normalized_content /
+load_verified_text`; hash or length mismatches fail closed, and pre-Phase-18
+historical versions truthfully report `available=False` (no fabricated or
+re-fetched content, no provenance mutation). Artifacts are SQLite rows, so the
+existing online backup captures them automatically, and logical exports
+continue to omit article-derived text (the `content_artifacts` table is not on
+the export allow-list).
+
 ### Event Resolution
 Candidate retrieval + conservative merge/new decision. URL/document identity,
 time, entities, location, shared Claims, bounded text/embedding similarity, and
@@ -271,13 +291,15 @@ Invariants proven by `tests/test_monitor_runtime_acceptance.py`:
   DocumentVersion → acquisition_events.
 
 Downstream intelligence stages are not yet wired into this pipeline: the
-unattended Source → DocumentVersion loop stops after canonical persistence, and
-automatic relevance, article analysis, Evidence/Claims ingestion, Story
-evolution, Report revision, and Alert emission are Phase 20+ work. No monitor
-is allowed to recursively create unbounded work.
+unattended Source → DocumentVersion loop stops after canonical persistence
+(and, since Phase 18, the durable normalized content artifact referenced by
+each new version), and automatic relevance, article analysis, Evidence/Claims
+ingestion, Story evolution, Report revision, and Alert emission are Phase 20+
+work. No monitor is allowed to recursively create unbounded work.
 
-The current applied schema is migration 0014 / schema version 14 (see
-`newsroom/migrations.py`); the post-audit reconciliation added no migration.
+The current applied schema is migration 0015 / schema version 15 (see
+`newsroom/migrations.py`). Migration 0015 added the Phase 18 content artifact
+substrate; the post-audit reconciliation (Phase 17) added no migration.
 
 Due Research Questions use a separate bounded scheduler path: each tick can
 enqueue at most one durable `research_question` Job per due Question, and the

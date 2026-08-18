@@ -23,6 +23,7 @@ from typing import Any, Mapping, Protocol
 from urllib.parse import urljoin, urlparse
 
 from . import storage
+from .content_artifacts import ContentArtifactService, normalized_text_hash
 from .domain import DomainNotFound, DomainValidation, new_id, normalized_text, utc_now
 from .url_norm import normalize_url, url_fingerprint
 
@@ -416,6 +417,7 @@ class DocumentAcquisitionResult:
     normalized_content_hash: str | None = None
     status_code: int | None = None
     extracted: HTMLDocument | None = None
+    artifact_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -428,6 +430,7 @@ class FeedPollResult:
     new_count: int = 0
     changed_count: int = 0
     unchanged_count: int = 0
+    artifact_ids: tuple[str | None, ...] = ()
 
 
 class AcquisitionService:
@@ -449,6 +452,10 @@ class AcquisitionService:
             max_entries=self.policy.max_feed_entries,
         )
         self.profiles = SourceProfileService(db_path)
+        self.artifacts = ContentArtifactService(
+            db_path,
+            max_text_chars=self.policy.max_html_text_chars,
+        )
 
     def acquire_document(
         self,
@@ -470,6 +477,18 @@ class AcquisitionService:
                 policy=self.policy,
             )
             if response.status_code == 304:
+                previous_version_id = previous["document_version_id"] if previous else None
+                previous_artifact_id = None
+                if previous_version_id is not None:
+                    conn = storage.connect(self.db_path)
+                    try:
+                        row = conn.execute(
+                            "SELECT artifact_id FROM document_versions WHERE id = ?",
+                            (previous_version_id,),
+                        ).fetchone()
+                        previous_artifact_id = row[0] if row is not None else None
+                    finally:
+                        conn.close()
                 event_id = self._record_event(
                     source_id=source_id,
                     channel=channel,
@@ -480,7 +499,7 @@ class AcquisitionService:
                     headers=response.headers,
                     response_bytes=0,
                     document_id=previous["document_id"] if previous else None,
-                    document_version_id=previous["document_version_id"] if previous else None,
+                    document_version_id=previous_version_id,
                     raw_hash=previous["raw_content_hash"] if previous else None,
                     normalized_hash=previous["normalized_content_hash"] if previous else None,
                 )
@@ -491,11 +510,12 @@ class AcquisitionService:
                     request_url=canonical,
                     final_url=response.url,
                     document_id=previous["document_id"] if previous else None,
-                    document_version_id=previous["document_version_id"] if previous else None,
+                    document_version_id=previous_version_id,
                     event_id=event_id,
                     raw_content_hash=previous["raw_content_hash"] if previous else None,
                     normalized_content_hash=previous["normalized_content_hash"] if previous else None,
                     status_code=304,
+                    artifact_id=previous_artifact_id,
                 )
             if response.status_code < 200 or response.status_code >= 300:
                 raise AcquisitionError(f"unexpected HTTP status {response.status_code}")
@@ -503,8 +523,19 @@ class AcquisitionService:
             final_url = self.policy.check_url(response.url)
             content_type = _header(response.headers, "content-type") or "application/octet-stream"
             raw_hash = raw_content_hash(response.body)
-            normalized_hash = normalized_content_hash(response.body, content_type)
             extracted = self._extract_response(response.body, content_type)
+            if extracted is not None:
+                normalized_text = extracted.text
+                content_kind = "visible_text"
+            else:
+                normalized_text = _normalized_text(response.body.decode("utf-8", errors="replace"))
+                content_kind = "fallback_text"
+                if len(normalized_text) > self.policy.max_html_text_chars:
+                    raise AcquisitionTooLarge("normalized text exceeds configured character limit")
+            # The normalized content hash is computed over the exact canonical
+            # text that is persisted as the durable content artifact, never
+            # over a different normalization of the same body.
+            normalized_hash = normalized_text_hash(normalized_text)
             title = (extracted.title if extracted else "") or _title_from_url(final_url)
             result = self._persist_document(
                 source_id=source_id,
@@ -516,7 +547,9 @@ class AcquisitionService:
                 content_type=content_type,
                 raw_hash=raw_hash,
                 normalized_hash=normalized_hash,
-                text_length=len(extracted.text) if extracted else len(response.body),
+                text_length=len(normalized_text),
+                artifact_text=normalized_text,
+                content_kind=content_kind,
             )
             if result.outcome == "retrieved":
                 self.profiles.record_success(source_id, channel, document_count=1, changed_count=1)
@@ -573,7 +606,7 @@ class AcquisitionService:
             content_type = _header(response.headers, "content-type") or "application/xml"
             raw_hash = raw_content_hash(response.body)
             normalized_hash = normalized_content_hash(response.body, content_type)
-            new_count, changed_count, unchanged_count = self._persist_feed_entries(source_id, parsed.entries)
+            new_count, changed_count, unchanged_count, artifact_ids = self._persist_feed_entries(source_id, parsed.entries)
             outcome = "retrieved" if new_count or changed_count else "unchanged"
             event_id = self._record_event(
                 source_id=source_id,
@@ -596,7 +629,7 @@ class AcquisitionService:
                 changed_count=changed_count,
                 unchanged_count=unchanged_count,
             )
-            return FeedPollResult(outcome, source_id, canonical, event_id, parsed.entries, new_count, changed_count, unchanged_count)
+            return FeedPollResult(outcome, source_id, canonical, event_id, parsed.entries, new_count, changed_count, unchanged_count, artifact_ids)
         except AcquisitionError as exc:
             self._record_failure(source_id, canonical, "rss", exc)
             raise
@@ -626,6 +659,8 @@ class AcquisitionService:
         raw_hash: str,
         normalized_hash: str,
         text_length: int,
+        artifact_text: str,
+        content_kind: str,
     ) -> DocumentAcquisitionResult:
         conn = storage.connect(self.db_path)
         try:
@@ -659,8 +694,14 @@ class AcquisitionService:
                         conn, source_id, channel, request_url, final_url, "unchanged", response.status_code,
                         response.headers, len(response.body), document_id, latest["id"], raw_hash, normalized_hash,
                     )
-                    return DocumentAcquisitionResult("unchanged", source_id, request_url, final_url, document_id, latest["id"], event_id, raw_hash, normalized_hash, response.status_code)
+                    return DocumentAcquisitionResult("unchanged", source_id, request_url, final_url, document_id, latest["id"], event_id, raw_hash, normalized_hash, response.status_code, artifact_id=latest["artifact_id"] if "artifact_id" in latest.keys() else None)
                 version_id = new_id("dv")
+                artifact = self.artifacts.create_tx(
+                    conn,
+                    normalized_text=artifact_text,
+                    content_kind=content_kind,
+                    max_text_chars=self.policy.max_html_text_chars,
+                )
                 metadata = json.dumps(
                     {"normalized_content_hash": normalized_hash, "text_length": text_length, "title": title},
                     sort_keys=True,
@@ -670,21 +711,22 @@ class AcquisitionService:
                     """
                     INSERT INTO document_versions
                         (id, document_id, retrieved_at, content_hash, content_kind,
-                         normalized_json, etag, last_modified, created_at)
-                    VALUES (?, ?, ?, ?, 'excerpt', ?, ?, ?, ?)
+                         artifact_id, normalized_json, etag, last_modified, created_at)
+                    VALUES (?, ?, ?, ?, 'excerpt', ?, ?, ?, ?, ?)
                     """,
-                    (version_id, document_id, now, raw_hash, metadata, _header(response.headers, "etag"), _header(response.headers, "last-modified"), now),
+                    (version_id, document_id, now, raw_hash, artifact["id"], metadata, _header(response.headers, "etag"), _header(response.headers, "last-modified"), now),
                 )
                 event_id = self._insert_event_tx(
                     conn, source_id, channel, request_url, final_url, "retrieved", response.status_code,
                     response.headers, len(response.body), document_id, version_id, raw_hash, normalized_hash,
                 )
-                return DocumentAcquisitionResult("retrieved", source_id, request_url, final_url, document_id, version_id, event_id, raw_hash, normalized_hash, response.status_code)
+                return DocumentAcquisitionResult("retrieved", source_id, request_url, final_url, document_id, version_id, event_id, raw_hash, normalized_hash, response.status_code, artifact_id=artifact["id"])
         finally:
             conn.close()
 
-    def _persist_feed_entries(self, source_id: str, entries: tuple[FeedEntry, ...]) -> tuple[int, int, int]:
+    def _persist_feed_entries(self, source_id: str, entries: tuple[FeedEntry, ...]) -> tuple[int, int, int, tuple[str | None, ...]]:
         new_count = changed_count = unchanged_count = 0
+        artifact_ids: list[str | None] = []
         conn = storage.connect(self.db_path)
         try:
             with storage.write_tx(conn):
@@ -696,7 +738,6 @@ class AcquisitionService:
                         separators=(",", ":"),
                     )
                     entry_hash = raw_content_hash(metadata.encode("utf-8"))
-                    normalized_hash = normalized_content_hash(metadata.encode("utf-8"), "application/json")
                     document = conn.execute(
                         "SELECT * FROM documents WHERE canonical_url_hash = ?", (url_fingerprint(entry.url),)
                     ).fetchone()
@@ -723,20 +764,31 @@ class AcquisitionService:
                     ).fetchone()
                     if latest is not None and latest[0] == entry_hash:
                         unchanged_count += 1
+                        artifact_ids.append(None)
                         continue
                     version_id = new_id("dv")
+                    # The exact metadata string that defines this feed entry is
+                    # the durable normalized content artifact; the artifact hash
+                    # equals entry_hash (sha256 of the exact persisted metadata).
+                    artifact = self.artifacts.create_tx(
+                        conn,
+                        normalized_text=metadata,
+                        content_kind="feed_metadata",
+                        max_text_chars=self.policy.max_html_text_chars,
+                    )
                     conn.execute(
                         """
                         INSERT INTO document_versions
                             (id, document_id, retrieved_at, content_hash, content_kind,
-                             normalized_json, created_at)
-                        VALUES (?, ?, ?, ?, 'metadata', ?, ?)
+                             artifact_id, normalized_json, created_at)
+                        VALUES (?, ?, ?, ?, 'metadata', ?, ?, ?)
                         """,
-                        (version_id, document_id, now, entry_hash, metadata, now),
+                        (version_id, document_id, now, entry_hash, artifact["id"], metadata, now),
                     )
+                    artifact_ids.append(artifact["id"])
                     if latest is not None:
                         changed_count += 1
-            return new_count, changed_count, unchanged_count
+            return new_count, changed_count, unchanged_count, tuple(artifact_ids)
         finally:
             conn.close()
 

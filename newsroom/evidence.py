@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any, Mapping
 
 from . import storage
+from .content_artifacts import ContentArtifactService
 from .domain import (
     CoreService,
     DomainConflict,
@@ -176,6 +177,17 @@ class EvidenceService:
             return result
         finally:
             conn.close()
+
+    def load_document_version_content(self, identifier: str) -> dict[str, Any]:
+        """Load the verified durable normalized content for a DocumentVersion.
+
+        Phase 22 (Evidence verification) will consume this loader. It is safe
+        for later EvidenceSpan membership checks: content is hash-verified and
+        legacy pre-Phase-18 versions truthfully report ``available=False``
+        instead of fabricated or re-fetched text. No Claim/EvidenceSpan
+        processing happens here.
+        """
+        return ContentArtifactService(self.db_path).load_normalized_content(identifier)
 
     def create_evidence_span(self, document_version_id: str, data: Mapping[str, Any]) -> dict[str, Any]:
         identifier = new_id("span")

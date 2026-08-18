@@ -17,7 +17,9 @@ Phases 17–28 are the audit-driven integration and completion roadmap. They
 supersede conflicting or insufficient acceptance assumptions from Phases 01–16
 without rewriting those historical records.
 
-**Current active phase: Phase 17 — Runtime Reconciliation and Green Baseline.**
+**Current active phase: Phase 18 — Durable Normalized Content Artifact.**
+Phase 17 (runtime reconciliation and green baseline) and Live Test A (real
+public sources) are complete; both gates passed.
 
 ## How to assign work to Luna
 
