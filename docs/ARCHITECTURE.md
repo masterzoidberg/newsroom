@@ -128,6 +128,68 @@ claim, while `provider_usage` remains the actual cost ledger.
 Phase 08 monitor jobs carry the policy's acquisition, local-model, and USD
 budget only; they cannot silently broaden scope or recursively create work.
 
+### DocumentVersion processing obligations (Phase 19)
+
+`document_version_process` is the durable orchestration substrate between
+acquisition and future intelligence stages. The canonical work item is the
+persisted `DocumentVersion`:
+
+    Source → Monitor → monitor_check Job → Worker → Acquisition
+      → changed DocumentVersion + Phase 18 artifact
+      → document_version_process Job (same write transaction)
+      → processing Worker handler
+      → deterministic lifecycle result
+      → STOP before relevance
+
+Every changed/new acquisition — HTML/text documents and each new feed entry —
+creates at most one processing obligation. `not_modified`, unchanged content,
+acquisition errors, and disabled Monitors create none. A processing failure
+never retroactively changes the acquisition outcome: the `monitor_check` Job
+and the `document_version_process` Job are independent durable obligations with
+independent retry/failure semantics.
+
+Ownership and atomic handoff:
+
+- `jobs.document_version_id` (Migration 0016) is the canonical owner column;
+  its FK proves the referenced version exists at insert time, so no enqueue
+  path can reference a nonexistent version, and the active-work coalescing
+  query is indexed.
+- `enqueue_document_version_processing_tx` runs inside the same `BEGIN
+  IMMEDIATE` transaction that commits the DocumentVersion and its artifact, so
+  a crash between version commit and obligation commit is impossible: both
+  commit or neither commits. A stable `document:{version_id}` idempotency key
+  (UNIQUE) coalesces duplicates, and the transaction serialization guarantees
+  at most one ACTIVE obligation per version.
+- The payload carries only canonical IDs (document_id, source_id, originating
+  monitor_id) for traceability; mutable Source/Monitor metadata is never
+  duplicated. `jobs.monitor_id` is deliberately not overloaded — it remains the
+  monitor_check execution ownership column, so processing jobs that originate
+  from a Monitor keep that provenance in payload JSON. The handler validates
+  every payload ID against the persisted DocumentVersion/Document/Source/
+  Monitor rows and rejects conflicting caller-supplied IDs.
+- Queued, running, succeeded, failed, and cancelled obligations each block
+  further AUTOMATIC work for that version (the idempotency key covers all
+  states; active-work coalescing additionally rejects concurrent ACTIVE
+  obligations regardless of key). No automatic path ever re-enqueues processed
+  work. Explicit rerun of a terminal obligation is allowed (fresh
+  `rerun:` idempotency key) and is refused while an active obligation exists
+  or when the version no longer exists.
+
+The Phase-19 handler resolves the canonical version, loads the hash-verified
+Phase 18 normalized content artifact
+(`ContentArtifactService.load_normalized_content`), and returns a bounded
+deterministic result (version/artifact IDs, content hash, normalized hash,
+kind, length) persisted in `jobs.result_json` (Migration 0016). It never
+invokes the relevance cascade, AI providers, semantic extraction,
+Evidence/Claims creation, Story evolution, Reports, or Alerts, and never
+re-fetches remote content. Legacy pre-Phase-18 versions without artifacts fail
+terminally and truthfully (`LegacyVersionWithoutArtifact`); missing or corrupt
+artifacts fail terminally via the Phase 18 fail-closed loader. Transient
+SQLite conditions use the existing bounded retry semantics; all other
+processing failures are terminal integrity outcomes. Lease expiry, recovery,
+cancellation, and restart behavior are the repaired generic JobService
+semantics — no independent lease system exists.
+
 ### Relevance and scope governance
 
 Topic scope is represented as exact terms, vocabulary, entities, concepts,
@@ -291,15 +353,21 @@ Invariants proven by `tests/test_monitor_runtime_acceptance.py`:
   DocumentVersion → acquisition_events.
 
 Downstream intelligence stages are not yet wired into this pipeline: the
-unattended Source → DocumentVersion loop stops after canonical persistence
-(and, since Phase 18, the durable normalized content artifact referenced by
-each new version), and automatic relevance, article analysis, Evidence/Claims
-ingestion, Story evolution, Report revision, and Alert emission are Phase 20+
-work. No monitor is allowed to recursively create unbounded work.
+unattended Source → DocumentVersion loop persists canonical provenance,
+and (since Phase 18) a durable normalized content artifact referenced by each
+new version; since Phase 19 every changed acquisition also leaves a durable
+`document_version_process` obligation whose deterministic handler has proven
+the verified content is loadable, but automatic relevance, article analysis,
+Evidence/Claims ingestion, Story evolution, Report revision, and Alert
+emission are Phase 20+ work. No monitor is allowed to recursively create
+unbounded work.
 
-The current applied schema is migration 0015 / schema version 15 (see
+The current applied schema is migration 0016 / schema version 16 (see
 `newsroom/migrations.py`). Migration 0015 added the Phase 18 content artifact
-substrate; the post-audit reconciliation (Phase 17) added no migration.
+substrate; migration 0016 added the Phase 19 processing-ownership column
+(`jobs.document_version_id`), the durable result column (`jobs.result_json`),
+and the obligation index; the post-audit reconciliation (Phase 17) added no
+migration.
 
 Due Research Questions use a separate bounded scheduler path: each tick can
 enqueue at most one durable `research_question` Job per due Question, and the

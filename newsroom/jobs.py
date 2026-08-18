@@ -49,10 +49,44 @@ BUDGET_CAP_TYPES = frozenset({"acquisition_units", "local_model_units", "paid_re
 
 MONITOR_CHECK_JOB_TYPE = "monitor_check"
 RESEARCH_QUESTION_JOB_TYPE = "research_question"
+DOCUMENT_VERSION_PROCESS_JOB_TYPE = "document_version_process"
 
 RecoveryHook = Callable[[sqlite3.Connection, sqlite3.Row, str], None]
 CompletionHook = Callable[[sqlite3.Connection, sqlite3.Row, str, Mapping[str, Any] | None], None]
 RerunFactory = Callable[[Path, Mapping[str, Any]], Mapping[str, Any] | None]
+
+
+def compose_rerun_factories(*factories: RerunFactory | None) -> RerunFactory | None:
+    """Compose independent rerun factories into one JobService rerun factory.
+
+    Every factory is asked in registration order and the first non-None rebuilt
+    job wins; ``None`` answers fall through so each domain stays optional and
+    the generic clone fallback in ``JobService.rerun`` remains the last resort.
+    Registering the same factory object twice is rejected, mirroring
+    ``compose_completion_hooks`` collision semantics.
+    """
+    registered: list[RerunFactory] = []
+    for factory in factories:
+        if factory is None:
+            continue
+        if not callable(factory):
+            raise TypeError("rerun factories must be callable")
+        if any(registered_factory is factory for registered_factory in registered):
+            raise ValueError("duplicate rerun factory registration")
+        registered.append(factory)
+    if not registered:
+        return None
+    if len(registered) == 1:
+        return registered[0]
+
+    def composed(db_path: Path, job: Mapping[str, Any]) -> Mapping[str, Any] | None:
+        for factory in registered:
+            rebuilt = factory(db_path, job)
+            if rebuilt is not None:
+                return rebuilt
+        return None
+
+    return composed
 
 
 def compose_completion_hooks(*hooks: CompletionHook | None) -> CompletionHook | None:
@@ -130,6 +164,50 @@ def _active_monitor_check_id_tx(conn: sqlite3.Connection, monitor_id: str) -> st
         LIMIT 1
         """,
         (monitor_id, MONITOR_CHECK_JOB_TYPE),
+    ).fetchone()
+    return row[0] if row is not None else None
+
+
+def _resolve_document_version_process_version_id(
+    job_type: str,
+    document_version_id: str | None,
+    payload: Mapping[str, Any],
+) -> str:
+    """Validate canonical DocumentVersion ownership for a processing enqueue.
+
+    Returns the canonical ``document_version_id`` when the job is a
+    ``document_version_process``. Returns an empty string for any other job
+    type so callers can skip the active-work check. Raises
+    ``DomainValidation`` when a document_version_process job is missing its
+    canonical ``document_version_id`` or when its payload carries a
+    conflicting ``document_version_id``.
+    """
+    if job_type != DOCUMENT_VERSION_PROCESS_JOB_TYPE:
+        return ""
+    canonical = str(document_version_id or "").strip()
+    if not canonical:
+        raise DomainValidation("document_version_process jobs require a canonical document_version_id")
+    payload_id = payload.get("document_version_id") if isinstance(payload, Mapping) else None
+    if payload_id is not None and str(payload_id).strip() != canonical:
+        raise DomainValidation("document_version_process payload document_version_id conflicts with job document_version_id")
+    return canonical
+
+
+def _active_document_version_process_id_tx(conn: sqlite3.Connection, document_version_id: str) -> str | None:
+    """Return the job id of any active document_version_process for a version.
+
+    Active means ``status IN ('queued', 'running')`` — the same definition
+    used for monitor_check obligations. Runs inside the caller's write
+    transaction so that ``BEGIN IMMEDIATE`` serializes concurrent producers.
+    """
+    row = conn.execute(
+        """
+        SELECT id FROM jobs
+        WHERE document_version_id = ? AND job_type = ?
+          AND status IN ('queued', 'running')
+        LIMIT 1
+        """,
+        (document_version_id, DOCUMENT_VERSION_PROCESS_JOB_TYPE),
     ).fetchone()
     return row[0] if row is not None else None
 
@@ -213,6 +291,7 @@ def _decode(value: str | None, default: Any) -> Any:
 def _job_dict(row: sqlite3.Row, attempts: list[sqlite3.Row] | None = None, reservation: sqlite3.Row | None = None) -> dict[str, Any]:
     result = dict(row)
     result["payload"] = _decode(result.pop("payload_json"), {})
+    result["result"] = _decode(result.pop("result_json"), None) if "result_json" in result else None
     result["attempts_detail"] = [dict(item) for item in (attempts or [])]
     if reservation is not None:
         result["budget_reservation"] = dict(reservation)
@@ -602,6 +681,7 @@ class JobService:
         idempotency_key: str | None = None,
         monitor_id: str | None = None,
         research_question_id: str | None = None,
+        document_version_id: str | None = None,
         priority: int = 0,
         max_attempts: int = 3,
         run_id: str | None = None,
@@ -629,40 +709,28 @@ class JobService:
                     if existing:
                         identifier = existing[0]
                     else:
-                        canonical = _resolve_monitor_check_monitor_id(job_type, monitor_id, decoded)
-                        if canonical:
-                            active_id = _active_monitor_check_id_tx(conn, canonical)
-                            if active_id is not None:
-                                raise JobConflict(
-                                    f"monitor {canonical} already has an active monitor_check obligation ({active_id})"
-                                )
+                        self._enqueue_check_tx(conn, job_type, monitor_id, document_version_id, decoded)
                         conn.execute(
                             """
                             INSERT INTO jobs
                                 (id, job_type, payload_json, idempotency_key, monitor_id,
-                                 research_question_id, priority, max_attempts, run_id,
-                                 created_at, updated_at)
-                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                                 research_question_id, document_version_id, priority,
+                                 max_attempts, run_id, created_at, updated_at)
+                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                             """,
-                            (identifier, job_type, encoded, idempotency_key, monitor_id, research_question_id, priority, max_attempts, run_id, now, now),
+                            (identifier, job_type, encoded, idempotency_key, monitor_id, research_question_id, document_version_id, priority, max_attempts, run_id, now, now),
                         )
                 else:
-                    canonical = _resolve_monitor_check_monitor_id(job_type, monitor_id, decoded)
-                    if canonical:
-                        active_id = _active_monitor_check_id_tx(conn, canonical)
-                        if active_id is not None:
-                            raise JobConflict(
-                                f"monitor {canonical} already has an active monitor_check obligation ({active_id})"
-                            )
+                    self._enqueue_check_tx(conn, job_type, monitor_id, document_version_id, decoded)
                     conn.execute(
                         """
                         INSERT INTO jobs
                             (id, job_type, payload_json, idempotency_key, monitor_id,
-                             research_question_id, priority, max_attempts, run_id,
-                             created_at, updated_at)
-                        VALUES (?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?)
+                             research_question_id, document_version_id, priority,
+                             max_attempts, run_id, created_at, updated_at)
+                        VALUES (?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?)
                         """,
-                        (identifier, job_type, encoded, monitor_id, research_question_id, priority, max_attempts, run_id, now, now),
+                        (identifier, job_type, encoded, monitor_id, research_question_id, document_version_id, priority, max_attempts, run_id, now, now),
                     )
         except sqlite3.IntegrityError as exc:
             if idempotency_key:
@@ -671,6 +739,38 @@ class JobService:
         finally:
             conn.close()
         return self.get(identifier)
+
+    def _enqueue_check_tx(
+        self,
+        conn: sqlite3.Connection,
+        job_type: str,
+        monitor_id: str | None,
+        document_version_id: str | None,
+        payload: Mapping[str, Any],
+    ) -> None:
+        """Enforce canonical ownership and active-work coalescing before insert.
+
+        Runs inside the caller's write transaction. A monitor_check job must
+        carry exactly one canonical ``monitor_id`` and a
+        ``document_version_process`` job must carry exactly one canonical
+        ``document_version_id`` (whose FK guarantees the version exists).
+        Active obligations reject duplicates regardless of the idempotency key
+        so no enqueue path (API, rerun, backfill) can bypass coalescing.
+        """
+        canonical = _resolve_monitor_check_monitor_id(job_type, monitor_id, payload)
+        if canonical:
+            active_id = _active_monitor_check_id_tx(conn, canonical)
+            if active_id is not None:
+                raise JobConflict(
+                    f"monitor {canonical} already has an active monitor_check obligation ({active_id})"
+                )
+        canonical_dv = _resolve_document_version_process_version_id(job_type, document_version_id, payload)
+        if canonical_dv:
+            active_id = _active_document_version_process_id_tx(conn, canonical_dv)
+            if active_id is not None:
+                raise JobConflict(
+                    f"document version {canonical_dv} already has an active processing obligation ({active_id})"
+                )
 
     def get_by_idempotency(self, idempotency_key: str) -> dict[str, Any]:
         conn = storage.connect(self.db_path)
@@ -819,6 +919,12 @@ class JobService:
                     (final_status if final_status in ATTEMPT_STATUSES else "failed", timestamp, bounded_code, bounded_detail, attempt["id"]),
                 )
                 self.budgets._release_tx(conn, job_id, timestamp)
+                encoded_result = None
+                if outcome is not None and final_status in {"succeeded", "partial"}:
+                    try:
+                        encoded_result = json.dumps(dict(outcome), sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+                    except (TypeError, ValueError):
+                        encoded_result = None
                 retrying = final_status == "failed" and retryable and row["attempts"] < row["max_attempts"]
                 if retrying:
                     next_at = _plus_seconds(timestamp, self._backoff_seconds(row["attempts"]))
@@ -827,7 +933,7 @@ class JobService:
                         UPDATE jobs
                         SET status = 'queued', lease_owner = NULL, lease_expires_at = NULL,
                             cancel_requested_at = NULL, next_attempt_at = ?,
-                            failure_cause = ?, updated_at = ?
+                            failure_cause = ?, result_json = NULL, updated_at = ?
                         WHERE id = ?
                         """,
                         (next_at, bounded_code or "failed", timestamp, job_id),
@@ -838,10 +944,10 @@ class JobService:
                         UPDATE jobs
                         SET status = ?, lease_owner = NULL, lease_expires_at = NULL,
                             cancel_requested_at = NULL, next_attempt_at = NULL,
-                            failure_cause = ?, updated_at = ?
+                            failure_cause = ?, result_json = ?, updated_at = ?
                         WHERE id = ?
                         """,
-                        (final_status, bounded_code, timestamp, job_id),
+                        (final_status, bounded_code, encoded_result, timestamp, job_id),
                     )
                 if self.completion_hook is not None:
                     self.completion_hook(
@@ -913,6 +1019,7 @@ class JobService:
             idempotency_key=f"rerun:{job_id}:{new_id('request')}",
             monitor_id=old["monitor_id"],
             research_question_id=old["research_question_id"],
+            document_version_id=old.get("document_version_id"),
             priority=old["priority"],
             max_attempts=old["max_attempts"],
         )
@@ -1284,6 +1391,7 @@ __all__ = [
     "BudgetExhausted",
     "BudgetService",
     "CompletionHook",
+    "DOCUMENT_VERSION_PROCESS_JOB_TYPE",
     "JobConflict",
     "JobError",
     "JobNotFound",
@@ -1294,4 +1402,5 @@ __all__ = [
     "RESEARCH_QUESTION_JOB_TYPE",
     "SchedulerService",
     "compose_completion_hooks",
+    "compose_rerun_factories",
 ]

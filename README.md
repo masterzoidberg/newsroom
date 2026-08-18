@@ -39,19 +39,21 @@ configuration with final acceptance rehearsal evidence; final promotion remains
 pending.
 
 The post-audit roadmap is authoritative at `plan/phases/README.md`. Phases
-01–16 remain historical implementation records; **Phase 18 — Durable
-Normalized Content Artifact** is the current active phase, following the
-completed Phase 17 runtime reconciliation and the passed Live Test A gate. The
-current production Monitor path is reliable through Source acquisition and
-DocumentVersion persistence; since Phase 18 every newly acquired
-DocumentVersion also references a durable, immutable, hash-verifiable
-normalized content artifact stored in SQLite (`content_artifacts`), and it
-does not yet automatically produce relevance, analysis, Evidence/Claims,
-Stories, Reports, or Alerts. Only `source` Monitor targets perform real
-acquisition today; `topic`, `subject`, `story`, and `research_question` are
-accepted by the schema/API but explicitly unsupported at runtime
-(`error`/`unsupported_target`). The current applied schema is migration 0015 /
-schema version 15.
+01–16 remain historical implementation records; **Phase 19 — Changed
+DocumentVersion Processing Jobs** is the current active phase, following the
+completed Phase 18 durable content artifact work. The current production
+Monitor path is reliable through Source acquisition and DocumentVersion
+persistence; since Phase 18 every newly acquired DocumentVersion references a
+durable, immutable, hash-verifiable normalized content artifact stored in
+SQLite (`content_artifacts`), and since Phase 19 every changed acquisition
+also creates exactly one durable `document_version_process` Job that loads and
+verifies that artifact and records a deterministic lifecycle result. It does
+not yet automatically produce relevance, analysis, Evidence/Claims, Stories,
+Reports, or Alerts. Only `source` Monitor targets perform real acquisition
+today; `topic`, `subject`, `story`, and `research_question` are accepted by
+the schema/API but explicitly unsupported at runtime
+(`error`/`unsupported_target`). The current applied schema is migration 0016 /
+schema version 16.
 
 ## Authority
 

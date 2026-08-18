@@ -1488,6 +1488,26 @@ MIGRATION_0015_CHECKSUM = hashlib.sha256(
     "\n".join(MIGRATION_0015_STATEMENTS).encode("utf-8")
 ).hexdigest()
 
+# Phase 19 — durable changed-DocumentVersion processing obligations. The jobs
+# table gains the canonical ownership column for `document_version_process`
+# jobs (document_version_id, FK-guarded so a processing obligation can never
+# point at a missing version) plus an index over (document_version_id, status)
+# so active-work coalescing and obligation queries stay cheap. A nullable
+# result_json column durably persists the deterministic processing result
+# produced by the worker handler (job outcomes previously only reached
+# in-memory completion-hook context). All three additions are additive and
+# schema-15 data is preserved unchanged; the columns are NULL for every
+# historical job row.
+MIGRATION_0016_STATEMENTS: tuple[str, ...] = (
+    "ALTER TABLE jobs ADD COLUMN document_version_id TEXT REFERENCES document_versions(id)",
+    "ALTER TABLE jobs ADD COLUMN result_json TEXT",
+    "CREATE INDEX jobs_document_version_idx ON jobs(document_version_id, status)",
+)
+
+MIGRATION_0016_CHECKSUM = hashlib.sha256(
+    "\n".join(MIGRATION_0016_STATEMENTS).encode("utf-8")
+).hexdigest()
+
 
 @dataclass(frozen=True)
 class MigrationResult:
@@ -1546,6 +1566,7 @@ def apply_migrations(db_path: Optional[str | Path] = None) -> MigrationResult:
                 13: MIGRATION_0013_STATEMENTS,
                 14: MIGRATION_0014_STATEMENTS,
                 15: MIGRATION_0015_STATEMENTS,
+                16: MIGRATION_0016_STATEMENTS,
             }
             for version, statements in migrations.items():
                 if version in existing:

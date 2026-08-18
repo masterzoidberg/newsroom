@@ -86,7 +86,7 @@ def _policy(db_path, **overrides):
 
 
 def test_phase08_migration_adds_history_and_suggestion_tables_idempotently(tmp_db):
-    assert apply_migrations(tmp_db).applied_versions == (1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15)
+    assert apply_migrations(tmp_db).applied_versions == (1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16)
     assert apply_migrations(tmp_db).applied_versions == ()
 
     conn = storage.connect(tmp_db)
@@ -679,6 +679,13 @@ def test_monitor_budget_exhaustion_records_error_via_completion_hook(tmp_db):
     fin1 = worker.run_once(now=T0)
     assert fin1["status"] == "succeeded"
 
+    # 1b. Phase 19 leaves the acquired version's durable processing obligation
+    # queued; drain it (this worker only registers monitor handlers, so the
+    # obligation truthfully fails as unknown_job_type) before step 2.
+    processing = worker.run_once(now=T0)
+    assert processing is not None
+    assert processing["job_type"] == "document_version_process"
+
     # 2. Second tick schedules another job, but global acquisition budget is now exhausted
     t1 = "2026-08-16T12:01:00Z"
     SchedulerService(tmp_db).tick(now=t1)
@@ -795,7 +802,7 @@ def test_phase14_migration_widens_outcome_and_preserves_existing_rows(tmp_db):
         conn.close()
 
     result = apply_migrations(tmp_db)
-    assert result.applied_versions == (14, 15)
+    assert result.applied_versions == (14, 15, 16)
 
     conn = storage.connect(tmp_db)
     try:

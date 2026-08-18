@@ -24,6 +24,7 @@ from urllib.parse import urljoin, urlparse
 
 from . import storage
 from .content_artifacts import ContentArtifactService, normalized_text_hash
+from .document_processing import enqueue_document_version_processing_tx
 from .domain import DomainNotFound, DomainValidation, new_id, normalized_text, utc_now
 from .url_norm import normalize_url, url_fingerprint
 
@@ -463,6 +464,7 @@ class AcquisitionService:
         url: str,
         *,
         channel: str = "direct_http",
+        monitor_id: str | None = None,
     ) -> DocumentAcquisitionResult:
         if channel not in {"direct_http", "page"}:
             raise DomainValidation("document acquisition channel must be direct_http or page")
@@ -550,6 +552,7 @@ class AcquisitionService:
                 text_length=len(normalized_text),
                 artifact_text=normalized_text,
                 content_kind=content_kind,
+                monitor_id=monitor_id,
             )
             if result.outcome == "retrieved":
                 self.profiles.record_success(source_id, channel, document_count=1, changed_count=1)
@@ -560,7 +563,7 @@ class AcquisitionService:
             self._record_failure(source_id, canonical, channel, exc)
             raise
 
-    def poll_feed(self, source_id: str, feed_url: str | None = None) -> FeedPollResult:
+    def poll_feed(self, source_id: str, feed_url: str | None = None, *, monitor_id: str | None = None) -> FeedPollResult:
         self._require_source(source_id)
         if feed_url is None:
             conn = storage.connect(self.db_path)
@@ -606,7 +609,9 @@ class AcquisitionService:
             content_type = _header(response.headers, "content-type") or "application/xml"
             raw_hash = raw_content_hash(response.body)
             normalized_hash = normalized_content_hash(response.body, content_type)
-            new_count, changed_count, unchanged_count, artifact_ids = self._persist_feed_entries(source_id, parsed.entries)
+            new_count, changed_count, unchanged_count, artifact_ids = self._persist_feed_entries(
+                source_id, parsed.entries, monitor_id=monitor_id
+            )
             outcome = "retrieved" if new_count or changed_count else "unchanged"
             event_id = self._record_event(
                 source_id=source_id,
@@ -661,6 +666,7 @@ class AcquisitionService:
         text_length: int,
         artifact_text: str,
         content_kind: str,
+        monitor_id: str | None = None,
     ) -> DocumentAcquisitionResult:
         conn = storage.connect(self.db_path)
         try:
@@ -720,11 +726,22 @@ class AcquisitionService:
                     conn, source_id, channel, request_url, final_url, "retrieved", response.status_code,
                     response.headers, len(response.body), document_id, version_id, raw_hash, normalized_hash,
                 )
+                enqueue_document_version_processing_tx(
+                    conn,
+                    version_id=version_id,
+                    monitor_id=monitor_id,
+                )
                 return DocumentAcquisitionResult("retrieved", source_id, request_url, final_url, document_id, version_id, event_id, raw_hash, normalized_hash, response.status_code, artifact_id=artifact["id"])
         finally:
             conn.close()
 
-    def _persist_feed_entries(self, source_id: str, entries: tuple[FeedEntry, ...]) -> tuple[int, int, int, tuple[str | None, ...]]:
+    def _persist_feed_entries(
+        self,
+        source_id: str,
+        entries: tuple[FeedEntry, ...],
+        *,
+        monitor_id: str | None = None,
+    ) -> tuple[int, int, int, tuple[str | None, ...]]:
         new_count = changed_count = unchanged_count = 0
         artifact_ids: list[str | None] = []
         conn = storage.connect(self.db_path)
@@ -784,6 +801,11 @@ class AcquisitionService:
                         VALUES (?, ?, ?, ?, 'metadata', ?, ?, ?)
                         """,
                         (version_id, document_id, now, entry_hash, artifact["id"], metadata, now),
+                    )
+                    enqueue_document_version_processing_tx(
+                        conn,
+                        version_id=version_id,
+                        monitor_id=monitor_id,
                     )
                     artifact_ids.append(artifact["id"])
                     if latest is not None:

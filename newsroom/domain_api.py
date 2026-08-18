@@ -557,6 +557,7 @@ class JobCreate(StrictModel):
     idempotency_key: Optional[str] = Field(default=None, max_length=300)
     monitor_id: Optional[str] = Field(default=None, max_length=200)
     research_question_id: Optional[str] = Field(default=None, max_length=200)
+    document_version_id: Optional[str] = Field(default=None, max_length=200)
     priority: int = Field(default=0, ge=-1000, le=1000)
     max_attempts: int = Field(default=3, ge=1, le=10)
     run_id: Optional[str] = Field(default=None, max_length=200)

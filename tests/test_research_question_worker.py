@@ -8,6 +8,7 @@ from newsroom import storage
 from newsroom.domain import CoreService, DomainConflict, DomainNotFound
 from newsroom.evidence import EvidenceService
 from newsroom.jobs import (
+    DOCUMENT_VERSION_PROCESS_JOB_TYPE,
     BudgetService,
     JobConflict,
     JobService,
@@ -87,7 +88,11 @@ def _question(db_path, *, question="a question about anything", search_attempt_b
 def test_production_handler_coverage(tmp_db):
     apply_migrations(tmp_db)
     handlers = build_worker_handlers(tmp_db)
-    produced = {SchedulerService.job_type, ResearchQuestionService.job_type}
+    produced = {
+        SchedulerService.job_type,
+        ResearchQuestionService.job_type,
+        DOCUMENT_VERSION_PROCESS_JOB_TYPE,
+    }
     missing = produced - set(handlers)
     assert not missing, f"enqueue producers without a production handler: {sorted(missing)}"
     assert set(handlers) == produced
@@ -207,7 +212,11 @@ def test_production_worker_queue_composes_domain_completion_hooks(tmp_db):
     apply_migrations(tmp_db)
     queue = build_worker_queue(tmp_db)
     assert queue.recovery_hook is research_job_recovery_hook
-    assert queue.rerun_factory is research_job_rerun_factory
+    # Phase 19 chains the Research Question and DocumentVersion processing
+    # rerun factories; the composed factory still routes research jobs through
+    # the research factory and declines unknown job types (generic fallback).
+    assert queue.rerun_factory is not None
+    assert queue.rerun_factory is not research_job_rerun_factory
     # Completion hooks are centrally composed; the Research Question hook is no
     # longer responsible for Monitor reconciliation.
     assert queue.completion_hook is not research_job_completion_hook

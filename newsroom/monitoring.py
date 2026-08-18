@@ -962,7 +962,11 @@ class MonitorExecutionService:
 
         try:
             if use_feed:
-                poll_result = self.acquisition.poll_feed(source_id=target_id, feed_url=feed_url)
+                poll_result = self.acquisition.poll_feed(
+                    source_id=target_id,
+                    feed_url=feed_url,
+                    monitor_id=monitor_id,
+                )
                 new_items = poll_result.new_count
                 changed_items = poll_result.changed_count
                 is_changed = (new_items > 0 or changed_items > 0)
@@ -1000,7 +1004,12 @@ class MonitorExecutionService:
                     "paid_used": False,
                 }
             else:
-                doc_result = self.acquisition.acquire_document(source_id=target_id, url=homepage_url, channel=doc_channel)
+                doc_result = self.acquisition.acquire_document(
+                    source_id=target_id,
+                    url=homepage_url,
+                    channel=doc_channel,
+                    monitor_id=monitor_id,
+                )
                 is_retrieved = doc_result.outcome == "retrieved"
                 if is_retrieved:
                     conn = storage.connect(self.db_path)

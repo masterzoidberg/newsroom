@@ -13,7 +13,11 @@ import uvicorn
 
 from .app import create_app
 from .config import RuntimeConfig
-from .jobs import JobService, compose_completion_hooks
+from .document_processing import (
+    DocumentProcessingExecutionService,
+    document_version_processing_rerun_factory,
+)
+from .jobs import JobService, compose_completion_hooks, compose_rerun_factories
 from .migrations import apply_migrations
 from .monitoring import MonitorExecutionService, monitor_job_completion_hook
 from .research_questions import (
@@ -107,6 +111,7 @@ def build_worker_handlers(db_path: str | Path) -> dict[str, Any]:
     return merge_handlers(
         MonitorExecutionService(db_path).handlers(),
         ResearchQuestionExecutionService(db_path).handlers(),
+        DocumentProcessingExecutionService(db_path).handlers(),
     )
 
 
@@ -116,6 +121,8 @@ def build_worker_queue(db_path: str | Path) -> JobService:
     Research Question and Monitor completion hooks are composed independently:
     both run inside the same write transaction as the durable job-state
     transition they accompany, and each ignores job types it does not own.
+    Rerun factories are chained the same way: the first factory that rebuilds
+    the job wins and all others fall through to the generic clone semantics.
     """
     return JobService(
         db_path,
@@ -124,7 +131,10 @@ def build_worker_queue(db_path: str | Path) -> JobService:
             research_job_completion_hook,
             monitor_job_completion_hook,
         ),
-        rerun_factory=research_job_rerun_factory,
+        rerun_factory=compose_rerun_factories(
+            research_job_rerun_factory,
+            document_version_processing_rerun_factory,
+        ),
     )
 
 
