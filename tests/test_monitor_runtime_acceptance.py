@@ -65,6 +65,7 @@ from newsroom.monitoring import (
     MonitorService,
     MonitoringPolicyService,
 )
+from newsroom.research_questions import ResearchQuestionService
 from newsroom.runtime import build_worker_handlers, build_worker_queue
 from newsroom.scheduler import SchedulerProcess
 from newsroom.worker import WorkerProcess
@@ -217,8 +218,11 @@ def test_production_composition_source_monitor_lifecycle_aaa_to_b(tmp_db):
         assert conn.execute("SELECT COUNT(*) FROM documents").fetchone()[0] == 1
         assert conn.execute("SELECT COUNT(*) FROM document_versions").fetchone()[0] == 1
         assert conn.execute("SELECT COUNT(*) FROM monitor_activity").fetchone()[0] == 1
+        # Exactly one version exists after the first acquisition, so a single
+        # row is unambiguous regardless of ordering. Capture its identity and
+        # content hash: this is the deterministic "first created" contract.
         v1 = conn.execute(
-            "SELECT id, content_hash FROM document_versions ORDER BY retrieved_at, id"
+            "SELECT id, content_hash FROM document_versions"
         ).fetchone()
     finally:
         conn.close()
@@ -251,10 +255,21 @@ def test_production_composition_source_monitor_lifecycle_aaa_to_b(tmp_db):
         assert conn.execute("SELECT COUNT(*) FROM documents").fetchone()[0] == 1
         assert conn.execute("SELECT COUNT(*) FROM document_versions").fetchone()[0] == 2
         versions = conn.execute(
-            "SELECT id, content_hash FROM document_versions ORDER BY retrieved_at, id"
+            "SELECT id, content_hash FROM document_versions"
         ).fetchall()
-        assert versions[1]["id"] != v1["id"]
-        assert versions[1]["content_hash"] != v1["content_hash"]
+        # Exactly two versions must exist. retrieved_at is second-resolution and
+        # ids are random, so positional ordering is NOT chronological truth.
+        # Identify the second version by set membership against the version
+        # captured at the first acquisition step, never by row position.
+        assert len(versions) == 2
+        ids = [row["id"] for row in versions]
+        hashes = [row["content_hash"] for row in versions]
+        assert v1["id"] in ids
+        assert len(set(ids)) == 2, f"expected two distinct version ids, got {ids}"
+        second = next(row for row in versions if row["id"] != v1["id"])
+        assert second["id"] != v1["id"]
+        assert len(set(hashes)) == 2, f"expected two distinct content hashes, got {hashes}"
+        assert second["content_hash"] != v1["content_hash"]
         assert conn.execute("SELECT COUNT(*) FROM monitor_activity").fetchone()[0] == 3
         jobs = conn.execute(
             "SELECT status, COUNT(*) FROM jobs WHERE monitor_id = ? GROUP BY status",
@@ -964,3 +979,82 @@ def test_production_handlers_cover_monitor_check_job_type(tmp_db):
     """
     handlers = build_worker_handlers(tmp_db)
     assert MONITOR_CHECK_JOB_TYPE in handlers
+
+
+def test_non_source_monitor_targets_fail_unsupported_target_without_acquisition(tmp_db):
+    """Every accepted-but-not-yet-executable Monitor target type (topic,
+    subject, story, research_question) must fail truthfully through the
+    production composition: ``error`` activity with ``unsupported_target``, a
+    failed durable job, and zero acquisition calls. Only ``source`` targets
+    currently execute real acquisition.
+    """
+    apply_migrations(tmp_db)
+    core = CoreService(tmp_db)
+    policy = MonitoringPolicyService(tmp_db).create({
+        "name": "unsupported-policy",
+        "allowed_channels": ["rss", "direct_http"],
+        "base_cadence_seconds": 60,
+        "min_cadence_seconds": 30,
+        "max_cadence_seconds": 300,
+    })
+
+    category = core.create_category({"slug": "tech", "name": "Tech"})
+    topic = core.create_topic({"category_id": category["id"], "slug": "topic-x", "name": "Topic X"})
+    subject = core.create_subject({"canonical_name": "Subject X", "subject_type": "company"})
+    story = core.create_story({"headline": "Story X"})
+    question = ResearchQuestionService(tmp_db).create({"question": "Question X?"})
+
+    monitors = MonitorService(tmp_db)
+    monitor_for: list[tuple[str, str]] = []
+    for target_type, target in (
+        ("topic", topic),
+        ("subject", subject),
+        ("story", story),
+        ("research_question", question),
+    ):
+        row = monitors.create({
+            "target_type": target_type,
+            "target_id": target["id"],
+            "policy_id": policy["id"],
+            "next_check_at": T0,
+        })
+        monitor_for.append((target_type, row["id"]))
+
+    transport = CountingTransport([])
+    _, worker, _ = _build_runtime(tmp_db, transport, worker_id="worker-unsupported")
+
+    scheduled = SchedulerProcess(tmp_db).run_once()
+    assert scheduled["enqueued"] == 4
+    assert len(_active_monitor_jobs(tmp_db, monitor_for[0][1])) == 1
+
+    drained = 0
+    for _ in range(8):
+        result = worker.run_once(now=T1)
+        if result is None:
+            break
+        drained += 1
+        assert result["status"] == "failed"
+    assert drained == 4
+
+    conn = storage.connect(tmp_db)
+    try:
+        assert conn.execute("SELECT COUNT(*) FROM documents").fetchone()[0] == 0
+        assert conn.execute("SELECT COUNT(*) FROM document_versions").fetchone()[0] == 0
+        assert conn.execute("SELECT COUNT(*) FROM acquisition_events").fetchone()[0] == 0
+        assert conn.execute("SELECT COUNT(*) FROM monitor_activity").fetchone()[0] == 4
+        for target_type, monitor_id in monitor_for:
+            activity = conn.execute(
+                "SELECT outcome, error_code FROM monitor_activity WHERE monitor_id = ?",
+                (monitor_id,),
+            ).fetchall()
+            assert len(activity) == 1, (target_type, monitor_id)
+            assert activity[0]["outcome"] == "error", (target_type, monitor_id)
+            assert activity[0]["error_code"] == "unsupported_target", (target_type, monitor_id)
+    finally:
+        conn.close()
+
+    for target_type, monitor_id in monitor_for:
+        last = MonitorService(tmp_db).get(monitor_id)
+        assert last["last_result"] == "error", (target_type, monitor_id)
+
+    assert transport.get_calls == 0

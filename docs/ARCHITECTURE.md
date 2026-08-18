@@ -43,6 +43,14 @@ activity history, and versioned approved scope snapshots. A monitor target must
 be a live Topic, Subject, Story, Source, or Research Question; disabled or
 unavailable targets are suppressed before queue insertion.
 
+Monitor target execution boundary: the schema and API accept `topic`, `subject`,
+`story`, `source`, and `research_question` targets, but only `source` targets
+currently have a real acquisition mechanism. A scheduled execution of any other
+target type is resolved by the production worker handler and truthfully records
+`error`/`unsupported_target` monitor activity without touching the network; it
+never fabricates `no_change` or `changed`. Implementing the missing target
+adapters is later roadmap work.
+
 ### Acquisition
 Connectors produce normalized candidate observations/documents. Provider-specific
 objects do not leak into Story/Claim domain models.
@@ -262,11 +270,14 @@ Invariants proven by `tests/test_monitor_runtime_acceptance.py`:
   etag, last-modified, retrieval timestamps) survives through Document →
   DocumentVersion → acquisition_events.
 
-Downstream intelligence stages (semantic relevance, AI article analysis,
-Evidence/Claims, Stories, Reports, Alerts) are not yet wired into this
-pipeline; they remain separate work for Prompt 5 and beyond.
+Downstream intelligence stages are not yet wired into this pipeline: the
+unattended Source → DocumentVersion loop stops after canonical persistence, and
+automatic relevance, article analysis, Evidence/Claims ingestion, Story
+evolution, Report revision, and Alert emission are Phase 20+ work. No monitor
+is allowed to recursively create unbounded work.
 
-No monitor is allowed to recursively create unbounded work.
+The current applied schema is migration 0014 / schema version 14 (see
+`newsroom/migrations.py`); the post-audit reconciliation added no migration.
 
 Due Research Questions use a separate bounded scheduler path: each tick can
 enqueue at most one durable `research_question` Job per due Question, and the

@@ -43,6 +43,18 @@ The current schema includes migration 0014/schema version 14. The clean-room
 migration-0013 result documented below remains valid only as historical
 rehearsal evidence and is not the current schema claim.
 
+### Post-audit reconciliation resolved by Phase 17 — 2026-08-18
+
+The nondeterministic acceptance assertion identified above was repaired in
+Phase 17: `test_monitor_runtime_acceptance.py` now identifies the first created
+DocumentVersion by the value persisted at the first acquisition step and
+compares the second version by set membership instead of positional
+`ORDER BY retrieved_at, id` ordering. The full backend suite (382 tests,
+including new accepted-but-unsupported Monitor target coverage) passes
+repeatedly, and frontend typecheck/build pass. This review's verdict remains
+unchanged: Phase 16 was a deployment rehearsal, not final product promotion;
+approval stays blocked on the Phase 17+ gates and operator acceptance steps.
+
 ## Release identity
 
 | Identity | Result |

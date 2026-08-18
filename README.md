@@ -44,7 +44,11 @@ Reconciliation and Green Baseline** is the current active phase, followed by the
 audit-driven integration/completion sequence through Phase 28. The current
 production Monitor path is reliable through Source acquisition and
 DocumentVersion persistence, but it does not yet automatically produce
-relevance, analysis, Evidence/Claims, Stories, Reports, or Alerts.
+relevance, analysis, Evidence/Claims, Stories, Reports, or Alerts. Only
+`source` Monitor targets perform real acquisition today; `topic`, `subject`,
+`story`, and `research_question` are accepted by the schema/API but explicitly
+unsupported at runtime (`error`/`unsupported_target`). The current applied
+schema is migration 0014 / schema version 14.
 
 ## Authority
 
