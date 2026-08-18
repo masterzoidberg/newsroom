@@ -49,3 +49,10 @@ Write `docs/reviews/PHASE_08_REVIEW.md`. Fix every Critical and Required finding
 rerun verification, and approve only when Phases 05-08 work safely together and
 do not regress the accepted evidence metrics. Record the accepted commit hash.
 Phase 09 remains blocked until approval.
+
+## Post-Audit Status — 2026-08-18
+
+This review plan remains historical. The current audit distinguishes the valid
+Source Monitor acquisition runtime from the missing post-acquisition relevance
+handoff and unsupported non-Source execution paths. Phase 17 establishes the
+correct baseline; Phase 20 owns automatic relevance.

@@ -23,11 +23,31 @@ The current worktree remains dirty, `Newsroom-API`/`Newsroom-Worker`/
 uninstalled. No new Critical or Required application finding was identified;
 the existing production-promotion blockers remain open.
 
+## Post-audit reconciliation — 2026-08-18
+
+The independent post-audit review supersedes the verification counts and
+runtime-completeness assumptions above while preserving them as historical
+Phase 16 evidence. The current published implementation checkpoint is
+`fe8be60b79780d2be9183121486fa5c846081120`; the worktree remains dirty because
+local artifacts are still untracked and the Phase 17–28 plan revision is now in
+progress.
+
+The current backend baseline collects 381 tests. A full run produced 380 passes
+and one failure in
+`tests/test_monitor_runtime_acceptance.py::test_production_composition_source_monitor_lifecycle_aaa_to_b`;
+an isolated rerun passed. The failure is a nondeterministic assertion caused by
+same-second timestamps and random-ID ordering, and must be reconciled in Phase
+17 before the suite is a release gate.
+
+The current schema includes migration 0014/schema version 14. The clean-room
+migration-0013 result documented below remains valid only as historical
+rehearsal evidence and is not the current schema claim.
+
 ## Release identity
 
 | Identity | Result |
 |---|---|
-| Current repository HEAD | `6cf5dfd326703853978e0b46f809900806b279d2` |
+| Current repository HEAD | `fe8be60b79780d2be9183121486fa5c846081120` |
 | Current worktree | Dirty; not eligible for promotion |
 | Clean-room rehearsal commit | `e78a5d521d75326e8235d2d341b68fd1fd71d690` |
 | Clean-room installed artifact digest | `fa6bc215f30dd4276b7099f8cbbeccc89be02643f3d65a31d22855c60cfa1c92` |
@@ -130,6 +150,13 @@ follow-up, alert creation/deduplication/delivery state, and evidence-grounded
 Ask Newsroom citations and refusal paths. The clean-room runtime smoke tested
 deployment plumbing, but did not manufacture production data or claim a physical
 mobile loop that was not run.
+
+The post-audit trace narrows that statement: those tests exercise separate
+service/API capabilities and manual compositions. The actual scheduled Source
+Monitor path currently ends after acquisition and DocumentVersion persistence;
+automatic relevance, article analysis, Evidence/Claims ingestion, Story
+evolution, report revision, and alert emission are not proven in one production
+workflow. Phase 23 is the revised unattended-loop gate.
 
 ## Acceptance metrics and known limitations
 

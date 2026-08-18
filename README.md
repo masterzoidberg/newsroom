@@ -11,8 +11,9 @@ reference implementation. **Hermes is not a runtime dependency.**
 
 The standalone deterministic core, evaluation foundation, evidence-ledger
 vertical slice, Phase 05 local-first AI routing, Phase 06 bounded source
-discovery/acquisition, Phase 07 durable jobs/scheduling, and Phase 08 persistent
-monitors with semantic relevance are implemented. Phase 09 Story evolution,
+acquisition, Phase 07 durable jobs/scheduling, and Phase 08 persistent monitor
+and relevance infrastructure are implemented. Autonomous Source discovery and
+automatic post-acquisition relevance remain incomplete. Phase 09 Story evolution,
 lineage, novelty classification, and review-independent material-update
 resurfacing are implemented. Phase 10 Research Questions, evidence-gap
 suggestions, and bounded follow-up Jobs are implemented. Phase 11
@@ -34,7 +35,16 @@ bounded logical export and retention, representative workload tests, and
 operator/recovery runbooks. Phase 16 adds an explicit Windows release identity,
 outside-repository production install layout, same-origin process launchers,
 bounded Task Scheduler restart configuration, and opt-in private Tailscale Serve
-configuration with final acceptance evidence.
+configuration with final acceptance rehearsal evidence; final promotion remains
+pending.
+
+The post-audit roadmap is authoritative at `plan/phases/README.md`. Phases
+01–16 remain historical implementation records; **Phase 17 — Runtime
+Reconciliation and Green Baseline** is the current active phase, followed by the
+audit-driven integration/completion sequence through Phase 28. The current
+production Monitor path is reliable through Source acquisition and
+DocumentVersion persistence, but it does not yet automatically produce
+relevance, analysis, Evidence/Claims, Stories, Reports, or Alerts.
 
 ## Authority
 

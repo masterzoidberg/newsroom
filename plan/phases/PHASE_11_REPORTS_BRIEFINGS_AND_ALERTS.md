@@ -52,3 +52,12 @@ Completed 2026-08-16.
   (270 passed); `python -m newsroom.evals validate`; `git diff --check`.
 - `poetry run format` and `poetry run test` remain unavailable because the
   repository's Poetry commands are misconfigured; direct checks above pass.
+
+## Post-Audit Status — 2026-08-18
+
+Living Reports, briefings, durable in-app alerts, deduplication, and delivery
+state remain implemented for existing evidence. Report generation and alert
+emission are manually/API triggered; monitored changes do not automatically
+create report revisions or alerts. Browser delivery currently stops at a
+database delivery state and does not emit a browser notification. Automation is
+Phase 23 work; real browser delivery is Phase 28 work.

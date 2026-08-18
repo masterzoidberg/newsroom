@@ -59,3 +59,11 @@ Verification:
 - `poetry run format` and `poetry run test` remain unavailable because the
   repository's Poetry scripts are misconfigured (`Required parameter missing -`
   and Windows `'test' is not recognized`); direct Python verification passes.
+
+## Post-Audit Status — 2026-08-18
+
+Question lifecycle state, attempts, durable Jobs, budgets, recovery, gap
+suggestions, and Claim/Evidence links remain implemented. Worker pursuit
+primarily searches existing local Claims and Evidence through the bounded FTS
+index; it does not yet perform external research or acquire new evidence.
+External pursuit is Phase 25 work.

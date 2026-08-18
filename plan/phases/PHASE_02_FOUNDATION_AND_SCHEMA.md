@@ -80,3 +80,10 @@ of scope for this phase. The generated frontend `dist` and `node_modules`
 remain ignored and are not runtime source data.
 
 Checkpoint commit: the Git commit containing this completion record.
+
+## Post-Audit Status — 2026-08-18
+
+The storage, migration, integrity, and runtime-root work remains valid. The
+historical acceptance record predates migration 0014; the current schema is
+version 14. Migration/version reconciliation, checksum enforcement review, and
+active-job indexing are Phase 17 and Phase 28 concerns.

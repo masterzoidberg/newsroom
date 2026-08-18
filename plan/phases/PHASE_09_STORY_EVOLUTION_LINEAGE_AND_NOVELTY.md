@@ -55,3 +55,11 @@ Completed 2026-08-16.
   replay and Phase 09 corpus grouping checks.
 - `poetry run format` and `poetry run test` remain unavailable because the
   repository's Poetry scripts are misconfigured; direct checks above pass.
+
+## Post-Audit Status — 2026-08-18
+
+Story resolution, evolution classification, lineage, chronology, and review
+attention remain available through services and authenticated APIs. The
+implementation is isolated from Source Monitor acquisition: no changed
+DocumentVersion automatically calls `StoryEvolutionService.process`. Automatic
+connection is Phase 23 work.

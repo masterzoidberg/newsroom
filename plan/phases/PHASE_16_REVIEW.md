@@ -55,3 +55,11 @@ results, acceptance metrics, deployed build identity, and residual risks. Fix al
 Critical and Required findings and rerun affected plus full verification. Approve
 only when the mature product and deployed environment satisfy every release gate.
 Record the final accepted commit; do not push automatically.
+
+## Post-Audit Status — 2026-08-18
+
+This is the historical final-acceptance checklist. The current audit reopens
+the release boundary: migration 0014 is current, the full suite has 381
+collected tests with one known flaky ordering assertion, and the actual
+Source-to-Report unattended loop remains unproven. Phase 17 is the active
+reconciliation gate; Phase 28 is the revised final acceptance gate.

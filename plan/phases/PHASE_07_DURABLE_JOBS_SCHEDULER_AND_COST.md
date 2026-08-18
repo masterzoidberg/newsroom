@@ -93,3 +93,12 @@ Completed 2026-08-16.
   adaptive activity/lifecycle cadence is deferred to the monitoring phases.
 - Process auto-start/service installation and unattended Windows supervision
   remain Phase 16 deployment work.
+
+## Post-Audit Status — 2026-08-18
+
+Durable `monitor_check` and `research_question` execution remains connected and
+the remediation of coalescing, ownership, retries, recovery, and completion
+hooks is valid. The production handler registry currently covers those two
+schedulable types; later phases must add any new processing type explicitly.
+Phase 19 will extend this architecture with a changed-DocumentVersion
+processing Job rather than coupling AI work into MonitorExecutionService.

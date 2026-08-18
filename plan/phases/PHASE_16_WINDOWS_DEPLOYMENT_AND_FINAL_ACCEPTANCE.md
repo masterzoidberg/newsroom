@@ -48,3 +48,12 @@ Windows tasks or Tailscale configuration were activated, and the target-device
 acceptance matrix plus standalone citation/important-Claim corpus metrics still
 require operator execution. The deployment script intentionally refuses to
 promote a dirty worktree.
+
+## Post-Audit Status — 2026-08-18
+
+This phase records a deployment rehearsal and release tooling, not final
+promotion. Its migration 1–13 rehearsal metadata is historical; the current
+repository contains migration 0014. The independent audit also established
+that the unattended Source-to-Report intelligence loop has not been proven.
+Approval remains blocked until the Phase 17–28 gates, clean release checks,
+physical acceptance, and final live tests complete.

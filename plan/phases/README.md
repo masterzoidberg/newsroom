@@ -4,6 +4,21 @@ This directory is the authoritative execution sequence for completing Newsroom.
 The product contract remains `plan/STANDALONE_NEWSROOM_PRODUCT_SPEC.md`; the
 mature-product description and `plan/MASTER_PLAN.md` provide broader context.
 
+## Post-Audit Status — 2026-08-18
+
+Phases 01–16 are the original implementation program and remain historical
+records. An independent post-remediation audit verified that the Source Monitor
+runtime is substantially reliable through acquisition and DocumentVersion
+persistence, but the unattended intelligence pipeline stops there. Earlier
+completion claims remain valid only within their documented component/manual
+scope where the annotations in those phase files say so.
+
+Phases 17–28 are the audit-driven integration and completion roadmap. They
+supersede conflicting or insufficient acceptance assumptions from Phases 01–16
+without rewriting those historical records.
+
+**Current active phase: Phase 17 — Runtime Reconciliation and Green Baseline.**
+
 ## How to assign work to Luna
 
 Point Luna to exactly one implementation or review file. Luna must read this
@@ -66,3 +81,50 @@ were required.
 | 14 | Ask Newsroom | |
 | 15 | Hardening, performance, and operations | |
 | 16 | Windows deployment and final acceptance | Review 16 |
+
+## Post-Audit Phase Index
+
+| Phase | Task | Gate |
+|---|---|---|
+| 17 | Runtime reconciliation and green baseline | Green baseline |
+| 18 | Durable normalized content artifact | Artifact verification |
+| 19 | Changed DocumentVersion processing Jobs | Processing lifecycle |
+| 20 | Semantic scope and automatic relevance | Relevance result |
+| 21 | Article analysis and real AI provider | Live Test B |
+| 22 | Verified Evidence and Claims automation | Evidence verification |
+| 23 | Story, Living Report, and Alert automation | Live Test C |
+| 24 | Source discovery and semantic vocabulary | Discovery canary |
+| 25 | External Research Question pursuit | External evidence |
+| 26 | Smart tagging | Tag provenance |
+| 27 | Complete product workflow UX | Browser workflow |
+| 28 | Browser delivery, hardening, and final acceptance | Final Live Test |
+
+## Recommended Dependency Map
+
+The primary sequence is intentionally conservative and SQLite/local-first:
+
+```text
+17 → 18 → 19 → 20 → 21 → 22 → 23 → 24 → 25 → 26 → 27 → 28
+```
+
+Phase 24 may prepare discovery/vocabulary contracts in parallel with late Phase
+23 review, but its runtime activation depends on Phase 20's scope contract.
+Phase 26 consumes Phase 21/22 analysis and verification even though it appears
+after Phase 25 in the primary sequence. No later phase may silently treat an
+isolated service or schema as an unattended product capability.
+
+## Live-Test Sequence
+
+- **Live Test A — after Phase 17:** real RSS/HTML → Scheduler → Worker →
+  Acquisition → DocumentVersion, including truthful `changed`, `no_change`, and
+  `error`; no AI.
+- **Live Test B — after Phase 21:** real public Source → changed content →
+  relevance → one real model-backed article analysis. Claims remain candidates.
+- **Live Test C — after Phase 23:** Source → relevance → analysis → verified
+  Evidence/Claims → Story → Living Report → in-app Alert.
+- **Final Live Test — after Phase 28:** public-source production workflow,
+  real browser delivery, and multi-day unattended execution.
+
+The historical review gates remain evidence for Phases 01–16. Phase 17 is the
+new active gate and must establish the baseline before the post-audit sequence
+advances.

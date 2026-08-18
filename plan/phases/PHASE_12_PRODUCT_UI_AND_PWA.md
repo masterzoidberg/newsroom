@@ -62,3 +62,11 @@ Completed 2026-08-16.
   The frontend `pnpm format`, `pnpm lint`, and `pnpm types` scripts are not
   defined in this package; direct checks pass. Review: approved in
   `docs/reviews/PHASE_12_REVIEW.md`.
+
+## Post-Audit Status — 2026-08-18
+
+The authenticated responsive shell, review surfaces, PWA shell, offline
+navigation, and operator views remain valid. The complete operating workflow is
+not complete: canonical Topic/Subject/Source CRUD, target pickers, Question
+pursuit, automatic analysis inspection, and several configuration paths still
+require raw IDs or API calls. Phase 27 is the future UX completion phase.

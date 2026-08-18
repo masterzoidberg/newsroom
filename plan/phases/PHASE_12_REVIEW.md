@@ -50,3 +50,10 @@ Write `docs/reviews/PHASE_12_REVIEW.md`. Fix all Critical and Required findings,
 rerun verification, and approve only when the end-to-end review product preserves
 evidence and monitoring invariants. Record the accepted commit hash. Phase 13
 remains blocked until approval.
+
+## Post-Audit Status — 2026-08-18
+
+This review plan remains historical and approved only for the delivered shell
+and review surfaces. The post-audit UX finding is that complete canonical setup,
+target selection, Question pursuit, and analysis workflows are not yet available
+without raw IDs or API calls. Phase 27 is the superseding completion gate.

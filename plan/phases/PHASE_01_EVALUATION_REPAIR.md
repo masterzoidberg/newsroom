@@ -71,3 +71,10 @@ FastAPI, migration, provider, or frontend work from later phases.
 ### Checkpoint
 
 Implementation checkpoint commit: `f3213df`.
+
+## Post-Audit Status — 2026-08-18
+
+This phase remains a historical, valid implementation record. The evaluation
+subsystem is complete within its stated standalone scope; it is not evidence
+that the current Newsroom runtime automatically produces intelligence outputs.
+The post-audit completion gates begin at Phase 17.

@@ -88,3 +88,11 @@ Completed 2026-08-16.
   exact evidence excerpts still require deliberate Evidence Ledger selection.
 - Source profiles remain observational dimensions and do not claim a universal
   source-trust score.
+
+## Post-Audit Status — 2026-08-18
+
+Bounded RSS/Atom and HTTP acquisition remains implemented and connected to the
+Source Monitor runtime. Autonomous Source discovery is not implemented:
+`source_suggestions` are persisted and reviewed but review does not discover,
+evaluate, or configure a Source. The phase title therefore covers two outcomes
+that must now be separated; discovery is Phase 24 work.

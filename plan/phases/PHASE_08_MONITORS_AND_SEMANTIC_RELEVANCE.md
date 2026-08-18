@@ -51,3 +51,13 @@ Completed 2026-08-16.
   repository's Poetry scripts are misconfigured; direct checks above pass.
 
 Next: run `PHASE_08_REVIEW.md`.
+
+## Post-Audit Status — 2026-08-18
+
+Monitor lifecycle, scope storage, approval-gated vocabulary records, the
+deterministic relevance cascade, scheduler cadence, and truthful activity
+outcomes remain implemented. Only Source targets currently execute acquisition;
+topic, subject, story, and research-question targets are accepted by the API
+but fail as unsupported at worker execution. Production Source acquisition
+does not automatically invoke relevance. Phase 20 defines the processing and
+scope handoff; Phase 24 defines real vocabulary expansion.

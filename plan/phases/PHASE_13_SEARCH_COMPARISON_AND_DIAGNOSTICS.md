@@ -48,4 +48,11 @@ Completed 2026-08-16.
   Subject-context, and Monitor-health surfaces.
 - Verification: Phase 13 tests, full `pytest`, frontend typecheck/build, and
   `git diff --check` pass. Optional semantic retrieval remains disabled because
-  no benchmark has demonstrated material value.
+ no benchmark has demonstrated material value.
+
+## Post-Audit Status — 2026-08-18
+
+Search, comparison, notes, diagnostics, Subject context, and the Workbench
+remain implemented. The namespaced `tag_type='smart'` schema/API is not a
+smart-tagging engine: no classifier/model produces confidence- and
+provenance-backed tags. Smart tagging is Phase 26 work.

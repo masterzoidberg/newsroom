@@ -49,3 +49,10 @@ Completed 2026-08-16.
   routes, and the responsive Ask Newsroom UI.
 - Verification: Phase 14 backend/frontend tests, full project tests,
   frontend typecheck/build, browser smoke verification, and diff review pass.
+
+## Post-Audit Status — 2026-08-18
+
+Ask Newsroom remains complete within its bounded local-index scope, including
+structured answer classifications, citations, refusal behavior, cancellation,
+and audit metadata. It is not external research and does not repair the missing
+Source-to-intelligence pipeline; Phase 25 owns external Question pursuit.

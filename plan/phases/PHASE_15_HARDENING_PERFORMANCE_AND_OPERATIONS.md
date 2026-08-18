@@ -72,3 +72,11 @@ The repository's prescribed `poetry run format`, `poetry run test`, `pnpm
 format`, `pnpm lint`, and `pnpm types` wrappers are not configured in this
 workspace; their direct equivalents above were run successfully. No commit or
 deployment was performed.
+
+## Post-Audit Status — 2026-08-18
+
+The local hardening, backup/restore, export, retention, telemetry, runbooks,
+and representative workload controls remain valid. They do not constitute final
+production acceptance: the intended intelligence loop, real provider, browser
+delivery, Windows tasks, physical-device checks, and multi-day unattended run
+remain open under Phases 21, 23, and 28.

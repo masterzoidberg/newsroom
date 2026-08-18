@@ -46,3 +46,10 @@ Write `docs/reviews/PHASE_04_REVIEW.md` with severity-ranked findings and exact
 evidence. Fix all Critical and Required findings, rerun verification, and approve
 only when Phases 01-04 jointly satisfy their exit gates. Record the accepted
 commit hash. Phase 05 remains blocked until approval.
+
+## Post-Audit Status — 2026-08-18
+
+This review plan and its historical approval record remain part of the Phase 04
+history. The post-audit finding that the Evidence Ledger is manual/API-only and
+not connected to acquired content is superseding completion work for the new
+Phase 18 and Phase 22 gates; it does not invalidate the manual vertical slice.

@@ -70,3 +70,11 @@ Completed 2026-08-16.
 - Verdict: Approved; no Critical or Required findings remain.
 - Accepted implementation commit: `65f083e1365c59476b384d7914a51a3ed36adeba`
   (includes the migration 0004 review fix).
+
+## Post-Audit Status — 2026-08-18
+
+The Evidence Ledger is complete for the deliberate manual/API vertical slice.
+It is not automatically connected to acquired DocumentVersions, and current
+EvidenceSpan creation does not verify a caller-supplied excerpt against durable
+normalized content. Automatic content anchoring is deferred to Phases 18 and
+22; this historical phase is not rewritten.
