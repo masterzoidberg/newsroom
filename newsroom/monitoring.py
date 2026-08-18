@@ -37,6 +37,7 @@ TARGET_TABLES = {
     "source": "sources",
     "research_question": "research_questions",
 }
+INFORMATION_NEED_TYPES = frozenset({"topic", "subject", "story", "research_question"})
 ALLOWED_CHANNELS = frozenset({"rss", "atom", "direct_http", "page", "search", "api", "local"})
 POLICY_PRIORITIES = frozenset({"low", "normal", "high", "urgent"})
 SUGGESTION_TYPES = frozenset(
@@ -95,6 +96,30 @@ def _nonnegative_int(value: Any, field: str) -> int:
     if isinstance(value, bool) or not isinstance(value, int) or value < 0:
         raise DomainValidation(f"{field} must be a nonnegative integer")
     return value
+
+
+def _normalize_information_need(
+    need_type: Any, need_id: Any
+) -> tuple[str | None, str | None]:
+    """Normalize and validate the optional monitor information-need association.
+
+    An information need is a canonical reference to a persisted Topic, Subject,
+    Story, or Research Question. It must be supplied as a pair and may be
+    cleared by supplying both ``None`` (falling back to the monitor target).
+    Fields are stripped; empty values behave as absent so API `exclude_none`
+    and explicit `None` removals stay consistent.
+    """
+    need_type = str(need_type).strip() if need_type is not None else None
+    need_id = str(need_id).strip() if need_id is not None else None
+    if not need_type and not need_id:
+        return None, None
+    if not need_type or not need_id:
+        raise DomainValidation("need_type and need_id must be supplied together")
+    if need_type not in INFORMATION_NEED_TYPES:
+        raise DomainValidation(
+            "monitor need_type must be topic, subject, story, or research_question"
+        )
+    return need_type, need_id
 
 
 def _bounded_seconds(value: Any, field: str) -> int:
@@ -481,6 +506,7 @@ class MonitorService:
         policy_id = str(data.get("policy_id", ""))
         if target_type not in TARGET_TABLES or not target_id or not policy_id:
             raise DomainValidation("target_type, target_id, and policy_id are required")
+        need_type, need_id = _normalize_information_need(data.get("need_type"), data.get("need_id"))
         identifier = str(data.get("id") or new_id("mon"))
         now = _timestamp(data.get("created_at") or utc_now())
         conn = storage.connect(self.db_path)
@@ -488,6 +514,8 @@ class MonitorService:
             with storage.write_tx(conn):
                 if not self._target_exists(conn, target_type, target_id):
                     raise DomainNotFound("monitor target not found")
+                if need_type is not None and not self._target_exists(conn, need_type, need_id):
+                    raise DomainNotFound("monitor information need target not found")
                 policy = conn.execute("SELECT * FROM monitoring_policies WHERE id = ?", (policy_id,)).fetchone()
                 if policy is None:
                     raise DomainNotFound("monitoring policy not found")
@@ -501,16 +529,21 @@ class MonitorService:
                     raise DomainValidation("enabled must be boolean")
                 conn.execute(
                     """
-                    INSERT INTO monitors(id, target_type, target_id, policy_id, enabled, next_check_at,
-                                         last_run_at, last_result, created_at, updated_at)
-                    VALUES (?, ?, ?, ?, ?, ?, NULL, NULL, ?, ?)
+                    INSERT INTO monitors(id, target_type, target_id, policy_id, need_type, need_id,
+                                         enabled, next_check_at, last_run_at, last_result, created_at, updated_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?, ?)
                     """,
-                    (identifier, target_type, target_id, policy_id, int(enabled), next_check_at, now, now),
+                    (identifier, target_type, target_id, policy_id, need_type, need_id, int(enabled), next_check_at, now, now),
                 )
+                # The canonical scope snapshot is the approved need scope when
+                # the monitor carries an information need, otherwise the
+                # monitor target scope. Pending/rejected vocabulary suggestions
+                # never enter this snapshot.
+                scope = _scope_for_target(conn, need_type or target_type, need_id or target_id)
                 self._write_scope_history(
                     conn,
                     identifier,
-                    _scope_for_target(conn, target_type, target_id),
+                    scope,
                     change_type="initial",
                     changed_by=data.get("created_by"),
                     created_at=now,
@@ -550,7 +583,7 @@ class MonitorService:
 
     def update(self, identifier: str, data: Mapping[str, Any]) -> dict[str, Any]:
         current = self.get(identifier)
-        allowed = {"policy_id", "enabled", "next_check_at"}
+        allowed = {"policy_id", "enabled", "next_check_at", "need_type", "need_id"}
         values = {key: value for key, value in data.items() if key in allowed}
         if not values:
             raise DomainValidation("at least one monitor field must be supplied")
@@ -566,11 +599,43 @@ class MonitorService:
                 policy_id = values.get("policy_id", current["policy_id"])
                 if conn.execute("SELECT 1 FROM monitoring_policies WHERE id = ?", (policy_id,)).fetchone() is None:
                     raise DomainNotFound("monitoring policy not found")
+                if "need_type" in values or "need_id" in values:
+                    need_type, need_id = _normalize_information_need(
+                        values.get("need_type", current["need_type"]),
+                        values.get("need_id", current["need_id"]),
+                    )
+                    if need_type is not None and not self._target_exists(conn, need_type, need_id):
+                        raise DomainNotFound("monitor information need target not found")
+                    values["need_type"], values["need_id"] = need_type, need_id
                 if "next_check_at" in values:
                     values["next_check_at"] = _timestamp(values["next_check_at"]) if values["next_check_at"] is not None else None
                 conn.execute(
-                    "UPDATE monitors SET policy_id = ?, enabled = ?, next_check_at = ?, updated_at = ? WHERE id = ?",
-                    (policy_id, int(values.get("enabled", current["enabled"])), values.get("next_check_at", current["next_check_at"]), utc_now(), identifier),
+                    "UPDATE monitors SET policy_id = ?, enabled = ?, next_check_at = ?, need_type = ?, need_id = ?, updated_at = ? WHERE id = ?",
+                    (
+                        policy_id,
+                        int(values.get("enabled", current["enabled"])),
+                        values.get("next_check_at", current["next_check_at"]),
+                        values.get("need_type", current.get("need_type")),
+                        values.get("need_id", current.get("need_id")),
+                        utc_now(),
+                        identifier,
+                    ),
+                )
+                # An explicit monitor edit is a scope change. Snapshot the
+                # canonical scope (need scope when present, else target scope);
+                # identical snapshots are deduplicated and append no version.
+                scope = _scope_for_target(
+                    conn,
+                    values.get("need_type", current.get("need_type")) or current["target_type"],
+                    values.get("need_id", current.get("need_id")) or current["target_id"],
+                )
+                self._write_scope_history(
+                    conn,
+                    identifier,
+                    scope,
+                    change_type="manual",
+                    changed_by=data.get("changed_by"),
+                    created_at=utc_now(),
                 )
         finally:
             conn.close()
@@ -690,6 +755,38 @@ class MonitorService:
         finally:
             conn.close()
 
+    def scope_at_version(self, identifier: str, version: int) -> RelevanceScope:
+        """Resolve the immutable approved scope snapshot pinned by ``version``.
+
+        Phase 20 pins the ``monitor_scope_history`` version at acquisition
+        time, so processing evaluates the exact approved scope that applied to
+        that obligation rather than any later mutable scope. The snapshot
+        row is immutable (append-only history); a missing version or a
+        malformed payload is a truthfully rejected provenance error, never a
+        silent scope substitution.
+        """
+        if isinstance(version, bool) or not isinstance(version, int) or version < 1:
+            raise DomainValidation("scope version must be a positive integer")
+        conn = storage.connect(self.db_path)
+        try:
+            row = conn.execute(
+                "SELECT scope_json FROM monitor_scope_history WHERE monitor_id = ? AND version = ?",
+                (identifier, version),
+            ).fetchone()
+        finally:
+            conn.close()
+        if row is None:
+            raise DomainNotFound(
+                f"approved scope snapshot version {version} not found for monitor '{identifier}'"
+            )
+        data = _decode(row[0], None)
+        if not isinstance(data, Mapping):
+            raise DomainValidation("malformed persisted monitor scope snapshot")
+        try:
+            return RelevanceScope(**data)
+        except TypeError as exc:
+            raise DomainValidation(f"malformed persisted monitor scope snapshot: {exc}") from exc
+
     def refresh_topic_scopes(self, topic_id: str, *, changed_by: str | None = None, change_type: str = "approved") -> int:
         now = utc_now()
         conn = storage.connect(self.db_path)
@@ -698,7 +795,17 @@ class MonitorService:
             with storage.write_tx(conn):
                 if conn.execute("SELECT 1 FROM topics WHERE id = ? AND deleted_at IS NULL", (topic_id,)).fetchone() is None:
                     raise DomainNotFound("topic not found")
-                rows = conn.execute("SELECT id FROM monitors WHERE target_type = 'topic' AND target_id = ?", (topic_id,)).fetchall()
+                # Refresh every monitor whose approved scope derives from this
+                # topic: monitors that directly target the topic and semantic
+                # monitors whose information need references the topic.
+                rows = conn.execute(
+                    """
+                    SELECT id FROM monitors
+                    WHERE (target_type = 'topic' AND target_id = ?)
+                       OR (need_type = 'topic' AND need_id = ?)
+                    """,
+                    (topic_id, topic_id),
+                ).fetchall()
                 scope = _scope_for_target(conn, "topic", topic_id)
                 for row in rows:
                     changed += int(self._write_scope_history(conn, row[0], scope, change_type=change_type, changed_by=changed_by, created_at=now))
@@ -830,6 +937,182 @@ class ScopeSuggestionService:
         if approved and topic_id:
             MonitorService(self.db_path).refresh_topic_scopes(topic_id, changed_by=reviewed_by, change_type="approved")
         return self.get(identifier)
+
+
+class DocumentVersionRelevanceService:
+    """Durable, idempotent relevance decisions for DocumentVersion obligations.
+
+    Phase 20: the processing handler evaluates verified normalized content
+    against the approved scope snapshot pinned at acquisition and persists one
+    canonical decision per (document_version_id, monitor_id, scope_version).
+    Retries, lease recovery, and explicit reruns reuse the canonical decision
+    instead of duplicating or silently overwriting it; only the first
+    creation also emits the monitor's ``relevant_change`` activity and a
+    zero-cost local usage row, all inside one write transaction so a crash can
+    never split the decision from its provenance.
+    """
+
+    def __init__(self, db_path: str | Path):
+        self.db_path = Path(db_path)
+
+    @staticmethod
+    def _readable(row: sqlite3.Row) -> dict[str, Any]:
+        result = dict(row)
+        result["matched_terms"] = _decode(result.pop("matched_terms_json"), [])
+        result["scope"] = _decode(result.pop("scope_json"), {})
+        result["relevant"] = bool(result["relevant"])
+        result["paid_used"] = bool(result["paid_used"])
+        return result
+
+    def get(self, relevance_id: str) -> dict[str, Any]:
+        conn = storage.connect(self.db_path)
+        try:
+            row = conn.execute("SELECT * FROM document_version_relevance WHERE id = ?", (relevance_id,)).fetchone()
+            if row is None:
+                raise DomainNotFound("document version relevance record not found")
+            return self._readable(row)
+        finally:
+            conn.close()
+
+    def records_for_document_version(self, document_version_id: str) -> list[dict[str, Any]]:
+        conn = storage.connect(self.db_path)
+        try:
+            rows = conn.execute(
+                "SELECT * FROM document_version_relevance WHERE document_version_id = ? ORDER BY created_at, id",
+                (document_version_id,),
+            ).fetchall()
+            return [self._readable(row) for row in rows]
+        finally:
+            conn.close()
+
+    def persist_decision(
+        self,
+        *,
+        job_id: str | None,
+        document_version_id: str,
+        monitor_id: str,
+        scope_version: int,
+        scope: RelevanceScope,
+        result: RelevanceResult,
+        observed_at: str | None = None,
+    ) -> dict[str, Any]:
+        observed = _timestamp(observed_at)
+        encoded_scope = json.dumps(scope.as_dict(), sort_keys=True, separators=(",", ":"))
+        encoded_terms = json.dumps(list(result.matched_terms), sort_keys=True, separators=(",", ":"))
+        conn = storage.connect(self.db_path)
+        try:
+            with storage.write_tx(conn):
+                existing = conn.execute(
+                    """
+                    SELECT * FROM document_version_relevance
+                    WHERE document_version_id = ? AND monitor_id = ? AND scope_version = ?
+                    """,
+                    (document_version_id, monitor_id, scope_version),
+                ).fetchone()
+                if existing is not None:
+                    return self._readable(existing)
+                identifier = new_id("rel")
+                try:
+                    conn.execute(
+                        """
+                        INSERT INTO document_version_relevance
+                            (id, document_version_id, monitor_id, job_id, scope_version,
+                             scope_json, relevant, stage, score, matched_terms_json,
+                             reason, algorithm, paid_used, created_at)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?)
+                        """,
+                        (
+                            identifier,
+                            document_version_id,
+                            monitor_id,
+                            job_id,
+                            scope_version,
+                            encoded_scope,
+                            int(result.relevant),
+                            result.stage,
+                            float(result.score),
+                            encoded_terms,
+                            (result.reason or "")[:2000],
+                            "deterministic_relevance_cascade_v1",
+                            observed,
+                        ),
+                    )
+                except sqlite3.IntegrityError:
+                    # A concurrent processor created the same canonical
+                    # decision first; reference it instead of duplicating.
+                    existing = conn.execute(
+                        """
+                        SELECT * FROM document_version_relevance
+                        WHERE document_version_id = ? AND monitor_id = ? AND scope_version = ?
+                        """,
+                        (document_version_id, monitor_id, scope_version),
+                    ).fetchone()
+                    if existing is None:
+                        raise
+                    return self._readable(existing)
+                # Zero-cost local usage: deterministic cascade only, never
+                # a paid provider. Recorded atomically with the decision.
+                conn.execute(
+                    """
+                    INSERT INTO provider_usage
+                        (id, job_id, monitor_id, research_question_id, capability,
+                         provider, request_type, query_units, token_units,
+                         estimated_cost_usd, latency_ms, outcome, created_at)
+                    VALUES (?, ?, ?, NULL, 'relevance', 'local', 'deterministic_cascade',
+                            0, 0, 0.0, NULL, ?, ?)
+                    """,
+                    (
+                        new_id("usage"),
+                        job_id,
+                        monitor_id,
+                        "relevant" if result.relevant else "not_relevant",
+                        observed,
+                    ),
+                )
+                if result.relevant:
+                    _record_relevant_change_tx(conn, monitor_id, observed)
+                record = conn.execute(
+                    "SELECT * FROM document_version_relevance WHERE id = ?",
+                    (identifier,),
+                ).fetchone()
+                return self._readable(record)
+        finally:
+            conn.close()
+
+
+def _record_relevant_change_tx(conn: sqlite3.Connection, monitor_id: str, observed_at: str) -> None:
+    """Record the monitor activity for a confirmed relevance in the caller's tx.
+
+    Mirrors ``MonitorService.record_activity``'s ``relevant_change`` branch
+    exactly (append-only activity row with ``relevant_items=1`` and the
+    existing cadence semantics: the next check drops to the policy minimum).
+    Running inside the relevance-decision transaction makes the activity and
+    the decision atomic, so retries can never double-emit: the emission is
+    guarded by the relevance record's UNIQUE identity.
+    """
+    row = conn.execute(
+        "SELECT m.*, p.min_cadence_seconds, p.max_cadence_seconds "
+        "FROM monitors AS m JOIN monitoring_policies AS p ON p.id = m.policy_id "
+        "WHERE m.id = ?",
+        (monitor_id,),
+    ).fetchone()
+    if row is None:
+        raise DomainNotFound("monitor not found")
+    conn.execute(
+        "INSERT INTO monitor_activity(id, monitor_id, outcome, new_items, changed_items, relevant_items, error_code, observed_at, created_at) "
+        "VALUES (?, ?, 'relevant_change', 0, 0, 1, NULL, ?, ?)",
+        (new_id("activity"), monitor_id, observed_at, observed_at),
+    )
+    cadence = int(row["min_cadence_seconds"])
+    cadence = max(
+        int(row["min_cadence_seconds"]),
+        min(int(row["max_cadence_seconds"]), max(1, cadence)),
+    )
+    next_check = _plus_seconds(observed_at, cadence)
+    conn.execute(
+        "UPDATE monitors SET next_check_at = ?, last_run_at = ?, last_result = 'relevant_change', updated_at = ? WHERE id = ?",
+        (next_check, observed_at, observed_at, monitor_id),
+    )
 
 
 class MonitorExecutionService:
@@ -1237,6 +1520,7 @@ def monitor_job_completion_hook(
 
 
 __all__ = [
+    "DocumentVersionRelevanceService",
     "MonitorService",
     "MonitorExecutionService",
     "MonitoringPolicyService",

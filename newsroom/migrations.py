@@ -1508,6 +1508,56 @@ MIGRATION_0016_CHECKSUM = hashlib.sha256(
     "\n".join(MIGRATION_0016_STATEMENTS).encode("utf-8")
 ).hexdigest()
 
+# Phase 20 — semantic scope and automatic relevance. Two additions:
+#
+# 1. monitors gains the explicit, OPTIONAL approved information-need
+#    association (need_type/need_id referencing a Topic, Subject, Story, or
+#    Research Question). A Source Monitor with a need is a semantic monitor
+#    whose approved scope comes from that need; a Source Monitor without one
+#    is explicitly classified acquisition-only. History rows are untouched: the
+#    columns are NULL for every pre-Phase-20 monitor, which remains a truthful
+#    acquisition-only classification.
+#
+# 2. document_version_relevance durably records each deterministic relevance
+#    decision for a DocumentVersion against one approved scope snapshot. The
+#    row pins the originating monitor and the monitor_scope_history version
+#    used, copies the full approved snapshot (scope_json) so the decision is
+#    reproducible even if the monitor's mutable scope later changes, and
+#    keeps the matched terms/stage/score/reason/provenance of the decision.
+#    UNIQUE(document_version_id, monitor_id, scope_version) is the canonical
+#    relevance identity: retries, lease recovery, and explicit reruns all
+#    reference one decision rather than duplicating or overwriting history.
+#    Article text is never stored here.
+MIGRATION_0017_STATEMENTS: tuple[str, ...] = (
+    "ALTER TABLE monitors ADD COLUMN need_type TEXT CHECK (need_type IS NULL OR need_type IN ('topic', 'subject', 'story', 'research_question'))",
+    "ALTER TABLE monitors ADD COLUMN need_id TEXT",
+    """
+    CREATE TABLE document_version_relevance (
+        id TEXT PRIMARY KEY,
+        document_version_id TEXT NOT NULL REFERENCES document_versions(id),
+        monitor_id TEXT NOT NULL REFERENCES monitors(id),
+        job_id TEXT REFERENCES jobs(id),
+        scope_version INTEGER NOT NULL CHECK (scope_version > 0),
+        scope_json TEXT NOT NULL,
+        relevant INTEGER NOT NULL CHECK (relevant IN (0, 1)),
+        stage TEXT NOT NULL,
+        score REAL NOT NULL CHECK (score >= 0.0 AND score <= 1.0),
+        matched_terms_json TEXT NOT NULL DEFAULT '[]',
+        reason TEXT NOT NULL DEFAULT '',
+        algorithm TEXT NOT NULL DEFAULT 'deterministic_relevance_cascade_v1',
+        paid_used INTEGER NOT NULL DEFAULT 0 CHECK (paid_used IN (0, 1)),
+        created_at TEXT NOT NULL,
+        UNIQUE (document_version_id, monitor_id, scope_version)
+    )
+    """,
+    "CREATE INDEX document_version_relevance_version_idx ON document_version_relevance(document_version_id, monitor_id)",
+    "CREATE INDEX document_version_relevance_monitor_idx ON document_version_relevance(monitor_id, scope_version)",
+)
+
+MIGRATION_0017_CHECKSUM = hashlib.sha256(
+    "\n".join(MIGRATION_0017_STATEMENTS).encode("utf-8")
+).hexdigest()
+
 
 @dataclass(frozen=True)
 class MigrationResult:
@@ -1567,6 +1617,7 @@ def apply_migrations(db_path: Optional[str | Path] = None) -> MigrationResult:
                 14: MIGRATION_0014_STATEMENTS,
                 15: MIGRATION_0015_STATEMENTS,
                 16: MIGRATION_0016_STATEMENTS,
+                17: MIGRATION_0017_STATEMENTS,
             }
             for version, statements in migrations.items():
                 if version in existing:

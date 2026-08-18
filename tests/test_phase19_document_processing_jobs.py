@@ -304,7 +304,7 @@ def test_processing_handler_resolves_version_and_verified_artifact(tmp_db):
     assert check_database(tmp_db).ok is True
 
 
-def test_processing_handler_never_invokes_intelligence(tmp_db):
+def test_processing_handler_only_runs_deterministic_local_relevance(tmp_db):
     source, _policy, monitor = _bootstrap(tmp_db, slug="p19-noai", homepage="https://example.test/noai")
     transport = CountingTransport([HttpResponse(200, "https://example.test/noai", {"content-type": "text/html"}, HTML_A)])
     worker = _monitor_worker(tmp_db, transport, worker_id="worker-p19-noai")
@@ -316,8 +316,15 @@ def test_processing_handler_never_invokes_intelligence(tmp_db):
     )
     finished = processor.run_once(now=T1)
     assert finished["status"] == "succeeded"
-    for forbidden in ("relevance", "score", "analysis"):
-        assert forbidden not in finished["result"]
+    # Phase 20 evaluates deterministic relevance. This monitor carries no
+    # approved information need, so the truthful outcome is an explicit
+    # not_applicable, never a fabricated relevant/not-relevant and never an
+    # analysis stage.
+    relevance = finished["result"]["relevance"]
+    assert relevance["status"] == "not_applicable"
+    assert "relevant" not in relevance
+    assert relevance["paid_used"] is False
+    assert "analysis" not in finished["result"]
 
     for table in ("evidence_spans", "claims", "stories", "story_revisions", "living_reports", "alerts"):
         assert _count(tmp_db, table) == 0, table
@@ -327,6 +334,7 @@ def test_processing_handler_never_invokes_intelligence(tmp_db):
     finally:
         conn.close()
     assert rows and all(row[0] == "acquisition" for row in rows)
+    assert _count(tmp_db, "document_version_relevance") == 0
 
 
 # ---------------------------------------------------------------------------

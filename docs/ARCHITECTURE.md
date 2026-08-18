@@ -128,7 +128,7 @@ claim, while `provider_usage` remains the actual cost ledger.
 Phase 08 monitor jobs carry the policy's acquisition, local-model, and USD
 budget only; they cannot silently broaden scope or recursively create work.
 
-### DocumentVersion processing obligations (Phase 19)
+### DocumentVersion processing obligations (Phase 19/20)
 
 `document_version_process` is the durable orchestration substrate between
 acquisition and future intelligence stages. The canonical work item is the
@@ -138,8 +138,14 @@ persisted `DocumentVersion`:
       → changed DocumentVersion + Phase 18 artifact
       → document_version_process Job (same write transaction)
       → processing Worker handler
-      → deterministic lifecycle result
-      → STOP before relevance
+      → verified artifact + approved relevance scope (Phase 20)
+      → deterministic local relevance decision (persisted)
+      → terminal processing result
+      → STOP before article analysis
+
+Phase 19 established the obligation itself and stopped before relevance;
+Phase 20 executes the deterministic relevance stage inside the same handler
+(see "Automatic relevance and semantic scope" below).
 
 Every changed/new acquisition — HTML/text documents and each new feed entry —
 creates at most one processing obligation. `not_modified`, unchanged content,
@@ -179,16 +185,104 @@ The Phase-19 handler resolves the canonical version, loads the hash-verified
 Phase 18 normalized content artifact
 (`ContentArtifactService.load_normalized_content`), and returns a bounded
 deterministic result (version/artifact IDs, content hash, normalized hash,
-kind, length) persisted in `jobs.result_json` (Migration 0016). It never
-invokes the relevance cascade, AI providers, semantic extraction,
-Evidence/Claims creation, Story evolution, Reports, or Alerts, and never
-re-fetches remote content. Legacy pre-Phase-18 versions without artifacts fail
-terminally and truthfully (`LegacyVersionWithoutArtifact`); missing or corrupt
-artifacts fail terminally via the Phase 18 fail-closed loader. Transient
-SQLite conditions use the existing bounded retry semantics; all other
-processing failures are terminal integrity outcomes. Lease expiry, recovery,
-cancellation, and restart behavior are the repaired generic JobService
-semantics — no independent lease system exists.
+kind, length, and — since Phase 20 — the persisted relevance decision)
+written to `jobs.result_json` (Migration 0016). It never invokes AI providers,
+semantic extraction, Evidence/Claims creation, Story evolution, Reports, or
+Alerts, and never re-fetches remote content. Legacy pre-Phase-18 versions
+without artifacts fail terminally and truthfully
+(`LegacyVersionWithoutArtifact`); missing or corrupt artifacts fail terminally
+via the Phase 18 fail-closed loader. Transient SQLite conditions use the
+existing bounded retry semantics; all other processing failures are terminal
+integrity outcomes. Lease expiry, recovery, cancellation, and restart behavior
+are the repaired generic JobService semantics — no independent lease system
+exists.
+
+### Automatic relevance and semantic scope (Phase 20)
+
+Phase 20 answers "was this acquired content relevant to the approved
+monitoring scope?" with an explainable, durable, deterministic result. No
+remote AI provider, no article analysis, no automated Evidence/Claims, Story,
+Report, or Alert work exists here.
+
+**Semantic scope ownership.** A Source answers *where* Newsroom looks; a
+Monitor answers *what* the user is looking for. Every Monitor carries an
+explicit, optional approved information-need association (`monitors.need_type`
+/ `need_id`, Migration 0017) referencing a persisted Topic, Subject, Story, or
+Research Question:
+
+- A Monitor **with a need** is a semantic Monitor: its approved scope is the
+  need's approved vocabulary, snapshotted into the existing immutable,
+  versioned `monitor_scope_history` at creation/update and whenever the
+  need's vocabulary changes (`refresh_topic_scopes` also refreshes
+  need-based Monitors on approval of Topic terms).
+- A Monitor **without a need** is explicitly classified **acquisition-only**:
+  its obligations succeed with an explicit `not_applicable` relevance result
+  and no relevance record — never a fabricated relevant/not-relevant.
+- The scope is never inferred from Source name/URL, never global, and never
+  caller-supplied. Pending or rejected vocabulary suggestions can never enter
+  the approved snapshot (Phase 08 invariant preserved).
+
+The approved-scope construction path is unchanged `_scope_for_target`:
+Topic terms (exact/include, alias/vocabulary, entity, related_concept,
+exclude), Subject canonical name + aliases, Story latest revision text,
+Research Question text. Only approved vocabulary participates; broader/
+narrower/related terms participate only when explicitly approved.
+
+**Originating Monitor provenance and scope-at-acquisition pin.** The
+processing obligation payload carries only canonical IDs (`document_version_id`,
+`document_id`, `source_id`, `monitor_id`) plus `scope_version` — the
+`monitor_scope_history` version in effect when the obligation was enqueued
+inside the acquisition write transaction. Processing therefore evaluates the
+exact approved scope snapshot that existed **at acquisition time**, never a
+later mutable scope (the T0–T3 race resolves to historical scope). The
+decision record copies the full snapshot JSON, so every decision is
+reproducible even if the Monitor's scope later changes or the Monitor is
+removed; historical decisions are never re-scored.
+
+**Deterministic relevance pipeline.**
+
+    DocumentVersion → verified artifact → evaluation text
+      → approved RelevanceScope snapshot (pinned version, immutable)
+      → RelevanceCascade stages:
+          excluded (wins over every positive signal)
+          exact → vocabulary → entity → concept
+          semantic (local token-overlap approximation)
+          local classifier (LocalRelevanceProvider token overlap)
+      → durable decision
+
+Evaluation text is the exact verified normalized text for HTML/text/fallback
+artifacts; for feed metadata artifacts it is the entry title+summary derived
+from the exact persisted metadata JSON (URLs and JSON structure never
+participate in matching). Terminology is honest: the "semantic" stage is a
+deterministic local token-overlap (Jaccard) approximation of the existing
+cascade, not an LLM.
+
+**Persistence and idempotency.** Migration 0017 adds
+`document_version_relevance`: one canonical decision per
+`(document_version_id, monitor_id, scope_version)` (UNIQUE), recording the
+pinned scope version + full snapshot, relevant boolean, stage, score, matched
+terms, reason, algorithm (`deterministic_relevance_cascade_v1`),
+`paid_used=false`, job provenance, and created time. Retries, lease recovery,
+and explicit reruns all reference the canonical decision — nothing is
+duplicated or silently overwritten, and history stays auditable. Article text
+is never stored in the relevance record.
+
+**Relevant vs not-relevant vs not applicable.** Both `relevant=true`
+(eligible for future Phase 21 analysis) and `relevant=false` (successfully
+evaluated, outside scope) are successful processing outcomes. `not_applicable`
+(no Monitor provenance, or acquisition-only Monitor) is a successful outcome
+without a relevance decision. Anything that prevents evaluation — missing
+scope, malformed persisted scope, pinned version missing, invalid provenance,
+corrupt/legacy artifact, empty scope (no positive terms) — is a terminal
+failure: **COULD NOT EVALUATE RELEVANCE**, never `relevant=false`.
+
+**Monitor activity and cadence.** A confirmed relevance (new canonical
+decision with `relevant=true`) emits the existing `relevant_change` activity
+row (`relevant_items=1`) and applies the existing cadence semantics (next
+check drops to the policy minimum), atomically with the decision;
+`relevant=false` and `not_applicable` never write activity — the
+acquisition-level `changed` row stays the truthful outcome and cadence stays
+cadence-neutral. Acquisition `changed` alone can never emit `relevant_change`.
 
 ### Relevance and scope governance
 
@@ -199,7 +293,9 @@ decide. An exclusion wins over every positive signal. Scope suggestions support
 synonyms, acronyms, aliases, broader/narrower/related concepts, ambiguity, and
 exclusions; pending or rejected suggestions are never included in a monitor
 scope. Approved suggestions and direct vocabulary edits append a new visible
-scope-history version.
+scope-history version. Since Phase 20, a Source Monitor may bind that approved
+scope to its acquisition work through an explicit information need; without
+one it remains acquisition-only.
 
 ### Review
 Saved/dismissed/not-useful/tags plus last-reviewed revision and material-update
@@ -316,10 +412,14 @@ Jobs have hard retry/query/model/cost budgets. Monitor policy determines next
 cadence from recorded activity, bounded by the configured minimum and maximum;
 no-change and error backoff, retirement, and relevant-change acceleration are
 explicit state transitions. Acquisition records `changed` when content changed
-but semantic relevance is not yet evaluated: it keeps the current polling
-interval rather than accelerating to the minimum cadence reserved for a
-confirmed `relevant_change`. `no_change` is recorded only for truthful unchanged
-acquisition.
+but semantic relevance is not yet evaluated at acquisition time: it keeps the
+current polling interval rather than accelerating to the minimum cadence
+reserved for a confirmed `relevant_change`. Since Phase 20 the `changed`
+outcome is only a handoff: the durable processing job evaluates the acquired
+content against the approved scope and emits the genuine `relevant_change`
+(cadence acceleration) only for a confirmed relevant decision, never from
+the mere fact that content changed. `no_change` is recorded only for truthful
+unchanged acquisition.
 
 ### Verified runtime sequence (Prompt 4 acceptance)
 
@@ -356,18 +456,22 @@ Downstream intelligence stages are not yet wired into this pipeline: the
 unattended Source → DocumentVersion loop persists canonical provenance,
 and (since Phase 18) a durable normalized content artifact referenced by each
 new version; since Phase 19 every changed acquisition also leaves a durable
-`document_version_process` obligation whose deterministic handler has proven
-the verified content is loadable, but automatic relevance, article analysis,
+`document_version_process` obligation, and since Phase 20 that obligation
+evaluates the verified content automatically against the Monitor's approved
+semantic scope and persists a deterministic relevant/not-relevant decision
+(relevant versions are eligible for Phase 21 analysis). Article analysis,
 Evidence/Claims ingestion, Story evolution, Report revision, and Alert
-emission are Phase 20+ work. No monitor is allowed to recursively create
+emission remain Phase 21+ work. No monitor is allowed to recursively create
 unbounded work.
 
-The current applied schema is migration 0016 / schema version 16 (see
+The current applied schema is migration 0017 / schema version 17 (see
 `newsroom/migrations.py`). Migration 0015 added the Phase 18 content artifact
 substrate; migration 0016 added the Phase 19 processing-ownership column
 (`jobs.document_version_id`), the durable result column (`jobs.result_json`),
-and the obligation index; the post-audit reconciliation (Phase 17) added no
-migration.
+and the obligation index; migration 0017 (Phase 20) added the Monitor
+information-need association (`monitors.need_type` / `need_id`) and the
+`document_version_relevance` decision table; the post-audit reconciliation
+(Phase 17) added no migration.
 
 Due Research Questions use a separate bounded scheduler path: each tick can
 enqueue at most one durable `research_question` Job per due Question, and the

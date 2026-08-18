@@ -170,12 +170,16 @@ class MonitorCreate(StrictModel):
     policy_id: str = Field(min_length=1, max_length=200)
     enabled: bool = True
     next_check_at: Optional[str] = Field(default=None, max_length=64)
+    need_type: Optional[str] = Field(default=None, pattern="^(topic|subject|story|research_question)$")
+    need_id: Optional[str] = Field(default=None, min_length=1, max_length=200)
 
 
 class MonitorPatch(StrictModel):
     policy_id: Optional[str] = Field(default=None, min_length=1, max_length=200)
     enabled: Optional[bool] = None
     next_check_at: Optional[str] = Field(default=None, max_length=64)
+    need_type: Optional[str] = Field(default=None, pattern="^(topic|subject|story|research_question)$")
+    need_id: Optional[str] = Field(default=None, min_length=1, max_length=200)
 
     @model_validator(mode="after")
     def reject_empty_patch(self):
