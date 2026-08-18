@@ -12,10 +12,12 @@ import { InboxView } from "./views/InboxView";
 import { ReportsView } from "./views/ReportsView";
 import { StoryEvidenceView } from "./views/StoryEvidenceView";
 import { HistoryView, SavedView } from "./views/ReviewViews";
+import { WorkbenchView } from "./views/WorkbenchView";
+import { AskView } from "./views/AskView";
 
 function initialView(): ViewKey {
   const value = window.location.hash.replace(/^#/, "") as ViewKey;
-  return ["inbox", "stories", "documents", "reports", "saved", "history", "topics", "subjects", "sources", "monitors", "questions", "runs", "alerts", "settings"].includes(value) ? value : "inbox";
+  return ["inbox", "stories", "documents", "reports", "saved", "history", "workbench", "ask", "topics", "subjects", "sources", "monitors", "questions", "runs", "alerts", "settings"].includes(value) ? value : "inbox";
 }
 
 export default function App() {
@@ -59,5 +61,7 @@ function renderView(view: ViewKey, setView: (view: ViewKey) => void) {
     case "settings": return <SettingsView />;
     case "saved": return <SavedView />;
     case "history": return <HistoryView />;
+    case "workbench": return <WorkbenchView />;
+    case "ask": return <AskView />;
   }
 }

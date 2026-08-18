@@ -47,6 +47,92 @@ BUDGET_SCOPE_TYPES = frozenset({"global", "policy", "job", "research_question"})
 BUDGET_PERIODS = frozenset({"daily", "monthly", "lifetime"})
 BUDGET_CAP_TYPES = frozenset({"acquisition_units", "local_model_units", "paid_requests", "usd"})
 
+MONITOR_CHECK_JOB_TYPE = "monitor_check"
+RESEARCH_QUESTION_JOB_TYPE = "research_question"
+
+RecoveryHook = Callable[[sqlite3.Connection, sqlite3.Row, str], None]
+CompletionHook = Callable[[sqlite3.Connection, sqlite3.Row, str, Mapping[str, Any] | None], None]
+RerunFactory = Callable[[Path, Mapping[str, Any]], Mapping[str, Any] | None]
+
+
+def compose_completion_hooks(*hooks: CompletionHook | None) -> CompletionHook | None:
+    """Compose independent completion hooks into one JobService completion hook.
+
+    Every hook receives the same completion event and is responsible for
+    ignoring job types it does not own (each domain hook filters by its own
+    ``job_type``). None entries are skipped so individual domains can stay
+    optional. Registering the same hook object twice is rejected: a hook must
+    never run twice for a single event, mirroring ``merge_handlers`` collision
+    semantics.
+    """
+    registered: list[CompletionHook] = []
+    for hook in hooks:
+        if hook is None:
+            continue
+        if not callable(hook):
+            raise TypeError("completion hooks must be callable")
+        if any(registered_hook is hook for registered_hook in registered):
+            raise ValueError("duplicate completion hook registration")
+        registered.append(hook)
+    if not registered:
+        return None
+    if len(registered) == 1:
+        return registered[0]
+
+    def composed(
+        conn: sqlite3.Connection,
+        job_row: sqlite3.Row,
+        job_status: str,
+        context: Mapping[str, Any] | None = None,
+    ) -> None:
+        for hook in registered:
+            hook(conn, job_row, job_status, context)
+
+    return composed
+
+
+def _resolve_monitor_check_monitor_id(
+    job_type: str,
+    monitor_id: str | None,
+    payload: Mapping[str, Any],
+) -> str:
+    """Validate canonical Monitor ownership for a monitor_check enqueue.
+
+    Returns the canonical ``monitor_id`` when the job is a ``monitor_check``.
+    Returns an empty string for any other job type so callers can skip the
+    active-work check. Raises ``DomainValidation`` when a monitor_check job is
+    missing its canonical ``monitor_id`` or when its payload carries a
+    conflicting ``monitor_id``.
+    """
+    if job_type != MONITOR_CHECK_JOB_TYPE:
+        return ""
+    canonical = str(monitor_id or "").strip()
+    if not canonical:
+        raise DomainValidation("monitor_check jobs require a canonical monitor_id")
+    payload_mid = payload.get("monitor_id") if isinstance(payload, Mapping) else None
+    if payload_mid is not None and str(payload_mid).strip() != canonical:
+        raise DomainValidation("monitor_check payload monitor_id conflicts with job monitor_id")
+    return canonical
+
+
+def _active_monitor_check_id_tx(conn: sqlite3.Connection, monitor_id: str) -> str | None:
+    """Return the job id of any active monitor_check for ``monitor_id``.
+
+    Active means ``status IN ('queued', 'running')`` — the same definition the
+    scheduler uses. Runs inside the caller's write transaction so that
+    ``BEGIN IMMEDIATE`` serializes concurrent producers.
+    """
+    row = conn.execute(
+        """
+        SELECT id FROM jobs
+        WHERE monitor_id = ? AND job_type = ?
+          AND status IN ('queued', 'running')
+        LIMIT 1
+        """,
+        (monitor_id, MONITOR_CHECK_JOB_TYPE),
+    ).fetchone()
+    return row[0] if row is not None else None
+
 
 def _timestamp(value: str | datetime | None = None) -> str:
     if value is None:
@@ -493,6 +579,9 @@ class JobService:
         backoff_base_seconds: int = 30,
         backoff_max_seconds: int = 3600,
         budget_service: BudgetService | None = None,
+        recovery_hook: RecoveryHook | None = None,
+        completion_hook: CompletionHook | None = None,
+        rerun_factory: RerunFactory | None = None,
     ):
         if lease_seconds < 1 or backoff_base_seconds < 1 or backoff_max_seconds < backoff_base_seconds:
             raise ValueError("invalid job timing configuration")
@@ -501,6 +590,9 @@ class JobService:
         self.backoff_base_seconds = backoff_base_seconds
         self.backoff_max_seconds = backoff_max_seconds
         self.budgets = budget_service or BudgetService(db_path)
+        self.recovery_hook = recovery_hook
+        self.completion_hook = completion_hook
+        self.rerun_factory = rerun_factory
 
     def enqueue(
         self,
@@ -537,6 +629,13 @@ class JobService:
                     if existing:
                         identifier = existing[0]
                     else:
+                        canonical = _resolve_monitor_check_monitor_id(job_type, monitor_id, decoded)
+                        if canonical:
+                            active_id = _active_monitor_check_id_tx(conn, canonical)
+                            if active_id is not None:
+                                raise JobConflict(
+                                    f"monitor {canonical} already has an active monitor_check obligation ({active_id})"
+                                )
                         conn.execute(
                             """
                             INSERT INTO jobs
@@ -548,6 +647,13 @@ class JobService:
                             (identifier, job_type, encoded, idempotency_key, monitor_id, research_question_id, priority, max_attempts, run_id, now, now),
                         )
                 else:
+                    canonical = _resolve_monitor_check_monitor_id(job_type, monitor_id, decoded)
+                    if canonical:
+                        active_id = _active_monitor_check_id_tx(conn, canonical)
+                        if active_id is not None:
+                            raise JobConflict(
+                                f"monitor {canonical} already has an active monitor_check obligation ({active_id})"
+                            )
                     conn.execute(
                         """
                         INSERT INTO jobs
@@ -679,9 +785,12 @@ class JobService:
         error_detail: str | None = None,
         retryable: bool = True,
         now: str | datetime | None = None,
+        outcome: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
         if status not in {"succeeded", "partial", "failed", "cancelled"}:
             raise DomainValidation("invalid completion status")
+        if outcome is not None and not isinstance(outcome, Mapping):
+            raise DomainValidation("completion outcome must be an object")
         timestamp = _timestamp(now)
         worker_id = self._worker_id(worker_id)
         conn = storage.connect(self.db_path)
@@ -710,7 +819,8 @@ class JobService:
                     (final_status if final_status in ATTEMPT_STATUSES else "failed", timestamp, bounded_code, bounded_detail, attempt["id"]),
                 )
                 self.budgets._release_tx(conn, job_id, timestamp)
-                if final_status == "failed" and retryable and row["attempts"] < row["max_attempts"]:
+                retrying = final_status == "failed" and retryable and row["attempts"] < row["max_attempts"]
+                if retrying:
                     next_at = _plus_seconds(timestamp, self._backoff_seconds(row["attempts"]))
                     conn.execute(
                         """
@@ -732,6 +842,18 @@ class JobService:
                         WHERE id = ?
                         """,
                         (final_status, bounded_code, timestamp, job_id),
+                    )
+                if self.completion_hook is not None:
+                    self.completion_hook(
+                        conn,
+                        row,
+                        "queued" if retrying else final_status,
+                        {
+                            "trigger": "complete",
+                            "error_code": bounded_code,
+                            "error_detail": bounded_detail,
+                            "outcome": dict(outcome) if outcome is not None else None,
+                        },
                     )
                 self._maybe_finish_run_tx(conn, row["run_id"], timestamp)
                 return self._get_tx(conn, job_id)
@@ -760,6 +882,13 @@ class JobService:
                         (reason, timestamp, job_id),
                     )
                     self.budgets._release_tx(conn, job_id, timestamp)
+                    if self.completion_hook is not None:
+                        self.completion_hook(
+                            conn,
+                            row,
+                            "cancelled",
+                            {"trigger": "cancel", "error_code": reason},
+                        )
                     self._maybe_finish_run_tx(conn, row["run_id"], timestamp)
                 return self._get_tx(conn, job_id)
         finally:
@@ -769,6 +898,15 @@ class JobService:
         old = self.get(job_id)
         if old["status"] not in TERMINAL_JOB_STATUSES:
             raise JobConflict("only terminal jobs may be rerun")
+        if old["job_type"] == MONITOR_CHECK_JOB_TYPE:
+            self._guard_monitor_check_rerun(old)
+        if self.rerun_factory is not None:
+            try:
+                rebuilt = self.rerun_factory(self.db_path, old)
+            except sqlite3.IntegrityError as exc:
+                raise JobConflict("rerun raced with another attempt creation for the same job") from exc
+            if rebuilt is not None:
+                return rebuilt
         return self.enqueue(
             old["job_type"],
             old["payload"],
@@ -778,6 +916,34 @@ class JobService:
             priority=old["priority"],
             max_attempts=old["max_attempts"],
         )
+
+    def _guard_monitor_check_rerun(self, old: Mapping[str, Any]) -> None:
+        """Reject a monitor_check rerun while the Monitor already has an active
+        monitor_check obligation.
+
+        Rerunning would otherwise clone a fresh job into the queue under a new
+        ``rerun:`` idempotency key, bypassing the scheduler's active-work check
+        and producing two simultaneous obligations. The Monitor's adaptive
+        ``next_check_at`` is deliberately left untouched so the scheduler
+        resumes cadence from the active job's eventual ``record_activity``
+        outcome rather than the rerun request.
+        """
+        canonical = str(old.get("monitor_id") or "").strip()
+        payload = old.get("payload") or {}
+        if isinstance(payload, Mapping) and payload.get("monitor_id") is not None and str(payload["monitor_id"]).strip() != canonical:
+            raise DomainValidation("historical monitor_check has conflicting monitor_id ownership")
+        if not canonical:
+            raise DomainValidation("historical monitor_check has no canonical monitor_id")
+        conn = storage.connect(self.db_path)
+        try:
+            with storage.write_tx(conn):
+                active_id = _active_monitor_check_id_tx(conn, canonical)
+        finally:
+            conn.close()
+        if active_id is not None:
+            raise JobConflict(
+                f"rerun refused: monitor {canonical} already has an active monitor_check obligation ({active_id})"
+            )
 
     def create_run(self, trigger_type: str, *, summary: Mapping[str, Any] | None = None, now: str | datetime | None = None) -> dict[str, Any]:
         if trigger_type not in {"cron", "manual", "test"}:
@@ -894,6 +1060,8 @@ class JobService:
             "UPDATE jobs SET status = 'failed', failure_cause = ?, updated_at = ? WHERE id = ? AND status = 'queued'",
             (reason, now, row["id"]),
         )
+        if self.completion_hook is not None:
+            self.completion_hook(conn, row, "failed", {"trigger": "budget", "error_code": reason})
         self._maybe_finish_run_tx(conn, row["run_id"], now)
 
     def _recover_expired_tx(self, conn: sqlite3.Connection, now: str) -> int:
@@ -928,6 +1096,8 @@ class JobService:
                 """,
                 (status, next_attempt, failure, now, row["id"]),
             )
+            if self.recovery_hook is not None:
+                self.recovery_hook(conn, row, status)
             self._maybe_finish_run_tx(conn, row["run_id"], now)
         return len(rows)
 
@@ -943,7 +1113,15 @@ class JobService:
 
 
 class SchedulerService:
-    """Select due monitors and enqueue at most one job per due schedule."""
+    """Select due monitors and enqueue at most one job per due schedule.
+
+    The tick only advances scheduling state (``next_check_at`` and
+    ``updated_at``). It never writes ``last_result`` or ``last_run_at``:
+    those fields describe the most recent ACTUAL Monitor execution, and
+    queue state is not an execution result.
+    """
+
+    job_type = MONITOR_CHECK_JOB_TYPE
 
     def __init__(self, db_path: str | Path):
         self.db_path = Path(db_path)
@@ -988,7 +1166,7 @@ class SchedulerService:
                         ) or ("status" in columns and target["status"] == "abandoned")
                     if unavailable:
                         conn.execute(
-                            "UPDATE monitors SET enabled = 0, next_check_at = NULL, last_result = 'target_unavailable', updated_at = ? WHERE id = ?",
+                            "UPDATE monitors SET enabled = 0, next_check_at = NULL, updated_at = ? WHERE id = ?",
                             (timestamp, monitor["id"]),
                         )
                         continue
@@ -1002,17 +1180,37 @@ class SchedulerService:
                     (timestamp, timestamp),
                 )
                 if not due:
-                    return {"run_id": None, "job_ids": [], "due_count": 0, "scheduled_at": timestamp}
-                run_id = new_id("run")
-                conn.execute(
-                    "INSERT INTO runs(id, trigger_type, status, started_at, summary_json) VALUES (?, 'cron', 'running', ?, ?)",
-                    (run_id, timestamp, json.dumps({"scheduled_count": len(due)}, sort_keys=True)),
-                )
+                    return {
+                        "run_id": None,
+                        "job_ids": [],
+                        "due_count": 0,
+                        "eligible_count": 0,
+                        "enqueued": 0,
+                        "coalesced_skipped_active": 0,
+                        "auto_disabled": 0,
+                        "scheduled_at": timestamp,
+                    }
                 job_ids: list[str] = []
+                coalesced = 0
                 for monitor in due:
+                    active = conn.execute(
+                        """
+                        SELECT 1 FROM jobs
+                        WHERE monitor_id = ?
+                          AND job_type = ?
+                          AND status IN ('queued', 'running')
+                        LIMIT 1
+                        """,
+                        (monitor["id"], self.job_type),
+                    ).fetchone()
+                    if active is not None:
+                        coalesced += 1
+                        continue
                     schedule_key = monitor["next_check_at"] or timestamp
                     idempotency_key = f"monitor:{monitor['id']}:{schedule_key}"
-                    existing = conn.execute("SELECT id FROM jobs WHERE idempotency_key = ?", (idempotency_key,)).fetchone()
+                    existing = conn.execute(
+                        "SELECT id FROM jobs WHERE idempotency_key = ?", (idempotency_key,)
+                    ).fetchone()
                     if existing:
                         job_ids.append(existing[0])
                     else:
@@ -1031,15 +1229,17 @@ class SchedulerService:
                             sort_keys=True,
                             separators=(",", ":"),
                         )
-                        priority = {"urgent": 30, "high": 20, "normal": 10, "low": 0}.get(monitor["policy_priority"], 0)
+                        priority = {"urgent": 30, "high": 20, "normal": 10, "low": 0}.get(
+                            monitor["policy_priority"], 0
+                        )
                         conn.execute(
                             """
                             INSERT INTO jobs
                                 (id, job_type, status, payload_json, idempotency_key,
-                                 monitor_id, priority, max_attempts, run_id, created_at, updated_at)
-                            VALUES (?, 'monitor_check', 'queued', ?, ?, ?, ?, 3, ?, ?, ?)
+                                 monitor_id, priority, max_attempts, created_at, updated_at)
+                            VALUES (?, ?, 'queued', ?, ?, ?, ?, 3, ?, ?)
                             """,
-                            (job_id, payload, idempotency_key, monitor["id"], priority, run_id, timestamp, timestamp),
+                            (job_id, self.job_type, payload, idempotency_key, monitor["id"], priority, timestamp, timestamp),
                         )
                         job_ids.append(job_id)
                     base = max(1, int(monitor["base_cadence_seconds"] or 1))
@@ -1048,10 +1248,34 @@ class SchedulerService:
                     cadence = max(minimum, min(maximum, base))
                     next_check = _plus_seconds(timestamp, cadence)
                     conn.execute(
-                        "UPDATE monitors SET next_check_at = ?, last_run_at = ?, last_result = 'enqueued', updated_at = ? WHERE id = ?",
-                        (next_check, timestamp, timestamp, monitor["id"]),
+                        "UPDATE monitors SET next_check_at = ?, updated_at = ? WHERE id = ?",
+                        (next_check, timestamp, monitor["id"]),
                     )
-                return {"run_id": run_id, "job_ids": job_ids, "due_count": len(due), "scheduled_at": timestamp}
+                run_id: str | None = None
+                if job_ids:
+                    run_id = new_id("run")
+                    conn.execute(
+                        "INSERT INTO runs(id, trigger_type, status, started_at, summary_json) VALUES (?, 'cron', 'running', ?, ?)",
+                        (run_id, timestamp, json.dumps(
+                            {"scheduled_count": len(job_ids), "coalesced": coalesced},
+                            sort_keys=True,
+                        )),
+                    )
+                    for job_id in job_ids:
+                        conn.execute(
+                            "UPDATE jobs SET run_id = ? WHERE id = ?",
+                            (run_id, job_id),
+                        )
+                return {
+                    "run_id": run_id,
+                    "job_ids": job_ids,
+                    "due_count": len(due),
+                    "eligible_count": len(due),
+                    "enqueued": len(job_ids),
+                    "coalesced_skipped_active": coalesced,
+                    "auto_disabled": 0,
+                    "scheduled_at": timestamp,
+                }
         finally:
             conn.close()
 
@@ -1059,9 +1283,15 @@ class SchedulerService:
 __all__ = [
     "BudgetExhausted",
     "BudgetService",
+    "CompletionHook",
     "JobConflict",
     "JobError",
     "JobNotFound",
     "JobService",
+    "MONITOR_CHECK_JOB_TYPE",
+    "RecoveryHook",
+    "RerunFactory",
+    "RESEARCH_QUESTION_JOB_TYPE",
     "SchedulerService",
+    "compose_completion_hooks",
 ]

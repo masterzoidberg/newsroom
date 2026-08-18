@@ -14,6 +14,8 @@ export type ViewKey =
   | "reports"
   | "saved"
   | "history"
+  | "workbench"
+  | "ask"
   | "topics"
   | "subjects"
   | "sources"
@@ -157,3 +159,58 @@ export type DocumentVersion = { id: string; retrieved_at: string; content_hash: 
 export type Timeline = { events?: Array<Record<string, unknown>>; revisions?: Array<Record<string, unknown>> };
 
 export type CollectionRecord = Record<string, unknown> & { id: string; name?: string; title?: string; status?: string; enabled?: boolean };
+
+export type AskCitation = {
+  id: string;
+  object_type: string;
+  object_id: string;
+  label: string;
+  kind: string;
+  resolvable: boolean;
+  document_id?: string;
+  document_version_id?: string;
+  retrieved_at?: string;
+  locator_type?: string | null;
+  locator_value?: string | null;
+};
+
+export type AskStatement = {
+  id: string;
+  text: string;
+  classification: "fact" | "inference" | "uncertainty" | "contradiction" | "user_hypothesis" | "context";
+  citation_ids: string[];
+};
+
+export type AskRun = {
+  run_id: string;
+  conversation_id: string;
+  turn_number: number;
+  prompt_hash?: string;
+  prompt_length?: number;
+  status: "running" | "answered" | "qualified" | "refused" | "cancelled" | "failed";
+  answer: string;
+  statements: AskStatement[];
+  citations: AskCitation[];
+  retrieval: {
+    candidate_count?: number;
+    entity_types?: string[];
+    context_units?: number;
+    context_budget?: number;
+    stale_evidence_count?: number;
+    ambiguous?: boolean;
+  };
+  refusal_code?: string | null;
+  provider_route?: string;
+  estimated_cost_usd?: number;
+  created_at?: string;
+  completed_at?: string | null;
+};
+
+export type AskConversation = {
+  id: string;
+  scope_type: string;
+  scope_id: string | null;
+  created_at: string;
+  updated_at: string;
+  turns: AskRun[];
+};

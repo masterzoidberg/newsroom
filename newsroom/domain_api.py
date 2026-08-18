@@ -17,17 +17,25 @@ from .acquisition import (
 )
 from .domain import CoreService, DomainValidation
 from .evidence import EvidenceService
-from .jobs import BudgetService, JobService, SchedulerService
+from .jobs import BudgetService, JobService, SchedulerService, compose_completion_hooks
 from .monitoring import (
     MonitorService,
     MonitoringPolicyService,
     RelevanceCascade,
     RelevanceScope,
     ScopeSuggestionService,
+    monitor_job_completion_hook,
 )
-from .research_questions import ResearchQuestionService
+from .research_questions import (
+    research_job_completion_hook,
+    research_job_rerun_factory,
+    ResearchQuestionService,
+    research_job_recovery_hook,
+)
 from .reports import AlertService, BriefingService, LivingReportService
 from .story_evolution import StoryCandidate, StoryEvolutionService
+from .workbench import ComparisonService, DiagnosticsService, SearchService, WorkbenchService
+from .ask import AskService
 
 
 class StrictModel(BaseModel):
@@ -582,10 +590,14 @@ class StoryPatch(StrictModel):
 
 class TagCreate(StrictModel):
     name: str = Field(min_length=1, max_length=100)
+    namespace: str = Field(default="user", min_length=1, max_length=64, pattern=r"^[A-Za-z0-9._:-]+$")
+    tag_type: str = Field(default="user", pattern="^(user|smart)$")
 
 
 class TagPatch(StrictModel):
     name: str = Field(min_length=1, max_length=100)
+    namespace: Optional[str] = Field(default=None, min_length=1, max_length=64, pattern=r"^[A-Za-z0-9._:-]+$")
+    tag_type: Optional[str] = Field(default=None, pattern="^(user|smart)$")
 
 
 class StoryTagCreate(StrictModel):
@@ -647,6 +659,35 @@ class SettingWrite(StrictModel):
     value: str = Field(max_length=4000)
 
 
+class ComparisonCreate(StrictModel):
+    document_ids: list[str] = Field(min_length=2, max_length=20)
+    story_id: Optional[str] = Field(default=None, max_length=200)
+
+
+class NoteCreate(StrictModel):
+    object_type: str = Field(pattern="^(story|subject|document|claim|monitor|research_question)$")
+    object_id: str = Field(min_length=1, max_length=200)
+    body: str = Field(min_length=1, max_length=10_000)
+    note_type: str = Field(default="note", pattern="^(note|hypothesis|context)$")
+
+
+class AskConversationCreate(StrictModel):
+    scope_type: str = Field(default="global", pattern="^(global|story|claim|evidence|document|report|question|research_question|subject|monitor|note)$")
+    scope_id: Optional[str] = Field(default=None, max_length=200)
+
+
+class AskTurnCreate(StrictModel):
+    prompt: str = Field(min_length=1, max_length=4_000)
+    context_budget: int = Field(default=4_000, ge=100, le=12_000)
+    provider_mode: str = Field(default="local", pattern="^(local|hosted)$")
+    cost_cap_usd: float = Field(default=0.0, ge=0.0, le=1_000_000)
+
+
+class AskDirectCreate(AskTurnCreate):
+    scope_type: str = Field(default="global", pattern="^(global|story|claim|evidence|document|report|question|research_question|subject|monitor|note)$")
+    scope_id: Optional[str] = Field(default=None, max_length=200)
+
+
 def _patch_data(model: BaseModel) -> dict:
     data = model.model_dump(exclude_unset=True)
     if not data:
@@ -666,7 +707,15 @@ def create_domain_router(
     acquisition = AcquisitionService(service.db_path)
     profiles = SourceProfileService(service.db_path)
     suggestions = SourceSuggestionService(service.db_path)
-    jobs = JobService(service.db_path)
+    jobs = JobService(
+        service.db_path,
+        recovery_hook=research_job_recovery_hook,
+        completion_hook=compose_completion_hooks(
+            research_job_completion_hook,
+            monitor_job_completion_hook,
+        ),
+        rerun_factory=research_job_rerun_factory,
+    )
     budgets = BudgetService(service.db_path)
     scheduler = SchedulerService(service.db_path)
     policies = MonitoringPolicyService(service.db_path)
@@ -677,6 +726,11 @@ def create_domain_router(
     reports = LivingReportService(service.db_path)
     briefings = BriefingService(service.db_path)
     alerts = AlertService(service.db_path)
+    search = SearchService(service.db_path)
+    comparisons = ComparisonService(service.db_path)
+    diagnostics = DiagnosticsService(service.db_path)
+    workbench = WorkbenchService(service.db_path)
+    ask = AskService(service.db_path)
 
     def read_guard(request: Request):
         return require_user(request)
@@ -685,6 +739,142 @@ def create_domain_router(
         user = require_user(request)
         require_csrf(request, user)
         return user
+
+    @router.get("/ask/conversations")
+    async def ask_conversations(
+        request: Request,
+        scope_type: Optional[str] = None,
+        scope_id: Optional[str] = None,
+        page: int = Query(1, ge=1),
+        page_size: int = Query(25, ge=1, le=100),
+    ):
+        read_guard(request)
+        return ask.list_conversations(scope_type=scope_type, scope_id=scope_id, page=page, page_size=page_size)
+
+    @router.post("/ask/conversations", status_code=201)
+    async def create_ask_conversation(request: Request, payload: AskConversationCreate):
+        write_guard(request)
+        return ask.create_conversation(scope_type=payload.scope_type, scope_id=payload.scope_id)
+
+    @router.get("/ask/conversations/{identifier}")
+    async def get_ask_conversation(request: Request, identifier: str):
+        read_guard(request)
+        return ask.get_conversation(identifier)
+
+    @router.post("/ask/conversations/{identifier}/turns", status_code=201)
+    async def create_ask_turn(request: Request, identifier: str, payload: AskTurnCreate):
+        write_guard(request)
+        return ask.ask(
+            identifier,
+            payload.prompt,
+            context_budget=payload.context_budget,
+            provider_mode=payload.provider_mode,
+            cost_cap_usd=payload.cost_cap_usd,
+        )
+
+    @router.post("/ask", status_code=201)
+    async def ask_direct(request: Request, payload: AskDirectCreate):
+        write_guard(request)
+        conversation = ask.create_conversation(scope_type=payload.scope_type, scope_id=payload.scope_id)
+        result = ask.ask(
+            conversation["id"],
+            payload.prompt,
+            context_budget=payload.context_budget,
+            provider_mode=payload.provider_mode,
+            cost_cap_usd=payload.cost_cap_usd,
+        )
+        result["conversation_id"] = conversation["id"]
+        return result
+
+    @router.get("/ask/runs/{identifier}")
+    async def get_ask_run(request: Request, identifier: str):
+        read_guard(request)
+        return ask.get_run(identifier)
+
+    @router.post("/ask/runs/{identifier}/cancel")
+    async def cancel_ask_run(request: Request, identifier: str):
+        write_guard(request)
+        return ask.cancel(identifier)
+
+    @router.get("/search")
+    async def search_workspace(
+        request: Request,
+        q: str = Query(..., min_length=1, max_length=500),
+        entity_type: Optional[list[str]] = Query(default=None),
+        source_id: Optional[str] = None,
+        story_id: Optional[str] = None,
+        subject_id: Optional[str] = None,
+        monitor_id: Optional[str] = None,
+        question_id: Optional[str] = None,
+        tag_id: Optional[str] = None,
+        document_id: Optional[str] = None,
+        state: Optional[str] = None,
+        lifecycle: Optional[str] = None,
+        date_from: Optional[str] = None,
+        date_to: Optional[str] = None,
+        page: int = Query(1, ge=1),
+        page_size: int = Query(25, ge=1, le=100),
+    ):
+        read_guard(request)
+        return search.search(
+            q,
+            entity_types=entity_type,
+            source_id=source_id,
+            story_id=story_id,
+            subject_id=subject_id,
+            monitor_id=monitor_id,
+            question_id=question_id,
+            tag_id=tag_id,
+            document_id=document_id,
+            state=state,
+            lifecycle=lifecycle,
+            date_from=date_from,
+            date_to=date_to,
+            page=page,
+            page_size=page_size,
+        )
+
+    @router.post("/comparisons")
+    @router.post("/compare")
+    @router.post("/documents/compare")
+    async def compare_documents(request: Request, payload: ComparisonCreate):
+        read_guard(request)
+        return comparisons.compare(payload.document_ids, story_id=payload.story_id)
+
+    @router.post("/workbench/notes", status_code=201)
+    async def create_workbench_note(request: Request, payload: NoteCreate):
+        write_guard(request)
+        return workbench.add_note(payload.object_type, payload.object_id, payload.body, note_type=payload.note_type)
+
+    @router.get("/subjects/{identifier}/workbench")
+    async def subject_workbench(request: Request, identifier: str):
+        read_guard(request)
+        return workbench.subject_page(identifier)
+
+    @router.get("/subjects/{identifier}/timeline")
+    async def subject_timeline(request: Request, identifier: str):
+        read_guard(request)
+        return {"items": workbench.timeline("subject", identifier)}
+
+    @router.get("/subjects/{identifier}/historical-context")
+    async def subject_historical_context(request: Request, identifier: str):
+        read_guard(request)
+        return workbench.historical_context(identifier)
+
+    @router.get("/diagnostics/health")
+    async def diagnostics_health(request: Request):
+        read_guard(request)
+        return diagnostics.health()
+
+    @router.get("/diagnostics/coverage")
+    async def diagnostics_coverage(request: Request):
+        read_guard(request)
+        return diagnostics.coverage()
+
+    @router.get("/monitors/{identifier}/diagnostics")
+    async def monitor_diagnostics(request: Request, identifier: str):
+        read_guard(request)
+        return diagnostics.monitor(identifier)
 
     @router.get("/categories")
     async def categories(
@@ -1590,9 +1780,9 @@ def create_domain_router(
         return service.tag_story(story_id, payload.tag_id)
 
     @router.get("/tags")
-    async def tags(request: Request, q: Optional[str] = None, page: int = Query(1, ge=1), page_size: int = Query(25, ge=1, le=100)):
+    async def tags(request: Request, q: Optional[str] = None, namespace: Optional[str] = None, tag_type: Optional[str] = None, page: int = Query(1, ge=1), page_size: int = Query(25, ge=1, le=100)):
         read_guard(request)
-        return service.list_tags(q=q, page=page, page_size=page_size)
+        return service.list_tags(q=q, namespace=namespace, tag_type=tag_type, page=page, page_size=page_size)
 
     @router.post("/tags", status_code=201)
     async def create_tag(request: Request, payload: TagCreate):

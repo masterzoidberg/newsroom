@@ -219,10 +219,52 @@ UI displays `SAVED` and `NEW UPDATE`; it does not rewrite the review status.
 ## Scheduling model
 
 A small scheduler tick queries due Monitors by `next_check_at` and creates jobs.
-The worker claims queued jobs with a lease. Jobs have hard retry/query/model/cost
-budgets. Monitor policy determines next cadence from recorded activity, bounded
-by the configured minimum and maximum; no-change and error backoff, retirement,
-and relevant-change acceleration are explicit state transitions.
+`monitors.last_result` and `last_run_at` describe the most recent ACTUAL Monitor
+execution: enqueueing (or disabling a vanished target) only advances scheduling
+state, so waiting work never overwrites the last recorded execution result.
+Jobs have hard retry/query/model/cost budgets. Monitor policy determines next
+cadence from recorded activity, bounded by the configured minimum and maximum;
+no-change and error backoff, retirement, and relevant-change acceleration are
+explicit state transitions. Acquisition records `changed` when content changed
+but semantic relevance is not yet evaluated: it keeps the current polling
+interval rather than accelerating to the minimum cadence reserved for a
+confirmed `relevant_change`. `no_change` is recorded only for truthful unchanged
+acquisition.
+
+### Verified runtime sequence (Prompt 4 acceptance)
+
+The Monitor runtime has been verified end-to-end through the production
+composition (no test-only shortcuts):
+
+    due Monitor
+        ↓ SchedulerProcess.run_once()  (coalesced durable monitor_check)
+        ↓ JobService.enqueue  (single active obligation per Monitor)
+        ↓ WorkerProcess.run_once  (MonitorExecutionService handler)
+        ↓ bounded acquisition  (AcquisitionService.acquire_document / poll_feed)
+        ↓ canonical persistence  (Document / DocumentVersion / acquisition_events)
+        ↓ truthful monitor_activity  (changed / no_change / error)
+        ↓ adaptive next cadence  (record_activity → next_check_at + last_result)
+
+Invariants proven by `tests/test_monitor_runtime_acceptance.py`:
+
+* At most one HTTP source acquisition per scheduler tick regardless of how
+  many ticks the scheduler performs.
+* `no_change` is recorded only when an evidence-bearing acquisition (HTTP 200
+  with matching content hash, HTTP 304, or feed with zero delta) actually
+  established that content was unchanged.
+* A disabled Monitor never acquires — the worker handler short-circuits to
+  `disabled` without touching the network.
+* Process-like restart (discard runtime objects, reconstruct against the same
+  DB) recovers queued jobs and preserves dedup state.
+* Rerun via the production API creates a fresh active obligation when no
+  active one exists, and returns 409 when one does.
+* Acquisition provenance (source_id, canonical/final URL, content hash,
+  etag, last-modified, retrieval timestamps) survives through Document →
+  DocumentVersion → acquisition_events.
+
+Downstream intelligence stages (semantic relevance, AI article analysis,
+Evidence/Claims, Stories, Reports, Alerts) are not yet wired into this
+pipeline; they remain separate work for Prompt 5 and beyond.
 
 No monitor is allowed to recursively create unbounded work.
 
@@ -274,6 +316,46 @@ back to the cached entry document when offline, and deliberately bypasses API
 requests so stale domain data is never presented as authoritative. Offline mode
 therefore preserves navigation and cached UI while labeling unavailable live
 data explicitly.
+
+## Local research workbench
+
+Phase 13 keeps research retrieval local and bounded. SQLite FTS5 indexes a
+typed projection of Monitors, Sources, Documents, Stories, Subjects, Claims,
+Evidence, tags, Questions, and notes. Dirty-state triggers invalidate the
+projection when authoritative rows change; there is no unbounded semantic
+index. Document comparison, Subject context, and Monitor diagnostics return
+exact Claim/Evidence/lineage references and distinguish no meaningful change
+from acquisition or processing failure.
+
+## Ask Newsroom
+
+Phase 14 adds AskService as a closed-world answer layer above the workbench
+and evidence ledger. It retrieves only indexed Newsroom objects plus direct
+Report revisions, applies global or object-scoped membership, hydrates exact
+Claims/Evidence/Notes, and composes structured answer statements. It never
+uses arbitrary tools or outside web context.
+
+Conversation and run rows preserve scope, prompt hash/length, retrieval
+metadata, classifications, resolved citations, status, route, and cost. Raw
+prompts are intentionally not stored. Citation resolution is a hard boundary:
+the service refuses unsupported answers and qualifies stale, ambiguous,
+conflicting, and hypothesis material. Cancellation is cooperative and hosted
+escalation remains disabled by default.
+
+## Hardening and operations
+
+The API applies bounded request sizes and fixed-window local-client rate limits,
+uses SameSite=Lax/no-store session cookies, and records only low-cardinality
+privacy-preserving telemetry. Health/readiness checks distinguish liveness from
+SQLite integrity and relationship validation; authenticated metrics expose
+status, latency, and failed-subsystem aggregates without request/query/prompt or
+article content.
+
+Operator persistence uses SQLite's online backup API, post-backup and
+post-restore integrity verification, explicit migration upgrade rehearsal, a
+bounded allow-listed logical JSONL export, and filename-scoped backup retention.
+Recovery procedures cover worker lease recovery, provider outage, power loss,
+and clean fallback to local-only operation.
 
 ## Direct-source strategy
 

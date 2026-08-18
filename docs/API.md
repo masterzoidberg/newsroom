@@ -248,6 +248,85 @@ Malformed provider output, timeout, and provider failure return a safe validatio
 error and do not partially persist a ledger run. The router records the failure
 cause and work ID when telemetry is enabled.
 
+## Search, comparison, and diagnostics
+
+Phase 13 adds the authenticated local research workbench:
+
+- `GET /search` performs bounded SQLite FTS5 search over Monitors, Sources,
+  Documents, Stories, Subjects, Claims, Evidence Spans, tags, Questions, and
+  notes. `q` is escaped as literal terms. `entity_type`, object IDs, state,
+  lifecycle, date bounds, and deterministic `page`/`page_size` filters are
+  supported. Results are ordered by BM25 score, entity type, and entity ID.
+- `POST /comparisons` (also available as `/compare`) accepts two to twenty
+  Document IDs and returns shared/unique Claim sets, contradictions, exact
+  Evidence Span IDs, date/number differences, interpretation records,
+  primary-source use, and Document lineage. Every conclusion remains tied to
+  stored Newsroom data.
+- `POST /workbench/notes` records bounded `note`, `hypothesis`, or `context`
+  notes on a Story, Subject, Document, Claim, Monitor, or Research Question.
+  Existing Research Question notes remain searchable as well.
+- `GET /subjects/{id}/workbench`, `/timeline`, and `/historical-context` expose
+  Subject stories, revisions, evolution events, Claims, notes, and exact
+  historical Evidence Spans.
+- `GET /diagnostics/health`, `/diagnostics/coverage`, and
+  `/monitors/{id}/diagnostics` derive health from recorded activity, acquisition
+  events, and job state. `no_meaningful_change`, `content_changed`,
+  `failed_acquisition`, and `failed_processing` are separate statuses;
+  `content_changed` means acquisition detected changed content whose semantic
+  relevance has not been evaluated yet.
+
+The Phase 13 migrations add namespaced `user`/`smart` tags, generic notes, and
+the bounded FTS projection. Dirty-state triggers invalidate the projection on
+authoritative updates and soft deletions, so stale search results are not
+served; no semantic index is enabled without a benchmarked benefit.
+
+## Ask Newsroom
+
+Phase 14 adds authenticated, local-first conversational research:
+
+- GET/POST /ask/conversations lists or creates global or object-scoped
+  conversations. Supported scopes are Stories, Claims, Evidence, Documents,
+  Reports, Questions, Subjects, Monitors, and Notes.
+- GET /ask/conversations/{id} returns the conversation's answer turns.
+- POST /ask/conversations/{id}/turns retrieves bounded local context and
+  returns structured statements classified as fact, inference, uncertainty,
+  contradiction, user_hypothesis, or context.
+- POST /ask creates a scoped conversation and answers one turn in one call.
+- GET /ask/runs/{id} returns audit metadata; POST /ask/runs/{id}/cancel
+  performs cooperative cancellation.
+
+Every answer statement has one or more citation IDs. Citations are resolved
+server-side against internal Story, Claim, Evidence Span, Document, Report
+Revision, Question, Subject, Monitor, or Note rows before an answer is stored
+or returned. Unsupported questions are refused; stale, ambiguous, conflicting,
+and user-hypothesis material is explicitly qualified.
+
+Prompt length, context units, citation count, and provider mode are bounded.
+Local deterministic retrieval is the default. Hosted mode is disabled unless
+configured and a positive per-request cost cap is supplied. Ask audit rows
+store a prompt hash and length, retrieval object IDs/counts, classifications,
+resolved citations, route, status, and cost—not raw prompts or secrets.
+
+## Hardening and operations
+
+- `GET /health` and `GET /readiness` remain public liveness/readiness probes;
+  authenticated `GET /metrics` returns bounded request/status/latency and
+  failure-by-subsystem counters without query strings, request bodies, article
+  bodies, prompt content, or secrets.
+- Request bodies over 1 MiB are rejected, including streamed bodies. The local API applies
+  fixed-window client request limits of 120 requests/minute, 20
+  authentication requests/minute, and 30 metrics requests/minute, returning a
+  `Retry-After` header when exceeded.
+- Session/auth responses are `no-store`; sessions use HTTP-only, Secure in
+  production, SameSite=Lax cookies with 24-hour expiry. Mutations still
+  require the CSRF header.
+- `python -m newsroom.cli backup|restore|verify|upgrade|export|retain` provides
+  verified operator workflows. The logical export is an allow-listed JSONL
+  projection and excludes password/session material, settings, prompts, note
+  bodies, search text, provider payloads, and raw Ask answers.
+- Full recovery and failure-response procedures are in
+  `docs/OPERATIONS_RUNBOOK.md` and `docs/RECOVERY_RUNBOOK.md`.
+
 ## Query and mutation conventions
 
 List responses use:

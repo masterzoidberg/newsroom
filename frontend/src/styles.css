@@ -89,6 +89,7 @@ h3 { margin: 0; color: #eaf1f7; font-size: 1rem; line-height: 1.35; }
 .reports-layout { grid-template-columns: minmax(280px, .65fr) minmax(360px, 1.35fr); }
 .alerts-grid { grid-template-columns: minmax(0, 1.3fr) minmax(300px, .7fr); }
 .document-grid { grid-template-columns: minmax(0, .8fr) minmax(0, 1.2fr); }
+.workbench-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 .section-card { min-width: 0; margin-bottom: 16px; padding: 21px; border: 1px solid var(--line); border-radius: 10px; background: rgba(13, 26, 43, .74); }
 .section-card-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 18px; margin-bottom: 18px; }
 .section-card-heading p { margin: 6px 0 0; color: var(--quiet); font-size: .78rem; line-height: 1.45; }
@@ -171,6 +172,47 @@ blockquote { margin: 11px 0; color: #d7e2ed; line-height: 1.58; }
 .timeline-dot { z-index: 1; width: 15px; height: 15px; border: 3px solid #0d1a2b; border-radius: 50%; background: var(--mint); box-shadow: 0 0 0 1px var(--mint); }
 .timeline-list p { margin: 5px 0; color: var(--muted); font-size: .8rem; }
 .timeline-list small { color: var(--quiet); font-size: .7rem; }
+.workbench-result-list { display: grid; gap: 4px; max-height: 620px; overflow: auto; }
+.workbench-result { display: flex; min-width: 0; align-items: flex-start; justify-content: space-between; gap: 12px; padding: 13px 0; border-bottom: 1px solid rgba(154, 178, 205, .12); }
+.workbench-result:last-child { border-bottom: 0; }
+.workbench-result > div { min-width: 0; }
+.workbench-result-meta { display: flex; align-items: center; gap: 8px; margin-bottom: 7px; }
+.workbench-result h3 { font-size: .92rem; }
+.workbench-result p { margin: 5px 0 0; color: var(--muted); font-size: .77rem; line-height: 1.45; }
+.workbench-score { flex: 0 0 auto; color: var(--quiet); font-size: .72rem; font-variant-numeric: tabular-nums; }
+.comparison-summary { border-top: 1px solid var(--line); padding-top: 16px; }
+.comparison-summary .stat-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); margin: 0 0 18px; }
+.comparison-summary .stat-card { min-height: 74px; padding: 11px; }
+.comparison-summary .stat-card strong { margin-top: 6px; font-size: 1.25rem; }
+.comparison-summary > p { color: var(--muted); font-size: .78rem; line-height: 1.5; }
+.comparison-summary > p .badge { margin-right: 6px; }
+.subject-workbench h3 { margin: 21px 0 11px; color: var(--mint); font-size: .7rem; letter-spacing: .1em; text-transform: uppercase; }
+.subject-workbench blockquote { padding: 12px 14px; border-left: 3px solid var(--amber); background: rgba(8, 17, 31, .45); }
+.subject-workbench blockquote footer { margin-top: 8px; color: var(--quiet); font-size: .7rem; }
+.ask-layout { display: grid; grid-template-columns: minmax(0, 1.2fr) minmax(280px, .8fr); align-items: start; gap: 16px; }
+.ask-composer textarea { min-height: 132px; resize: vertical; }
+.ask-form-footer { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.ask-form-footer .primary-button { flex: 0 0 auto; }
+.ask-rules { display: grid; gap: 13px; margin: 0; padding: 0; list-style: none; }
+.ask-rules li { display: grid; grid-template-columns: max-content 1fr; align-items: center; gap: 10px; color: var(--muted); font-size: .8rem; line-height: 1.45; }
+.ask-history { display: grid; gap: 16px; }
+.ask-turn { min-width: 0; padding: 18px; border: 1px solid var(--line); border-radius: 8px; background: rgba(18, 34, 57, .57); }
+.ask-turn-header { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.ask-turn-header > span { display: flex; flex-wrap: wrap; align-items: center; gap: 9px; }
+.ask-turn-header small { color: var(--quiet); font-size: .7rem; }
+.ask-turn-header code { color: var(--coral); }
+.ask-answer { margin: 17px 0; padding: 13px 15px; border-left: 3px solid var(--mint); color: #dce9f2; white-space: pre-line; line-height: 1.6; }
+.ask-statements { display: grid; gap: 8px; }
+.ask-statement { padding: 12px; border: 1px solid rgba(154, 178, 205, .13); background: rgba(8, 17, 31, .42); }
+.ask-statement-label { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.ask-statement-label > span { color: var(--quiet); font-size: .7rem; }
+.ask-statement p { margin: 8px 0 0; color: #c7d7e3; font-size: .82rem; line-height: 1.5; }
+.ask-citations { margin-top: 17px; }
+.ask-citations h3 { margin-bottom: 9px; color: var(--mint); font-size: .7rem; letter-spacing: .1em; text-transform: uppercase; }
+.ask-citations ul { display: grid; gap: 7px; margin: 0; padding: 0; list-style: none; }
+.ask-citations li { display: grid; grid-template-columns: max-content minmax(0, 1fr) max-content; align-items: center; gap: 9px; padding: 8px 0; border-bottom: 1px solid rgba(154, 178, 205, .1); color: var(--muted); font-size: .75rem; }
+.ask-citations li span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ask-audit { margin: 15px 0 0; color: var(--quiet); font-size: .7rem; }
 .alert-detail-row { align-items: flex-start; padding: 15px 0; }
 .alert-detail-row h3 { margin: 10px 0 5px; }
 .alert-detail-row p { margin: 0 0 8px; color: var(--muted); line-height: 1.5; }
@@ -187,7 +229,7 @@ blockquote { margin: 11px 0; color: #d7e2ed; line-height: 1.58; }
 @media (max-width: 1050px) {
   .sidebar { width: 218px; }
   .workspace { width: calc(100% - 218px); margin-left: 218px; }
-  .inbox-grid, .alerts-grid, .reports-layout, .document-grid { grid-template-columns: 1fr; }
+  .inbox-grid, .alerts-grid, .reports-layout, .document-grid, .workbench-grid, .ask-layout { grid-template-columns: 1fr; }
 }
 @media (max-width: 760px) {
   .sidebar { transform: translateX(-100%); transition: transform .18s ease; }
@@ -204,6 +246,11 @@ blockquote { margin: 11px 0; color: #d7e2ed; line-height: 1.58; }
   .story-summary { flex-direction: column; }
   .story-summary-meta { justify-items: start; text-align: left; }
   .report-section-grid { grid-template-columns: 1fr; }
+  .comparison-summary .stat-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .ask-form-footer { align-items: stretch; flex-direction: column; }
+  .ask-form-footer .primary-button { width: 100%; }
+  .ask-citations li { grid-template-columns: max-content minmax(0, 1fr); }
+  .ask-citations li code { grid-column: 2; }
 }
 @media (max-width: 480px) {
   .main-content { padding: 18px 14px 50px; }

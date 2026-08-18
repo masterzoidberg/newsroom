@@ -955,6 +955,12 @@ class CoreService:
         name = data["name"].strip()
         if not name:
             raise DomainValidation("tag name must not be empty")
+        namespace = str(data.get("namespace", "user")).strip()
+        tag_type = str(data.get("tag_type", "user"))
+        if not namespace or len(namespace) > 64 or not re.fullmatch(r"[A-Za-z0-9._:-]+", namespace):
+            raise DomainValidation("tag namespace is invalid")
+        if tag_type not in {"user", "smart"}:
+            raise DomainValidation("tag type must be user or smart")
         identifier = new_id("tag")
         conn = storage.connect(self.db_path)
         try:
@@ -966,6 +972,8 @@ class CoreService:
                         "id": identifier,
                         "name": name,
                         "normalized_name": normalized_text(name),
+                        "namespace": namespace,
+                        "tag_type": tag_type,
                         "created_at": utc_now(),
                     },
                 )
@@ -973,16 +981,22 @@ class CoreService:
             conn.close()
         return self.get_tag(identifier)
 
-    def list_tags(self, *, q=None, page=1, page_size=25):
+    def list_tags(self, *, q=None, namespace=None, tag_type=None, page=1, page_size=25):
         clauses: list[str] = []
         params: list[object] = []
+        if namespace:
+            clauses.append("namespace = ?")
+            params.append(namespace)
+        if tag_type:
+            clauses.append("tag_type = ?")
+            params.append(tag_type)
         query, query_params = self._q_filter(q, ("name", "normalized_name"))
         if query:
             clauses.append(query)
             params.extend(query_params)
         return self._list(
             "tags",
-            "id, name, normalized_name, created_at",
+            "id, name, normalized_name, namespace, tag_type, created_at",
             where=clauses,
             params=params,
             order_by="normalized_name ASC, id ASC",
@@ -1001,6 +1015,17 @@ class CoreService:
         name = data.get("name", "").strip()
         if not name:
             raise DomainValidation("tag name must not be empty")
+        namespace = data.get("namespace")
+        tag_type = data.get("tag_type")
+        if namespace is not None and (not str(namespace).strip() or not re.fullmatch(r"[A-Za-z0-9._:-]{1,64}", str(namespace).strip())):
+            raise DomainValidation("tag namespace is invalid")
+        if tag_type is not None and tag_type not in {"user", "smart"}:
+            raise DomainValidation("tag type must be user or smart")
+        values = {"name": name, "normalized_name": normalized_text(name)}
+        if namespace is not None:
+            values["namespace"] = str(namespace).strip()
+        if tag_type is not None:
+            values["tag_type"] = tag_type
         conn = storage.connect(self.db_path)
         try:
             with storage.write_tx(conn):
@@ -1008,7 +1033,7 @@ class CoreService:
                     conn,
                     "tags",
                     identifier,
-                    {"name": name, "normalized_name": normalized_text(name)},
+                    values,
                 )
         finally:
             conn.close()

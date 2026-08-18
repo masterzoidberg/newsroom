@@ -7,6 +7,7 @@ evidence without the normal Evidence Ledger path.
 from __future__ import annotations
 
 import json
+import re
 import sqlite3
 from datetime import datetime
 from pathlib import Path
@@ -14,6 +15,7 @@ from typing import Any, Mapping
 
 from . import storage
 from .domain import DomainConflict, DomainNotFound, DomainValidation, new_id, utc_now
+from .jobs import RESEARCH_QUESTION_JOB_TYPE
 
 
 QUESTION_STATUSES = frozenset({"open", "resolved", "abandoned"})
@@ -23,6 +25,7 @@ LINK_RELATIONSHIPS = frozenset({"supports", "contradicts", "contextualizes", "re
 NOTE_TYPES = frozenset({"note", "hypothesis"})
 ATTEMPT_MODES = frozenset({"manual", "policy"})
 ATTEMPT_STATUSES = frozenset({"planned", "running", "succeeded", "partial", "failed", "cancelled"})
+TERMINAL_RQ_ATTEMPT_STATUSES = frozenset({"succeeded", "partial", "failed", "cancelled"})
 SUGGESTION_TYPES = frozenset({"question", "search", "source"})
 SUGGESTION_STATUSES = frozenset({"pending", "accepted", "rejected", "converted"})
 
@@ -76,6 +79,8 @@ def _validate_time(value: str | None, label: str) -> str | None:
 
 class ResearchQuestionService:
     """Own short SQLite transactions for Research Questions and gap work."""
+
+    job_type = RESEARCH_QUESTION_JOB_TYPE
 
     def __init__(self, db_path: str | Path):
         self.db_path = Path(db_path)
@@ -676,9 +681,10 @@ class ResearchQuestionService:
         key = f"research-question:{identifier}:{attempt_no}"
         try:
             job = JobService(self.db_path).enqueue(
-                "research_question",
+                self.job_type,
                 {
                     "research_question_id": identifier,
+                    "attempt_id": attempt_id,
                     "question": question_text,
                     "mode": mode,
                     "query": query,
@@ -831,6 +837,369 @@ class ResearchQuestionService:
         return question
 
 
+_SEARCH_TOKEN_RE = re.compile(r"[\w]+(?:[-'][\w]+)*", re.UNICODE)
+
+
+class ResearchQuestionExecutionService:
+    """Allow-listed local Research Question pursuit handler with no recursive enqueue path."""
+
+    def __init__(
+        self,
+        db_path: str | Path,
+        *,
+        questions: ResearchQuestionService | None = None,
+        search: Any | None = None,
+    ):
+        self.db_path = Path(db_path)
+        self.questions = questions or ResearchQuestionService(db_path)
+        self._search = search
+
+    def handlers(self) -> dict[str, Any]:
+        return {self.questions.job_type: self.handle}
+
+    def _search_service(self) -> Any:
+        if self._search is not None:
+            return self._search
+        from .workbench import SearchService
+
+        return SearchService(self.db_path)
+
+    @staticmethod
+    def _tokens(query: str) -> list[str]:
+        seen: set[str] = set()
+        tokens: list[str] = []
+        for token in _SEARCH_TOKEN_RE.findall(str(query).casefold()):
+            if len(token) < 2 or token in seen:
+                continue
+            seen.add(token)
+            tokens.append(token)
+        return tokens[:50]
+
+    def _attempt(self, job: Mapping[str, Any], question_id: str) -> dict[str, Any] | None:
+        payload = job.get("payload", {})
+        payload_attempt_id = payload.get("attempt_id") if isinstance(payload, Mapping) else None
+        conn = storage.connect(self.db_path)
+        try:
+            row = None
+            if payload_attempt_id:
+                row = conn.execute(
+                    "SELECT * FROM research_question_attempts WHERE id = ? AND question_id = ?",
+                    (payload_attempt_id, question_id),
+                ).fetchone()
+            if row is None:
+                row = conn.execute(
+                    "SELECT * FROM research_question_attempts WHERE job_id = ?", (job["id"],)
+                ).fetchone()
+            if row is None:
+                row = conn.execute(
+                    "SELECT * FROM research_question_attempts WHERE question_id = ? AND job_id IS NULL AND status = 'planned' ORDER BY attempt_no DESC, id DESC LIMIT 1",
+                    (question_id,),
+                ).fetchone()
+            return dict(row) if row is not None else None
+        finally:
+            conn.close()
+
+    def _research(self, question_id: str, query: str, cap: int) -> list[dict[str, Any]]:
+        search = self._search_service()
+        terms = self._tokens(query)
+        if not terms:
+            return []
+        queries = [" ".join(terms[:6]), *terms[:8]]
+        findings: dict[tuple[str, str], dict[str, Any]] = {}
+        for candidate in queries:
+            if len(findings) >= cap:
+                break
+            try:
+                result = search.search(candidate, entity_types=["claim", "evidence"], page_size=cap)
+            except DomainValidation:
+                continue
+            for item in result.get("items", []):
+                key = (item["entity_type"], item["entity_id"])
+                if key not in findings:
+                    findings[key] = item
+                if len(findings) >= cap:
+                    break
+        return list(findings.values())
+
+    def handle(self, job: Mapping[str, Any]) -> dict[str, Any]:
+        """Execute the bounded Research Question pursuit and return its outcome.
+
+        This handler deliberately does NOT commit a terminal attempt state. The
+        worker's job completion writes the owning attempt's terminal state in
+        the same transaction that terminalizes the durable job, so the attempt
+        can never become terminal before the job outcome is durable.
+        """
+        payload = job.get("payload", {})
+        if not isinstance(payload, Mapping):
+            raise DomainValidation("research question job payload must be an object")
+        question_id = payload.get("research_question_id")
+        if not question_id:
+            raise DomainValidation("research question job is missing research_question_id")
+        question_id = str(question_id)
+        attempt = self._attempt(job, question_id)
+        if attempt is None:
+            raise DomainNotFound("research question attempt not found")
+        self.questions.record_attempt(attempt["id"], "running", started_at=utc_now())
+        query = str(payload.get("query") or payload.get("question") or attempt.get("query") or "").strip()
+        if not query:
+            query = str(self.questions.get(question_id).get("question") or "").strip()
+        findings = self._research(question_id, query, cap=25)
+        claims = [item for item in findings if item["entity_type"] == "claim"]
+        evidence = [item for item in findings if item["entity_type"] == "evidence"]
+        for item in claims:
+            self.questions.link_claim(question_id, item["entity_id"], "contextualizes")
+        for item in evidence:
+            self.questions.link_evidence(question_id, item["entity_id"], "contextualizes")
+        status = "succeeded" if findings else "partial"
+        note = f"pursuit linked {len(claims)} claims and {len(evidence)} evidence spans"
+        return {
+            "research_question_id": question_id,
+            "attempt_id": attempt["id"],
+            "attempt_status": status,
+            "outcome_note": note,
+            "query": query,
+            "claim_count": len(claims),
+            "evidence_count": len(evidence),
+        }
+
+
+def _research_attempt_for_job(conn: sqlite3.Connection, job_row: sqlite3.Row) -> tuple[sqlite3.Row | None, bool]:
+    """Locate the Research Question attempt owned by this durable job.
+
+    Returns ``(attempt_row, owned_by_job)``. ``owned_by_job`` is True only when
+    the attempt is exactly linked to this durable job via ``job_id``, which is
+    sufficient proof to align even a leftover terminal attempt. Payload and
+    fallback linkage are weaker and only ever sync non-terminal attempts so that
+    historical attempts (for example from a rerun) are never overwritten.
+    """
+    question_id = job_row["research_question_id"]
+    if not question_id:
+        return None, False
+    row = conn.execute(
+        "SELECT * FROM research_question_attempts WHERE job_id = ?",
+        (job_row["id"],),
+    ).fetchone()
+    if row is not None:
+        return row, True
+    payload_attempt_id = None
+    try:
+        payload = json.loads(job_row["payload_json"] or "{}")
+        payload_attempt_id = payload.get("attempt_id")
+    except (TypeError, ValueError, json.JSONDecodeError):
+        pass
+    if isinstance(payload_attempt_id, str) and payload_attempt_id:
+        row = conn.execute(
+            "SELECT * FROM research_question_attempts WHERE id = ? AND question_id = ?",
+            (payload_attempt_id, question_id),
+        ).fetchone()
+        if row is not None:
+            return row, False
+    row = conn.execute(
+        "SELECT * FROM research_question_attempts WHERE question_id = ? AND job_id IS NULL AND status = 'planned' ORDER BY attempt_no DESC, id DESC LIMIT 1",
+        (question_id,),
+    ).fetchone()
+    return row, False
+
+
+def reconcile_research_job_outcome(
+    conn: sqlite3.Connection,
+    job_row: sqlite3.Row,
+    final_status: str,
+    *,
+    error_code: str | None = None,
+    error_detail: str | None = None,
+    outcome: Mapping[str, Any] | None = None,
+    outcome_note: str | None = None,
+    timestamp: str | None = None,
+) -> None:
+    """Deterministically align the owning Research Question attempt with a job outcome.
+
+    This is the authoritative terminalization writer for Research Question
+    attempts. It runs inside the same write transaction that terminalizes the
+    durable job, so the job and its owning attempt commit or roll back together:
+    the attempt can never become terminal before the job outcome is durable.
+
+    ``final_status`` is the durable job's effective post-event status
+    (``"queued"`` for a bounded retry, otherwise a terminal status), matching the
+    states produced by job completion, lease recovery, cancellation, and
+    claim-time budget exhaustion.
+    """
+    if job_row["job_type"] != RESEARCH_QUESTION_JOB_TYPE:
+        return
+    attempt, owned = _research_attempt_for_job(conn, job_row)
+    if attempt is None:
+        return
+    if attempt["status"] in TERMINAL_RQ_ATTEMPT_STATUSES and not owned:
+        return
+    now = timestamp
+    if now is None:
+        row = conn.execute("SELECT updated_at FROM jobs WHERE id = ?", (job_row["id"],)).fetchone()
+        now = row["updated_at"] if row is not None and row["updated_at"] else utc_now()
+    if final_status == "queued":
+        conn.execute(
+            """
+            UPDATE research_question_attempts
+            SET status = 'planned', outcome_note = ?, started_at = NULL, completed_at = NULL
+            WHERE id = ?
+            """,
+            (outcome_note or "job requeued for another attempt", attempt["id"]),
+        )
+        return
+    if final_status == "succeeded":
+        attempt_status = "succeeded"
+        if isinstance(outcome, Mapping) and outcome.get("attempt_status") in {"succeeded", "partial"}:
+            attempt_status = outcome["attempt_status"]
+        note = outcome_note
+        if not note and isinstance(outcome, Mapping):
+            note = str(outcome.get("outcome_note") or "").strip() or None
+        conn.execute(
+            "UPDATE research_question_attempts SET status = ?, outcome_note = ?, completed_at = ? WHERE id = ?",
+            (attempt_status, note, now, attempt["id"]),
+        )
+        return
+    if final_status == "partial":
+        conn.execute(
+            "UPDATE research_question_attempts SET status = 'partial', outcome_note = ?, completed_at = ? WHERE id = ?",
+            (outcome_note or "pursuit produced partial results", now, attempt["id"]),
+        )
+        return
+    if final_status == "failed":
+        note = outcome_note
+        if not note:
+            note = "durable job failed"
+            if error_detail:
+                note = f"{note}: {error_detail}"
+            elif error_code:
+                note = f"{note}: {error_code}"
+        conn.execute(
+            "UPDATE research_question_attempts SET status = 'failed', outcome_note = ?, completed_at = ? WHERE id = ?",
+            (note, now, attempt["id"]),
+        )
+        return
+    if final_status == "cancelled":
+        conn.execute(
+            "UPDATE research_question_attempts SET status = 'cancelled', outcome_note = ?, completed_at = ? WHERE id = ?",
+            (outcome_note or "durable job cancelled", now, attempt["id"]),
+        )
+        return
+
+
+def reconcile_recovered_research_job(
+    conn: sqlite3.Connection,
+    job_row: sqlite3.Row,
+    recovered_status: str,
+) -> None:
+    """Align the owning Research Question attempt with a lease-recovered job outcome.
+
+    Runs inside the job recovery write transaction. Deterministic and idempotent:
+    the durable job's recovered state is authoritative for the attempt it owns.
+    """
+    if job_row["job_type"] != RESEARCH_QUESTION_JOB_TYPE:
+        return
+    if not job_row["research_question_id"]:
+        return
+    if recovered_status == "queued":
+        note = "lease expired; job requeued"
+    elif recovered_status == "failed":
+        note = "durable job lease expired"
+    elif recovered_status == "cancelled":
+        note = "durable job cancelled during recovery"
+    else:
+        note = None
+    reconcile_research_job_outcome(
+        conn,
+        job_row,
+        recovered_status,
+        error_code="lease_expired",
+        outcome_note=note,
+    )
+
+
+def research_job_recovery_hook(conn: sqlite3.Connection, job_row: sqlite3.Row, recovered_status: str) -> None:
+    """Recovery hook that keeps Research Question attempts consistent with lease recovery."""
+    reconcile_recovered_research_job(conn, job_row, recovered_status)
+
+
+def research_job_rerun_factory(db_path: str | Path, job: Mapping[str, Any]) -> Mapping[str, Any] | None:
+    """Rebuild a terminal Research Question job as a fresh owned attempt.
+
+    Returns ``None`` for any other job type so JobService falls back to its
+    generic clone semantics. For a research_question job it refuses with a clear
+    domain diagnostic whenever the rerun would be doomed: the owning question is
+    missing, the payload has no attempt identity, the question is not open, or
+    the question's configured budgets cannot fund another attempt. The new
+    attempt is created by the normal pursuit path, so it owns exactly one new
+    durable job with deterministic ownership metadata and the historical
+    terminal attempt is never reopened or mutated.
+    """
+    if job.get("job_type") != RESEARCH_QUESTION_JOB_TYPE:
+        return None
+    payload = job.get("payload") or {}
+    if not isinstance(payload, Mapping):
+        raise DomainValidation("research question job payload must be an object")
+    question_id = str(payload.get("research_question_id") or "").strip()
+    if not question_id:
+        raise DomainConflict("research question job payload has no research_question_id; cannot rerun")
+    if not str(payload.get("attempt_id") or "").strip():
+        raise DomainConflict("research question job payload has no attempt_id; cannot rerun")
+    budget = payload.get("budget") or {}
+    budget = budget if isinstance(budget, Mapping) else {}
+    return ResearchQuestionService(db_path).pursue(
+        question_id,
+        mode=str(payload.get("mode") or "manual"),
+        query_units=budget.get("acquisition_units", 0),
+        local_model_units=budget.get("local_model_units", 0),
+        estimated_cost_usd=budget.get("usd", 0.0),
+        query=payload.get("query"),
+    )
+
+
+def research_job_completion_hook(
+    conn: sqlite3.Connection,
+    job_row: sqlite3.Row,
+    job_status: str,
+    context: Mapping[str, Any] | None = None,
+) -> None:
+    """Completion hook that keeps Research Question attempts consistent with job completion.
+
+    Runs inside the same write transaction that terminalizes the durable job, so
+    the job and its owning attempt always finish in consistent states. Called by
+    JobService for completion, cancellation of a queued job, and claim-time
+    budget exhaustion; it is a no-op for any other job type. Research Question
+    reconciliation lives here and Monitor reconciliation lives in
+    ``monitoring.monitor_job_completion_hook``; a central composition point in
+    the production wiring runs both hooks for the same completion event.
+    """
+    ctx = dict(context or {})
+    trigger = str(ctx.get("trigger", "complete"))
+    error_code = ctx.get("error_code")
+    error_detail = ctx.get("error_detail")
+    outcome = ctx.get("outcome")
+    if job_status == "queued":
+        note = f"attempt failed; job will retry{': ' + str(error_detail) if error_detail else ''}"
+    elif job_status == "failed":
+        if trigger == "budget":
+            note = f"job not claimed: {error_code or 'budget_exhausted'}"
+        else:
+            note = f"research execution failed: {error_code or 'unknown'}"
+            if error_detail:
+                note = f"{note}: {error_detail}"
+    elif job_status == "cancelled":
+        reason = str(job_row["failure_cause"] or error_code or "").strip()
+        note = f"durable job cancelled{': ' + reason if reason and reason != 'cancelled' else ''}"
+    else:
+        note = None
+    reconcile_research_job_outcome(
+        conn,
+        job_row,
+        job_status,
+        error_code=error_code,
+        error_detail=error_detail,
+        outcome=outcome if isinstance(outcome, Mapping) else None,
+        outcome_note=note,
+    )
+
+
 __all__ = [
     "ATTEMPT_MODES",
     "ATTEMPT_STATUSES",
@@ -839,7 +1208,14 @@ __all__ = [
     "QUESTION_ORIGINS",
     "QUESTION_PRIORITIES",
     "QUESTION_STATUSES",
+    "reconcile_recovered_research_job",
+    "reconcile_research_job_outcome",
+    "research_job_completion_hook",
+    "research_job_rerun_factory",
+    "ResearchQuestionExecutionService",
     "ResearchQuestionService",
+    "research_job_recovery_hook",
     "SUGGESTION_STATUSES",
     "SUGGESTION_TYPES",
+    "TERMINAL_RQ_ATTEMPT_STATUSES",
 ]

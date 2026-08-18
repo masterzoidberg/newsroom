@@ -10,6 +10,8 @@ export const NAV_ITEMS: NavItem[] = [
   { key: "reports", label: "Reports", group: "Review", icon: "▥" },
   { key: "saved", label: "Saved", group: "Review", icon: "☆" },
   { key: "history", label: "History", group: "Review", icon: "↺" },
+  { key: "workbench", label: "Research workbench", group: "Review", icon: "⌕" },
+  { key: "ask", label: "Ask Newsroom", group: "Review", icon: "✦" },
   { key: "topics", label: "Topics", group: "Configure", icon: "#" },
   { key: "subjects", label: "Subjects", group: "Configure", icon: "◎" },
   { key: "sources", label: "Sources", group: "Configure", icon: "↗" },

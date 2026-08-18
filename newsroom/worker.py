@@ -13,6 +13,17 @@ class RetryableJobFailure(RuntimeError):
     """A handler failure that should consume a bounded retry."""
 
 
+def merge_handlers(*registries: Mapping[str, Callable[[dict[str, Any]], Any]]) -> dict[str, Callable[[dict[str, Any]], Any]]:
+    """Compose handler registries while rejecting silent job-type collisions."""
+    merged: dict[str, Callable[[dict[str, Any]], Any]] = {}
+    for registry in registries:
+        for name, handler in registry.items():
+            if name in merged:
+                raise ValueError(f"duplicate handler registration for job_type {name!r}")
+            merged[name] = handler
+    return merged
+
+
 class WorkerProcess:
     """Claim one job, execute a registered handler, and persist its outcome."""
 
@@ -44,7 +55,7 @@ class WorkerProcess:
                 now=now,
             )
         try:
-            handler(job)
+            result = handler(job)
         except RetryableJobFailure as exc:
             return self.queue.complete(
                 job["id"],
@@ -65,7 +76,13 @@ class WorkerProcess:
                 retryable=False,
                 now=now,
             )
-        return self.queue.complete(job["id"], self.worker_id, "succeeded", now=now)
+        return self.queue.complete(
+            job["id"],
+            self.worker_id,
+            "succeeded",
+            outcome=result if isinstance(result, Mapping) else None,
+            now=now,
+        )
 
     def run_forever(self, stop_event: threading.Event, *, interval_seconds: float = 1.0) -> None:
         if interval_seconds <= 0:
@@ -75,4 +92,4 @@ class WorkerProcess:
                 stop_event.wait(interval_seconds)
 
 
-__all__ = ["RetryableJobFailure", "WorkerProcess"]
+__all__ = ["RetryableJobFailure", "WorkerProcess", "merge_handlers"]

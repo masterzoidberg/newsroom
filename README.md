@@ -21,8 +21,20 @@ rules, acknowledgement, deduplication, and optional browser delivery state are
 implemented. Phase 12 adds the responsive authenticated product workspace,
 evidence/provenance inspection views, operator/admin surfaces, accessible
 keyboard navigation, and an installable same-origin PWA shell with offline
-fallback behavior.
-Hosted providers remain optional and disabled by default.
+fallback behavior. Phase 13 adds the bounded local research workbench:
+namespaced tags, notes/hypotheses, FTS search, evidence-bound comparison,
+Subject context/timelines, and state-derived coverage/health diagnostics.
+Phase 14 adds bounded local Ask Newsroom conversations with object-scoped
+retrieval, structured fact/inference/uncertainty/contradiction classifications,
+resolvable citations, cancellation, and audit metadata without raw prompt
+storage. Hosted providers remain optional and disabled by default.
+Phase 15 adds request-size/rate/session hardening, privacy-preserving runtime
+telemetry, verified online backup/restore and migration upgrade commands,
+bounded logical export and retention, representative workload tests, and
+operator/recovery runbooks. Phase 16 adds an explicit Windows release identity,
+outside-repository production install layout, same-origin process launchers,
+bounded Task Scheduler restart configuration, and opt-in private Tailscale Serve
+configuration with final acceptance evidence.
 
 ## Authority
 
@@ -44,6 +56,11 @@ The imported deterministic core and standalone storage tests must remain green.
 No runtime database, logs, backups, secrets, provider caches, or downloaded
 article bodies belong in this repository. The planned standalone runtime roots
 are under `%LOCALAPPDATA%\Newsroom\...` with explicit dev/prod selection.
+
+Operational procedures live in `docs/OPERATIONS_RUNBOOK.md` and
+`docs/RECOVERY_RUNBOOK.md`. The Phase 16 deployment rehearsal is
+`scripts/phase16_windows_deploy.ps1`; runtime databases and backup files remain
+outside the repository.
 
 ## v1 provenance
 

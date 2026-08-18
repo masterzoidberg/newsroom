@@ -16,8 +16,18 @@ from pathlib import Path
 from typing import Any, Callable, Iterable, Mapping, Sequence
 
 from . import storage
+from .acquisition import (
+    AcquisitionBlocked,
+    AcquisitionError,
+    AcquisitionService,
+    AcquisitionTimeout,
+    AcquisitionTooLarge,
+    FeedParseError,
+)
 from .ai import LocalRelevanceProvider, RelevanceOutput
 from .domain import DomainConflict, DomainNotFound, DomainValidation, new_id, normalized_text, utc_now
+from .jobs import BudgetService, MONITOR_CHECK_JOB_TYPE
+from .worker import RetryableJobFailure
 
 
 TARGET_TABLES = {
@@ -575,8 +585,18 @@ class MonitorService:
             values["next_check_at"] = next_check_at
         return self.update(identifier, values)
 
-    def record_activity(self, identifier: str, outcome: str, *, new_items: int = 0, changed_items: int = 0, relevant_items: int = 0, error_code: str | None = None, observed_at: str | datetime | None = None) -> dict[str, Any]:
-        if outcome not in {"no_change", "relevant_change", "partial", "error"}:
+    def record_activity(
+        self,
+        identifier: str,
+        outcome: str,
+        *,
+        new_items: int = 0,
+        changed_items: int = 0,
+        relevant_items: int = 0,
+        error_code: str | None = None,
+        observed_at: str | datetime | None = None,
+    ) -> dict[str, Any]:
+        if outcome not in {"no_change", "changed", "relevant_change", "partial", "error"}:
             raise DomainValidation("unsupported monitor activity outcome")
         counts = {"new_items": new_items, "changed_items": changed_items, "relevant_items": relevant_items}
         for field, value in counts.items():
@@ -600,7 +620,16 @@ class MonitorService:
                 else:
                     current_interval = int(row["base_cadence_seconds"])
                 backoff = _decode(row["backoff_rules"], {})
-                multiplier = float(backoff.get("no_change_multiplier", 2.0) if outcome == "no_change" else backoff.get("error_multiplier", 2.0) if outcome == "error" else 1.0)
+                if outcome == "no_change":
+                    multiplier = float(backoff.get("no_change_multiplier", 2.0))
+                elif outcome == "error":
+                    multiplier = float(backoff.get("error_multiplier", 2.0))
+                else:
+                    # 'changed' and reserved 'partial': content changed, but
+                    # semantic relevance is not yet evaluated. Keep the current
+                    # polling interval; do not drop to min_cadence (reserved
+                    # for a confirmed relevant_change) and do not back off.
+                    multiplier = 1.0
                 if not math.isfinite(multiplier) or multiplier < 1.0 or multiplier > 10.0:
                     raise DomainValidation("backoff multipliers must be between 1 and 10")
                 if outcome == "relevant_change":
@@ -804,36 +833,398 @@ class ScopeSuggestionService:
 
 
 class MonitorExecutionService:
-    """Allow-listed local monitor job handler with no recursive enqueue path."""
+    """Allow-listed local monitor job handler with bounded source acquisition."""
 
-    def __init__(self, db_path: str | Path):
+    def __init__(
+        self,
+        db_path: str | Path,
+        *,
+        acquisition_service: AcquisitionService | None = None,
+        monitor_service: MonitorService | None = None,
+        budget_service: BudgetService | None = None,
+    ):
         self.db_path = Path(db_path)
-        self.monitors = MonitorService(db_path)
+        self.monitors = monitor_service or MonitorService(db_path)
+        self.acquisition = acquisition_service or AcquisitionService(db_path)
+        self.budgets = budget_service or BudgetService(db_path)
 
     def handle(self, job: Mapping[str, Any]) -> dict[str, Any]:
         payload = job.get("payload", {})
         if not isinstance(payload, Mapping):
             raise DomainValidation("monitor job payload must be an object")
-        monitor_id = payload.get("monitor_id")
+        monitor_id = payload.get("monitor_id") or job.get("monitor_id")
         if not monitor_id:
             raise DomainValidation("monitor job is missing monitor_id")
+        monitor_id = str(monitor_id)
+        observed_at = str(job.get("updated_at") or utc_now())
+
+        # Check if caller explicitly supplied candidate_text (manual/unit test relevance path)
         candidate = payload.get("candidate_text")
-        if candidate is None:
-            monitor = self.monitors.record_activity(monitor_id, "no_change", observed_at=job.get("updated_at") or utc_now())
-            return {"monitor_id": monitor_id, "outcome": "no_change", "monitor": monitor, "paid_used": False}
-        result = self.monitors.relevance(monitor_id, str(candidate))
-        outcome = "relevant_change" if result.relevant else "no_change"
-        monitor = self.monitors.record_activity(
-            monitor_id,
-            outcome,
-            new_items=1 if result.relevant else 0,
-            relevant_items=1 if result.relevant else 0,
-            observed_at=job.get("updated_at") or utc_now(),
-        )
-        return {"monitor_id": monitor_id, "outcome": outcome, "relevance": result.as_dict(), "monitor": monitor, "paid_used": False}
+        if candidate is not None:
+            result = self.monitors.relevance(monitor_id, str(candidate))
+            outcome = "relevant_change" if result.relevant else "no_change"
+            monitor = self.monitors.record_activity(
+                monitor_id,
+                outcome,
+                new_items=1 if result.relevant else 0,
+                relevant_items=1 if result.relevant else 0,
+                observed_at=observed_at,
+            )
+            return {
+                "monitor_id": monitor_id,
+                "outcome": outcome,
+                "relevance": result.as_dict(),
+                "monitor": monitor,
+                "paid_used": False,
+            }
+
+        # Production path: resolve Monitor and execute bounded acquisition
+        conn = storage.connect(self.db_path)
+        try:
+            monitor_row = conn.execute("SELECT * FROM monitors WHERE id = ?", (monitor_id,)).fetchone()
+            if monitor_row is None:
+                raise DomainNotFound(f"monitor '{monitor_id}' not found")
+            policy_row = conn.execute("SELECT * FROM monitoring_policies WHERE id = ?", (monitor_row["policy_id"],)).fetchone()
+            if policy_row is None:
+                raise DomainNotFound(f"monitoring policy '{monitor_row['policy_id']}' not found")
+        finally:
+            conn.close()
+
+        if monitor_row["enabled"] == 0:
+            return {"monitor_id": monitor_id, "outcome": "disabled", "status": "skipped", "paid_used": False}
+
+        target_type = monitor_row["target_type"]
+        target_id = monitor_row["target_id"]
+
+        if target_type != "source":
+            # Non-source targets do not have an acquisition mechanism yet.
+            # Truthfully record non-success (error / unsupported_target) rather than fake no_change.
+            self.monitors.record_activity(
+                monitor_id,
+                "error",
+                error_code="unsupported_target",
+                observed_at=observed_at,
+            )
+            raise DomainValidation(f"monitor target_type '{target_type}' does not support source acquisition yet")
+
+        # Resolve Source
+        conn = storage.connect(self.db_path)
+        try:
+            source_row = conn.execute("SELECT * FROM sources WHERE id = ? AND deleted_at IS NULL", (target_id,)).fetchone()
+        finally:
+            conn.close()
+
+        if source_row is None:
+            self.monitors.record_activity(
+                monitor_id,
+                "error",
+                error_code="target_not_found",
+                observed_at=observed_at,
+            )
+            raise DomainNotFound(f"source '{target_id}' not found")
+
+        feed_url = source_row["feed_url"]
+        homepage_url = source_row["homepage_url"]
+        if not feed_url and not homepage_url:
+            self.monitors.record_activity(
+                monitor_id,
+                "error",
+                error_code="not_configured",
+                observed_at=observed_at,
+            )
+            raise DomainValidation(f"source '{target_id}' has neither feed_url nor homepage_url configured")
+
+        allowed_channels = set(_decode(policy_row["allowed_channels"], []))
+
+        # Select acquisition method based on source configuration and policy allowed_channels
+        use_feed = False
+        use_doc = False
+        doc_channel = "direct_http"
+
+        if feed_url and (not allowed_channels or "rss" in allowed_channels or "atom" in allowed_channels):
+            use_feed = True
+        elif homepage_url and (not allowed_channels or "direct_http" in allowed_channels or "page" in allowed_channels):
+            use_doc = True
+            doc_channel = "direct_http" if (not allowed_channels or "direct_http" in allowed_channels) else "page"
+        elif feed_url and homepage_url and ("direct_http" in allowed_channels or "page" in allowed_channels):
+            use_doc = True
+            doc_channel = "direct_http" if "direct_http" in allowed_channels else "page"
+        else:
+            self.monitors.record_activity(
+                monitor_id,
+                "error",
+                error_code="channel_not_allowed",
+                observed_at=observed_at,
+            )
+            raise DomainValidation(f"source '{target_id}' acquisition channels are not allowed by policy '{policy_row['id']}'")
+
+        job_id = job.get("id")
+
+        try:
+            if use_feed:
+                poll_result = self.acquisition.poll_feed(source_id=target_id, feed_url=feed_url)
+                new_items = poll_result.new_count
+                changed_items = poll_result.changed_count
+                is_changed = (new_items > 0 or changed_items > 0)
+                # Acquisition can prove content changed but not that the change
+                # is relevant: leave the semantic claim unset until the later
+                # relevance stage actually runs.
+                outcome = "changed" if is_changed else "no_change"
+
+                self.budgets.record_usage(
+                    job_id=job_id,
+                    monitor_id=monitor_id,
+                    capability="acquisition",
+                    provider="feed",
+                    request_type="rss",
+                    acquisition_units=1,
+                    outcome=outcome,
+                )
+                monitor_record = self.monitors.record_activity(
+                    monitor_id,
+                    outcome,
+                    new_items=new_items,
+                    changed_items=changed_items,
+                    relevant_items=0,
+                    observed_at=observed_at,
+                )
+                return {
+                    "monitor_id": monitor_id,
+                    "outcome": outcome,
+                    "target_type": "source",
+                    "target_id": target_id,
+                    "new_items": new_items,
+                    "changed_items": changed_items,
+                    "event_id": poll_result.event_id,
+                    "monitor": monitor_record,
+                    "paid_used": False,
+                }
+            else:
+                doc_result = self.acquisition.acquire_document(source_id=target_id, url=homepage_url, channel=doc_channel)
+                is_retrieved = doc_result.outcome == "retrieved"
+                if is_retrieved:
+                    conn = storage.connect(self.db_path)
+                    try:
+                        v_count = conn.execute(
+                            "SELECT COUNT(*) FROM document_versions WHERE document_id = ?",
+                            (doc_result.document_id,),
+                        ).fetchone()[0]
+                    finally:
+                        conn.close()
+                    new_items = 1 if v_count <= 1 else 0
+                    changed_items = 1 if v_count > 1 else 0
+                    # Acquisition detected new or changed content; relevance is
+                    # unknown until the semantic relevance stage runs.
+                    outcome = "changed"
+                else:
+                    new_items = 0
+                    changed_items = 0
+                    outcome = "no_change"
+
+                self.budgets.record_usage(
+                    job_id=job_id,
+                    monitor_id=monitor_id,
+                    capability="acquisition",
+                    provider="http",
+                    request_type=doc_channel,
+                    acquisition_units=1,
+                    outcome=outcome,
+                )
+                monitor_record = self.monitors.record_activity(
+                    monitor_id,
+                    outcome,
+                    new_items=new_items,
+                    changed_items=changed_items,
+                    relevant_items=0,
+                    observed_at=observed_at,
+                )
+                return {
+                    "monitor_id": monitor_id,
+                    "outcome": outcome,
+                    "target_type": "source",
+                    "target_id": target_id,
+                    "document_id": doc_result.document_id,
+                    "document_version_id": doc_result.document_version_id,
+                    "new_items": new_items,
+                    "changed_items": changed_items,
+                    "event_id": doc_result.event_id,
+                    "monitor": monitor_record,
+                    "paid_used": False,
+                }
+        except AcquisitionTimeout as exc:
+            self.monitors.record_activity(
+                monitor_id,
+                "error",
+                error_code="AcquisitionTimeout",
+                observed_at=observed_at,
+            )
+            self.budgets.record_usage(
+                job_id=job_id,
+                monitor_id=monitor_id,
+                capability="acquisition",
+                provider="http" if use_doc else "feed",
+                request_type=doc_channel if use_doc else "rss",
+                acquisition_units=1,
+                outcome="error",
+            )
+            raise RetryableJobFailure(f"AcquisitionTimeout: {exc}") from exc
+        except AcquisitionBlocked as exc:
+            self.monitors.record_activity(
+                monitor_id,
+                "error",
+                error_code="AcquisitionBlocked",
+                observed_at=observed_at,
+            )
+            self.budgets.record_usage(
+                job_id=job_id,
+                monitor_id=monitor_id,
+                capability="acquisition",
+                provider="http" if use_doc else "feed",
+                request_type=doc_channel if use_doc else "rss",
+                acquisition_units=1,
+                outcome="blocked",
+            )
+            raise
+        except AcquisitionTooLarge as exc:
+            self.monitors.record_activity(
+                monitor_id,
+                "error",
+                error_code="AcquisitionTooLarge",
+                observed_at=observed_at,
+            )
+            self.budgets.record_usage(
+                job_id=job_id,
+                monitor_id=monitor_id,
+                capability="acquisition",
+                provider="http" if use_doc else "feed",
+                request_type=doc_channel if use_doc else "rss",
+                acquisition_units=1,
+                outcome="blocked",
+            )
+            raise
+        except FeedParseError as exc:
+            self.monitors.record_activity(
+                monitor_id,
+                "error",
+                error_code="FeedParseError",
+                observed_at=observed_at,
+            )
+            self.budgets.record_usage(
+                job_id=job_id,
+                monitor_id=monitor_id,
+                capability="acquisition",
+                provider="feed",
+                request_type="rss",
+                acquisition_units=1,
+                outcome="error",
+            )
+            raise
+        except AcquisitionError as exc:
+            error_code = type(exc).__name__
+            self.monitors.record_activity(
+                monitor_id,
+                "error",
+                error_code=error_code,
+                observed_at=observed_at,
+            )
+            self.budgets.record_usage(
+                job_id=job_id,
+                monitor_id=monitor_id,
+                capability="acquisition",
+                provider="http" if use_doc else "feed",
+                request_type=doc_channel if use_doc else "rss",
+                acquisition_units=1,
+                outcome="error",
+            )
+            err_str = str(exc)
+            if "HTTP status 5" in err_str or "HTTP request failed" in err_str:
+                raise RetryableJobFailure(f"{error_code}: {exc}") from exc
+            raise
 
     def handlers(self) -> dict[str, Callable[[dict[str, Any]], Any]]:
-        return {"monitor_check": self.handle}
+        return {MONITOR_CHECK_JOB_TYPE: self.handle}
+
+
+def reconcile_monitor_job_outcome(
+    conn: sqlite3.Connection,
+    job_row: sqlite3.Row,
+    final_status: str,
+    details: Mapping[str, Any] | None = None,
+) -> None:
+    """Reconcile monitor state on claim-time budget exhaustion.
+
+    Runs inside the same write transaction that terminalizes the durable job.
+    Only the ``budget`` trigger mutates monitor state: budget exhaustion
+    happens before the handler ran, so it records an explicit error activity
+    instead of leaving the execution ambiguous. Completion/cancellation of a
+    monitor job needs no reconciliation here -- the acquisition handler writes
+    the authoritative activity row for real executions, and a cancelled queued
+    job never executed, so ``last_result`` is preserved.
+    """
+    if job_row["job_type"] != MONITOR_CHECK_JOB_TYPE:
+        return
+    monitor_id = job_row["monitor_id"]
+    if not monitor_id:
+        return
+    details = details or {}
+    trigger = details.get("trigger")
+    if trigger == "budget":
+        now = job_row["updated_at"] or utc_now()
+        error_code = str(details.get("error_code") or "budget_exhausted")
+        row = conn.execute(
+            "SELECT m.*, p.base_cadence_seconds, p.min_cadence_seconds, p.max_cadence_seconds, p.backoff_rules, p.retirement_criteria "
+            "FROM monitors m JOIN monitoring_policies p ON p.id = m.policy_id WHERE m.id = ?",
+            (monitor_id,),
+        ).fetchone()
+        if row is None:
+            return
+        conn.execute(
+            "INSERT INTO monitor_activity(id, monitor_id, outcome, new_items, changed_items, relevant_items, error_code, observed_at, created_at) "
+            "VALUES (?, ?, 'error', 0, 0, 0, ?, ?, ?)",
+            (new_id("activity"), monitor_id, error_code, now, now),
+        )
+        if row["last_run_at"] and row["next_check_at"]:
+            current_interval = _seconds_between(row["next_check_at"], row["last_run_at"])
+        else:
+            current_interval = int(row["base_cadence_seconds"])
+        backoff = _decode(row["backoff_rules"], {})
+        multiplier = float(backoff.get("error_multiplier", 2.0))
+        if not math.isfinite(multiplier) or multiplier < 1.0 or multiplier > 10.0:
+            multiplier = 2.0
+        cadence = round(current_interval * multiplier)
+        cadence = max(int(row["min_cadence_seconds"]), min(int(row["max_cadence_seconds"]), max(1, cadence)))
+        consecutive_errors = 0
+        for activity_row in conn.execute(
+            "SELECT outcome FROM monitor_activity WHERE monitor_id = ? ORDER BY observed_at DESC, id DESC LIMIT 100",
+            (monitor_id,),
+        ):
+            if activity_row[0] != "error":
+                break
+            consecutive_errors += 1
+        retirement = _decode(row["retirement_criteria"], {})
+        max_errors = retirement.get("max_consecutive_errors")
+        retired = isinstance(max_errors, int) and max_errors > 0 and consecutive_errors >= max_errors
+        next_check = None if retired else _plus_seconds(now, cadence)
+        last_result = "retired" if retired else "error"
+        conn.execute(
+            "UPDATE monitors SET enabled = ?, next_check_at = ?, last_run_at = ?, last_result = ?, updated_at = ? WHERE id = ?",
+            (0 if retired else row["enabled"], next_check, now, last_result, now, monitor_id),
+        )
+
+
+def monitor_job_completion_hook(
+    conn: sqlite3.Connection,
+    job_row: sqlite3.Row,
+    job_status: str,
+    context: Mapping[str, Any] | None = None,
+) -> None:
+    """Monitor completion hook invoked by JobService job-lifecycle events.
+
+    Composed independently from Research Question hooks at the central wiring
+    point. A no-op for any non-monitor job; only claim-time budget exhaustion
+    writes monitor activity (the durable execution path records its own rows).
+    """
+    reconcile_monitor_job_outcome(conn, job_row, job_status, context)
 
 
 __all__ = [
@@ -844,4 +1235,6 @@ __all__ = [
     "RelevanceResult",
     "RelevanceScope",
     "ScopeSuggestionService",
+    "monitor_job_completion_hook",
+    "reconcile_monitor_job_outcome",
 ]

@@ -1266,6 +1266,191 @@ MIGRATION_0010_CHECKSUM = hashlib.sha256(
 ).hexdigest()
 
 
+MIGRATION_0011_STATEMENTS: tuple[str, ...] = (
+    "ALTER TABLE tags ADD COLUMN namespace TEXT NOT NULL DEFAULT 'user'",
+    "ALTER TABLE tags ADD COLUMN tag_type TEXT NOT NULL DEFAULT 'user' CHECK (tag_type IN ('user', 'smart'))",
+    "CREATE INDEX tags_namespace_idx ON tags(namespace, tag_type, normalized_name, id)",
+    """
+    CREATE TABLE notes (
+        id TEXT PRIMARY KEY,
+        object_type TEXT NOT NULL CHECK (object_type IN ('story', 'subject', 'document', 'claim', 'monitor', 'research_question')),
+        object_id TEXT NOT NULL,
+        note_type TEXT NOT NULL CHECK (note_type IN ('note', 'hypothesis', 'context')),
+        body TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+    )
+    """,
+    "CREATE INDEX notes_object_idx ON notes(object_type, object_id, created_at DESC, id DESC)",
+    """
+    CREATE TABLE search_records (
+        id TEXT PRIMARY KEY,
+        entity_type TEXT NOT NULL CHECK (entity_type IN ('monitor', 'source', 'document', 'story', 'subject', 'claim', 'evidence', 'tag', 'question', 'note')),
+        entity_id TEXT NOT NULL,
+        title TEXT NOT NULL,
+        body TEXT NOT NULL DEFAULT '',
+        source_id TEXT,
+        story_id TEXT,
+        subject_id TEXT,
+        monitor_id TEXT,
+        question_id TEXT,
+        tag_id TEXT,
+        document_id TEXT,
+        state TEXT,
+        lifecycle TEXT,
+        created_at TEXT NOT NULL,
+        UNIQUE (entity_type, entity_id)
+    )
+    """,
+    "CREATE INDEX search_records_type_idx ON search_records(entity_type, entity_id)",
+    "CREATE INDEX search_records_filter_idx ON search_records(source_id, story_id, subject_id, monitor_id, question_id, tag_id, document_id)",
+    """
+    CREATE VIRTUAL TABLE search_fts USING fts5(
+        entity_type UNINDEXED,
+        entity_id UNINDEXED,
+        title,
+        body,
+        tokenize = 'unicode61'
+    )
+    """,
+)
+
+MIGRATION_0011_CHECKSUM = hashlib.sha256(
+    "\n".join(MIGRATION_0011_STATEMENTS).encode("utf-8")
+).hexdigest()
+
+
+_SEARCH_DIRTY_TABLES = (
+    "monitors", "monitoring_policies", "sources", "documents", "document_versions",
+    "evidence_spans", "stories", "story_revisions", "story_subjects", "story_tags",
+    "story_documents", "story_evolution_events", "subjects", "subject_aliases", "claims",
+    "claim_evidence", "claim_state_history", "research_questions", "research_question_notes",
+    "notes", "tags", "topics", "topic_terms", "topic_subjects",
+)
+MIGRATION_0012_STATEMENTS: tuple[str, ...] = (
+    """
+    CREATE TABLE search_index_meta (
+        id INTEGER PRIMARY KEY CHECK (id = 1),
+        dirty INTEGER NOT NULL DEFAULT 1 CHECK (dirty IN (0, 1)),
+        updated_at TEXT NOT NULL
+    )
+    """,
+    "INSERT INTO search_index_meta(id, updated_at) VALUES (1, '1970-01-01T00:00:00Z')",
+    *tuple(
+        f"""
+        CREATE TRIGGER search_dirty_{table}_{operation}
+        AFTER {operation.upper()} ON {table}
+        BEGIN
+            UPDATE search_index_meta SET dirty = 1, updated_at = CURRENT_TIMESTAMP WHERE id = 1;
+        END
+        """
+        for table in _SEARCH_DIRTY_TABLES
+        for operation in ("insert", "update", "delete")
+    ),
+)
+
+MIGRATION_0012_CHECKSUM = hashlib.sha256(
+    "\n".join(MIGRATION_0012_STATEMENTS).encode("utf-8")
+).hexdigest()
+
+
+MIGRATION_0013_STATEMENTS: tuple[str, ...] = (
+    """
+    CREATE TABLE ask_conversations (
+        id TEXT PRIMARY KEY,
+        scope_type TEXT NOT NULL CHECK (scope_type IN ('global', 'story', 'claim', 'evidence', 'document', 'report', 'question', 'research_question', 'subject', 'monitor', 'note')),
+        scope_id TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        CHECK ((scope_type = 'global' AND scope_id IS NULL) OR (scope_type <> 'global' AND scope_id IS NOT NULL))
+    )
+    """,
+    "CREATE INDEX ask_conversations_scope_idx ON ask_conversations(scope_type, scope_id, updated_at DESC, id DESC)",
+    """
+    CREATE TABLE ask_runs (
+        id TEXT PRIMARY KEY,
+        conversation_id TEXT NOT NULL REFERENCES ask_conversations(id) ON DELETE CASCADE,
+        turn_number INTEGER NOT NULL,
+        prompt_hash TEXT NOT NULL,
+        prompt_length INTEGER NOT NULL CHECK (prompt_length > 0),
+        status TEXT NOT NULL CHECK (status IN ('queued', 'running', 'answered', 'qualified', 'refused', 'cancelled', 'failed')),
+        answer_json TEXT,
+        retrieval_json TEXT,
+        citations_json TEXT,
+        refusal_code TEXT,
+        context_units INTEGER NOT NULL DEFAULT 0 CHECK (context_units >= 0),
+        provider_route TEXT NOT NULL DEFAULT 'local_deterministic',
+        estimated_cost_usd REAL NOT NULL DEFAULT 0 CHECK (estimated_cost_usd >= 0),
+        created_at TEXT NOT NULL,
+        completed_at TEXT,
+        UNIQUE (conversation_id, turn_number)
+    )
+    """,
+    "CREATE INDEX ask_runs_conversation_idx ON ask_runs(conversation_id, turn_number DESC, id DESC)",
+    "CREATE INDEX ask_runs_status_idx ON ask_runs(status, created_at DESC, id DESC)",
+)
+
+MIGRATION_0013_CHECKSUM = hashlib.sha256(
+    "\n".join(MIGRATION_0013_STATEMENTS).encode("utf-8")
+).hexdigest()
+
+
+# 0014: widen monitor_activity.outcome with a neutral acquisition-level
+# 'changed' outcome. 'changed' means content changed but semantic relevance is
+# not yet evaluated; it is distinct from 'relevant_change' (confirmed relevance)
+# and 'no_change' (truthful unchanged acquisition). SQLite cannot ALTER a CHECK
+# constraint, so the table is rebuilt inside one transaction: immutability
+# triggers are dropped, the table is renamed, recreated with the widened CHECK,
+# copied verbatim, and the triggers plus index recreated. Existing rows and the
+# FK on monitors(id) survive because the column layout is unchanged.
+MIGRATION_0014_STATEMENTS: tuple[str, ...] = (
+    "DROP TRIGGER monitor_activity_immutable_update",
+    "DROP TRIGGER monitor_activity_immutable_delete",
+    "ALTER TABLE monitor_activity RENAME TO monitor_activity_old",
+    """
+    CREATE TABLE monitor_activity (
+        id TEXT PRIMARY KEY,
+        monitor_id TEXT NOT NULL REFERENCES monitors(id) ON DELETE CASCADE,
+        outcome TEXT NOT NULL CHECK (outcome IN ('no_change', 'changed', 'relevant_change', 'partial', 'error')),
+        new_items INTEGER NOT NULL DEFAULT 0 CHECK (new_items >= 0),
+        changed_items INTEGER NOT NULL DEFAULT 0 CHECK (changed_items >= 0),
+        relevant_items INTEGER NOT NULL DEFAULT 0 CHECK (relevant_items >= 0),
+        error_code TEXT,
+        observed_at TEXT NOT NULL,
+        created_at TEXT NOT NULL
+    )
+    """,
+    """
+    INSERT INTO monitor_activity
+        (id, monitor_id, outcome, new_items, changed_items, relevant_items,
+         error_code, observed_at, created_at)
+    SELECT id, monitor_id, outcome, new_items, changed_items, relevant_items,
+           error_code, observed_at, created_at
+    FROM monitor_activity_old
+    """,
+    "DROP TABLE monitor_activity_old",
+    "CREATE INDEX monitor_activity_monitor_idx ON monitor_activity(monitor_id, observed_at DESC, id DESC)",
+    """
+    CREATE TRIGGER monitor_activity_immutable_update
+    BEFORE UPDATE ON monitor_activity
+    BEGIN
+        SELECT RAISE(ABORT, 'monitor activity is immutable');
+    END
+    """,
+    """
+    CREATE TRIGGER monitor_activity_immutable_delete
+    BEFORE DELETE ON monitor_activity
+    BEGIN
+        SELECT RAISE(ABORT, 'monitor activity is immutable');
+    END
+    """,
+)
+
+MIGRATION_0014_CHECKSUM = hashlib.sha256(
+    "\n".join(MIGRATION_0014_STATEMENTS).encode("utf-8")
+).hexdigest()
+
+
 @dataclass(frozen=True)
 class MigrationResult:
     applied_versions: tuple[int, ...]
@@ -1318,6 +1503,10 @@ def apply_migrations(db_path: Optional[str | Path] = None) -> MigrationResult:
                 8: MIGRATION_0008_STATEMENTS,
                 9: MIGRATION_0009_STATEMENTS,
                 10: MIGRATION_0010_STATEMENTS,
+                11: MIGRATION_0011_STATEMENTS,
+                12: MIGRATION_0012_STATEMENTS,
+                13: MIGRATION_0013_STATEMENTS,
+                14: MIGRATION_0014_STATEMENTS,
             }
             for version, statements in migrations.items():
                 if version in existing:

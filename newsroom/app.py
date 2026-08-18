@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+import time
 import uuid
 from pathlib import Path
 from typing import Optional
@@ -32,10 +33,16 @@ from .domain_api import create_domain_router
 from .evidence import EvidenceService
 from .integrity import check_database
 from .migrations import apply_migrations
+from .security import RequestLimiter, subsystem_for_path
+from .telemetry import OperationalTelemetry
 
 
 LOGGER = logging.getLogger("newsroom.api")
 _REQUEST_ID = re.compile(r"^[A-Za-z0-9._:-]{1,128}$")
+MAX_REQUEST_BYTES = 1_048_576
+GENERAL_REQUESTS_PER_MINUTE = 120
+AUTH_REQUESTS_PER_MINUTE = 20
+METRICS_REQUESTS_PER_MINUTE = 30
 
 
 class AuthCredentials(BaseModel):
@@ -95,13 +102,11 @@ def create_app(
 
     app = FastAPI(title="Newsroom", version=__version__)
     app.state.runtime_config = runtime
+    app.state.telemetry = OperationalTelemetry()
+    request_limiter = RequestLimiter()
 
-    @app.middleware("http")
-    async def request_context(request: Request, call_next):
-        supplied = request.headers.get("X-Request-ID", "")
-        request.state.request_id = supplied if _REQUEST_ID.fullmatch(supplied) else uuid.uuid4().hex
-        response = await call_next(request)
-        response.headers["X-Request-ID"] = request.state.request_id
+    def _security_headers(response, request_id: str, request: Request) -> None:
+        response.headers["X-Request-ID"] = request_id
         response.headers["X-Content-Type-Options"] = "nosniff"
         response.headers["X-Frame-Options"] = "DENY"
         response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
@@ -115,12 +120,128 @@ def create_app(
             response.headers["Strict-Transport-Security"] = (
                 "max-age=31536000; includeSubDomains"
             )
+        if request.url.path.startswith("/api/v1/auth/") or request.url.path == "/api/v1/metrics":
+            response.headers["Cache-Control"] = "no-store"
+
+    @app.middleware("http")
+    async def request_context(request: Request, call_next):
+        started = time.perf_counter()
+        supplied = request.headers.get("X-Request-ID", "")
+        request.state.request_id = supplied if _REQUEST_ID.fullmatch(supplied) else uuid.uuid4().hex
+        client_host = request.client.host if request.client else "unknown"
+        is_auth_route = request.url.path in {"/api/v1/auth/setup", "/api/v1/auth/login"}
+        is_metrics_route = request.url.path == "/api/v1/metrics"
+        if is_auth_route:
+            rate_bucket, rate_limit = "auth", AUTH_REQUESTS_PER_MINUTE
+        elif is_metrics_route:
+            rate_bucket, rate_limit = "metrics", METRICS_REQUESTS_PER_MINUTE
+        else:
+            rate_bucket, rate_limit = "api", GENERAL_REQUESTS_PER_MINUTE
+        decision = request_limiter.check(f"{client_host}:{rate_bucket}", rate_limit)
+        if not decision.allowed:
+            response = JSONResponse(
+                status_code=429,
+                content=_error_payload(request, "rate_limited", "request rate limit exceeded"),
+                headers={"Retry-After": str(decision.retry_after_seconds)},
+            )
+            response.headers["X-RateLimit-Limit"] = str(rate_limit)
+            response.headers["X-RateLimit-Remaining"] = "0"
+            _security_headers(response, request.state.request_id, request)
+            app.state.telemetry.observe(
+                method=request.method,
+                path=request.url.path,
+                status_code=429,
+                duration_ms=(time.perf_counter() - started) * 1000,
+            )
+            return response
+        declared_length = request.headers.get("Content-Length")
+        if declared_length:
+            try:
+                too_large = int(declared_length) > MAX_REQUEST_BYTES
+            except ValueError:
+                too_large = True
+            if too_large:
+                response = JSONResponse(
+                    status_code=413,
+                    content=_error_payload(request, "request_too_large", "request body exceeds the configured limit"),
+                )
+                response.headers["X-RateLimit-Limit"] = str(rate_limit)
+                response.headers["X-RateLimit-Remaining"] = str(decision.remaining)
+                _security_headers(response, request.state.request_id, request)
+                app.state.telemetry.observe(
+                    method=request.method,
+                    path=request.url.path,
+                    status_code=413,
+                    duration_ms=(time.perf_counter() - started) * 1000,
+                )
+                return response
+        elif request.method in {"POST", "PUT", "PATCH"}:
+            received = 0
+            chunks: list[bytes] = []
+            original_receive = request._receive
+            async for chunk in request.stream():
+                received += len(chunk)
+                if received > MAX_REQUEST_BYTES:
+                    response = JSONResponse(
+                        status_code=413,
+                        content=_error_payload(request, "request_too_large", "request body exceeds the configured limit"),
+                    )
+                    response.headers["X-RateLimit-Limit"] = str(rate_limit)
+                    response.headers["X-RateLimit-Remaining"] = str(decision.remaining)
+                    _security_headers(response, request.state.request_id, request)
+                    app.state.telemetry.observe(
+                        method=request.method,
+                        path=request.url.path,
+                        status_code=413,
+                        duration_ms=(time.perf_counter() - started) * 1000,
+                    )
+                    return response
+                chunks.append(chunk)
+            request._body = b"".join(chunks)
+            replayed = False
+
+            async def replay_body():
+                nonlocal replayed
+                if not replayed:
+                    replayed = True
+                    return {"type": "http.request", "body": request._body, "more_body": False}
+                return await original_receive()
+
+            request._receive = replay_body
+        try:
+            response = await call_next(request)
+        except Exception:
+            app.state.telemetry.observe(
+                method=request.method,
+                path=request.url.path,
+                status_code=500,
+                duration_ms=(time.perf_counter() - started) * 1000,
+            )
+            _log_event(
+                "http_request",
+                method=request.method,
+                path=request.url.path,
+                request_id=request.state.request_id,
+                status_code=500,
+                subsystem=subsystem_for_path(request.url.path),
+            )
+            raise
+        response.headers["X-RateLimit-Limit"] = str(rate_limit)
+        response.headers["X-RateLimit-Remaining"] = str(decision.remaining)
+        _security_headers(response, request.state.request_id, request)
+        app.state.telemetry.observe(
+            method=request.method,
+            path=request.url.path,
+            status_code=response.status_code,
+            duration_ms=(time.perf_counter() - started) * 1000,
+        )
         _log_event(
             "http_request",
             method=request.method,
             path=request.url.path,
             request_id=request.state.request_id,
             status_code=response.status_code,
+            subsystem=subsystem_for_path(request.url.path),
         )
         return response
 
@@ -208,6 +329,11 @@ def create_app(
             request.cookies.get(CSRF_COOKIE),
         ):
             raise HTTPException(status_code=403, detail="csrf validation failed")
+
+    @api.get("/metrics")
+    async def metrics(request: Request):
+        require_user(request)
+        return app.state.telemetry.snapshot()
 
     domain_service = CoreService(runtime.database_path)
     evidence_service = EvidenceService(runtime.database_path)
