@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import socket
 import sqlite3
+import urllib.request
 
 import pytest
 
@@ -103,6 +104,47 @@ def test_policy_blocks_hostnames_resolving_to_non_public_addresses(monkeypatch):
 
     with pytest.raises(AcquisitionBlocked, match="non-public address"):
         AcquisitionPolicy().check_resolved_url("https://apparently-public.example/item")
+
+
+def test_redirect_handler_follows_server_provided_target_after_ssrf_validation():
+    """Regression for Live Test A Scenario C.
+
+    A host that redirects its bare domain to its www-prefixed canonical
+    (for example ``usa.gov`` -> ``https://www.usa.gov/``) must be followed
+    exactly as the server specifies. Previously the redirect target was
+    re-normalized, which dropped ``www.`` and bounced every hop back to the
+    originally-requested URL until the redirect-limit guard tripped
+    (``AcquisitionBlocked: redirect limit exceeded``), failing acquisition of
+    a whole class of official/public pages.
+    """
+    from newsroom.acquisition import _BoundedRedirectHandler
+
+    class RecordingPolicy:
+        checked: list[str] = []
+
+        def check_resolved_url(self, url: str) -> str:
+            self.checked.append(url)
+            return "https://usa.gov/"
+
+    policy = RecordingPolicy()
+    handler = _BoundedRedirectHandler(max_redirects=3, policy=policy)
+    request = urllib.request.Request(
+        "https://usa.gov/",
+        headers={"User-Agent": "newsroom-test"},
+    )
+    followed = handler.redirect_request(
+        request,
+        None,
+        301,
+        "Moved Permanently",
+        {"Location": "https://www.usa.gov/"},
+        "https://www.usa.gov/",
+    )
+    assert followed is not None
+    assert followed.get_full_url() == "https://www.usa.gov/"
+    assert policy.checked == ["https://www.usa.gov/"]
+    # The safety validation must still be applied to every redirect hop.
+    assert handler.count == 1
 
 
 def test_safe_html_extractor_removes_active_content_and_bounds_text():

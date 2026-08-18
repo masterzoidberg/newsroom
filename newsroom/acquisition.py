@@ -354,9 +354,13 @@ class _BoundedRedirectHandler(urllib.request.HTTPRedirectHandler):
     def redirect_request(self, req, fp, code, msg, headers, newurl):
         if self.count >= self.max_redirects:
             raise AcquisitionBlocked("redirect limit exceeded")
-        safe_url = self.policy.check_resolved_url(newurl)
+        # Validate the redirect target's DNS/public-address policy, but follow
+        # the server-provided URL rather than its normalized form. Normalizing
+        # drops `www.` and other details that servers legitimately redirect to,
+        # which would bounce every such hop back to the same host forever.
+        self.policy.check_resolved_url(newurl)
         self.count += 1
-        return super().redirect_request(req, fp, code, msg, headers, safe_url)
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
 
 
 class UrllibHttpTransport:

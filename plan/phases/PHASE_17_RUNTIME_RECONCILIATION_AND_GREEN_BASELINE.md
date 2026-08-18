@@ -218,3 +218,82 @@ rehearsal evidence and 0014 as current; they were preserved.
 public RSS Source, real public HTML Source → Scheduler → Worker → Acquisition →
 DocumentVersion → truthful `changed`/`no_change`/`error`) with no AI. No public
 internet live test was run in this phase; the gate is prepared only.
+
+### Live Test A — post-gate evidence — 2026-08-18
+
+**Verdict: PASS.** Real public Source → SchedulerProcess → durable
+`monitor_check` Job → WorkerProcess → MonitorExecutionService → real DNS →
+real HTTP/HTTPS → AcquisitionService → Document/DocumentVersion →
+`monitor_activity` all worked through the production composition. No AI,
+relevance, analysis, Evidence, Claims, Story, report, or alert was invoked.
+
+Results (six scenario sources, per-scenario disposable DBs under
+`%TEMP%\newsroom_live_test_a2`, 2026-08-18 19:17–19:18 UTC):
+
+- Scenario A — RSS: `https://feeds.npr.org/1001/rss.xml` (NPR). First poll
+  HTTP 200 `retrieved`, 10 feed entries → 10 Documents / 10 DocumentVersions,
+  monitor `changed`. Repeat poll HTTP 200 `unchanged` → no new versions,
+  monitor `no_change`. Dedup invariant held.
+- Scenario B — HTML: `https://example.com/`. First GET 200 `retrieved` → 1
+  Document / 1 version (title persisted). Second conditional GET returned
+  HTTP 304 `not_modified` → no new version, monitor `no_change`.
+- Scenario C — Official: `https://www.usa.gov/` (US government). Bare→www
+  redirect followed; final `https://usa.gov/` status 200, etag +
+  last-modified persisted, title "Making government services easier to find |
+  USAGov". Second conditional GET 304 → no new version, monitor `no_change`.
+  Note: `www.`-canonical official hosts first failed with
+  `AcquisitionBlocked: redirect limit exceeded` because the redirect handler
+  re-normalized the server-provided target (dropping `www.`), bouncing every
+  hop back to the original host. This was a genuine acquisition defect.
+- Scenario D — Failure: public 404 path
+  (`https://example.com/definitely-not-a-real-page-xyz`) → `acquisition_events`
+  outcome `failed`, monitor activity `error` (AcquisitionError), job failed,
+  zero DocumentVersions, no false `no_change`. Malformed URL (`feed_url` =
+  whitespace text) rejected by `normalize_url` validation (`DomainValidation`).
+- Scenario E — Restart/durability: scheduler tick persisted a queued
+  `monitor_check`; scheduler/worker process objects discarded; a fresh
+  production WorkerProcess drained the same SQLite queue successfully →
+  Document + version, monitor `changed`. Durable queue state survived the
+  process-object boundary.
+- Scenario F — Disabled Monitor: scheduled, disabled before worker run;
+  worker reported `succeeded` (skipped), zero acquisition_events /
+  documents / versions / monitor_activity recorded.
+
+Aggregate evidence: 6 sources, 6 monitors, 9 `monitor_check` jobs
+(5 succeeded, 1 failed, 3 skipped/succeeded terminal per scenario), 8
+`acquisition_events`, 13 Documents, 13 DocumentVersions, 8
+`monitor_activity` rows. All `provider_usage` rows were
+`capability=acquisition` (feed/http) only — zero AI/model usage.
+
+Database: disposable per-scenario paths under `%TEMP%`, outside the
+repository and not committed. Evidence report:
+`live_test_a.evidence.json` per run directory.
+
+Regression after live testing:
+
+- `python -m pytest -q tests/test_monitor_runtime_acceptance.py` — 14 passed.
+- `python -m pytest -q tests/test_phase06_acquisition.py` — 15 passed (incl.
+  new redirect regression test).
+- full backend suite — 383 passed (382 baseline + 1 new test), 37 pre-existing
+  warnings.
+- `python -m compileall -q newsroom scripts tests` — exit 0.
+- `git diff --check` — pass (pre-existing LF/CRLF normalization warning only).
+
+Production change record: ONE small genuine-defect fix was required and
+landed, `newsroom/acquisition.py` — `_BoundedRedirectHandler.redirect_request`
+now validates the redirect target with `policy.check_resolved_url` but follows
+the server-provided URL instead of the normalized canonical, so official hosts
+that redirect a bare name to `www.` no longer self-bounce into
+`redirect limit exceeded`. SSRF/deny-list/redirect-count safety is unchanged.
+A new offline regression test covers it. A manual live harness was added at
+`scripts/live_test_a.py`, and no additional weakening of any acquisition
+safety control was made.
+
+Remaining limitations exposed: only `source` Monitor targets were exercised
+(as designed); non-source targets remain `unsupported_target`. Live
+`no_change` required either an HTTP 304 or an identical re-fetch; no
+`page`/web-render fallback was used. The scheduler's Idempotency-key
+second-resolution collision was a harness artifact (fixed by distinct due
+times), not a product defect.
+
+**Gate: READY FOR PHASE 18 — Durable Normalized Content Artifact.**

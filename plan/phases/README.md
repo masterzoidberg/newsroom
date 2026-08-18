@@ -128,3 +128,16 @@ isolated service or schema as an unattended product capability.
 The historical review gates remain evidence for Phases 01–16. Phase 17 is the
 new active gate and must establish the baseline before the post-audit sequence
 advances.
+
+### Live Test A status — 2026-08-18
+
+**PASSED** against the Phase 17 green baseline (`4c235d1`). Evidence recorded
+in `PHASE_17_RUNTIME_RECONCILIATION_AND_GREEN_BASELINE.md`. Real RSS (NPR),
+HTML (`example.com`), and official US government (`usa.gov`) acquisitions all
+succeeded through the production Scheduler → durable Job → Worker →
+Acquisition → DocumentVersion path with truthful `changed`/`no_change`/`error`,
+verified deduplication, queue durability across process-object recreation, and
+disabled-monitor safety. One genuine acquisition defect was exposed and fixed
+minimally (redirect handler followed the re-normalized `www.`-stripped target,
+causing a self-bounce). No AI/relevance/analysis was invoked. The post-audit
+sequence (Phase 18) may begin.
