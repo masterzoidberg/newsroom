@@ -1559,6 +1559,72 @@ MIGRATION_0017_CHECKSUM = hashlib.sha256(
 ).hexdigest()
 
 
+# Phase 21 — durable structured article analysis. Relevant DocumentVersions
+# (Phase 20 durable relevance=true decisions) get a validated structured
+# ArticleAnalysis persisted here. The row carries full provenance to
+# reproduce/audit the analysis without duplicating the article body:
+# document_version reference, the relevance decision and its pinned approved
+# scope version, the immutable Phase 18 content artifact reference and its
+# normalized hash, and the exact schema/prompt/provider/model identity. The
+# result is a validated structured JSON payload (schema version stored;
+# validation always occurs before persistence; fields are bounded). Stored
+# content is immutable via triggers, matching the durable-record discipline.
+# UNIQUE(identity_hash) is the canonical analysis identity: retries, lease
+# recovery, and explicit reruns reuse one analysis, and a provider/model/
+# prompt/schema change produces a new version instead of overwriting history.
+# Candidate Claims and candidate Evidence excerpts live only inside
+# result_json; article_analyses never holds canonical EvidenceSpans or Claims.
+# The migration is additive: schema-17 data is preserved unchanged and no
+# historical analysis is fabricated.
+MIGRATION_0018_STATEMENTS: tuple[str, ...] = (
+    """
+    CREATE TABLE article_analyses (
+        id TEXT PRIMARY KEY,
+        document_version_id TEXT NOT NULL REFERENCES document_versions(id),
+        relevance_id TEXT NOT NULL REFERENCES document_version_relevance(id),
+        monitor_id TEXT NOT NULL REFERENCES monitors(id),
+        job_id TEXT REFERENCES jobs(id),
+        scope_version INTEGER NOT NULL CHECK (scope_version > 0),
+        artifact_id TEXT NOT NULL REFERENCES content_artifacts(id),
+        normalized_content_hash TEXT NOT NULL,
+        identity_hash TEXT NOT NULL UNIQUE,
+        schema_version TEXT NOT NULL,
+        prompt_version TEXT NOT NULL,
+        provider TEXT NOT NULL,
+        model TEXT NOT NULL,
+        paid INTEGER NOT NULL DEFAULT 0 CHECK (paid IN (0, 1)),
+        confidence REAL NOT NULL CHECK (confidence >= 0.0 AND confidence <= 1.0),
+        input_char_count INTEGER NOT NULL CHECK (input_char_count >= 0),
+        analyzed_char_count INTEGER NOT NULL CHECK (analyzed_char_count >= 0),
+        truncated INTEGER NOT NULL DEFAULT 0 CHECK (truncated IN (0, 1)),
+        result_json TEXT NOT NULL,
+        created_at TEXT NOT NULL
+    )
+    """,
+    "CREATE INDEX article_analyses_version_idx ON article_analyses(document_version_id, created_at, id)",
+    "CREATE INDEX article_analyses_relevance_idx ON article_analyses(relevance_id)",
+    "CREATE INDEX article_analyses_monitor_idx ON article_analyses(monitor_id, scope_version)",
+    """
+    CREATE TRIGGER article_analyses_immutable_update
+    BEFORE UPDATE ON article_analyses
+    BEGIN
+        SELECT RAISE(ABORT, 'article analyses are immutable');
+    END
+    """,
+    """
+    CREATE TRIGGER article_analyses_immutable_delete
+    BEFORE DELETE ON article_analyses
+    BEGIN
+        SELECT RAISE(ABORT, 'article analyses are append-only');
+    END
+    """,
+)
+
+MIGRATION_0018_CHECKSUM = hashlib.sha256(
+    "\n".join(MIGRATION_0018_STATEMENTS).encode("utf-8")
+).hexdigest()
+
+
 @dataclass(frozen=True)
 class MigrationResult:
     applied_versions: tuple[int, ...]
@@ -1618,6 +1684,7 @@ def apply_migrations(db_path: Optional[str | Path] = None) -> MigrationResult:
                 15: MIGRATION_0015_STATEMENTS,
                 16: MIGRATION_0016_STATEMENTS,
                 17: MIGRATION_0017_STATEMENTS,
+                18: MIGRATION_0018_STATEMENTS,
             }
             for version, statements in migrations.items():
                 if version in existing:

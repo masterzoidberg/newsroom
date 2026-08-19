@@ -56,7 +56,7 @@ def test_backup_restore_upgrade_and_integrity_rehearsal_are_verified(tmp_db, tmp
 
     upgraded = upgrade_database(tmp_db)
     assert upgraded["verified"] is True
-    assert migration_status(tmp_db) == tuple(range(1, 18))
+    assert migration_status(tmp_db) == tuple(range(1, 19))
 
 
 def test_logical_export_is_streamed_and_excludes_secrets_prompts_and_note_bodies(tmp_db, tmp_path):

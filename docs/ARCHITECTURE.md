@@ -140,12 +140,16 @@ persisted `DocumentVersion`:
       → processing Worker handler
       → verified artifact + approved relevance scope (Phase 20)
       → deterministic local relevance decision (persisted)
+      → relevant=true → structured article analysis (Phase 21, opt-in real
+        provider or deterministic local) → durable ArticleAnalysis record
       → terminal processing result
-      → STOP before article analysis
+      → STOP before Evidence verification (Phase 22)
 
 Phase 19 established the obligation itself and stopped before relevance;
 Phase 20 executes the deterministic relevance stage inside the same handler
-(see "Automatic relevance and semantic scope" below).
+(see "Automatic relevance and semantic scope" below); Phase 21 adds the
+structured article-analysis stage for relevant decisions (see "Structured
+article analysis (Phase 21)" below).
 
 Every changed/new acquisition — HTML/text documents and each new feed entry —
 creates at most one processing obligation. `not_modified`, unchanged content,
@@ -283,6 +287,138 @@ check drops to the policy minimum), atomically with the decision;
 `relevant=false` and `not_applicable` never write activity — the
 acquisition-level `changed` row stays the truthful outcome and cadence stays
 cadence-neutral. Acquisition `changed` alone can never emit `relevant_change`.
+
+### Structured article analysis (Phase 21)
+
+Phase 21 adds structured article analysis for content already determined to be
+relevant. It runs inside the existing `document_version_process` handler — no
+second queue framework — and stops exactly at the candidate boundary:
+
+```text
+relevant DocumentVersion
+  → verified Phase 18 artifact
+  → durable relevance=true decision
+  → ArticleAnalysis request (exact artifact content + pinned scope terms)
+  → AIRouter → deterministic local provider (default/offline)
+             → one opt-in real provider (OpenAI-compatible chat completions)
+  → validated ArticleAnalysisOutput (Pydantic, bounded fields)
+  → durable article_analyses record (Migration 0018) with provenance
+  → processing Job succeeds
+  → STOP before Evidence verification (Phase 22)
+```
+
+**Relevance gating.** Automatic analysis happens only when the canonical
+Phase 20 decision is `relevant=true`. `relevant=false`, `not_applicable`, and
+relevance evaluation failures all terminate processing successfully or
+truthfully without ever constructing an analysis provider or making a model
+call (proven by tests with call-counting providers).
+
+**AI analysis is not evidence.** `candidate_claims` are NOT canonical
+`claims` rows and `candidate_evidence_excerpts` are NOT `evidence_spans` rows;
+they live only inside `article_analyses.result_json`. Phase 21 never calls
+`EvidenceService`, Story evolution, Living Reports, or Alerts, and the
+production diff contains no automatic `create_evidence_span` /
+`create_claim` / claim-acceptance path. A candidate excerpt may even be wrong;
+Phase 22 exists specifically to verify membership against the immutable
+artifact.
+
+**Input contract.** Model input comes only from
+`ContentArtifactService.load_normalized_content` (the canonical verified
+Phase 18 loader). Nothing re-fetches the URL, accepts `candidate_text`, or
+trusts processing payload article content. HTML/text/fallback artifacts
+analyze their exact normalized visible text; feed metadata artifacts analyze
+the entry title+summary from the exact persisted metadata JSON. Input is
+bounded by `NEWSROOM_ANALYSIS_MAX_INPUT_CHARS` (default 24,000) with
+deterministic sentence/paragraph-boundary truncation; `input_char_count`,
+`analyzed_char_count`, and `truncated` are persisted with the record.
+
+**Analysis schema (`article_analysis_schema_v1`).** A strongly typed Pydantic
+`ArticleAnalysisOutput` validated before anything is persisted: summary,
+key_developments (1..25), entities (name + optional category), dates,
+locations, significance (relative to the pinned approved scope terms),
+novelty (article-level only; no Story comparison — Phase 09/23 context is not
+supplied), candidate_claims (indexed, atomic, bounded 0..50), and
+candidate_evidence_excerpts (candidate_claim_index + short excerpt + optional
+locator hints; every index must reference an existing candidate claim),
+confidence (bounded 0..1, explicitly not a calibrated probability). Malformed
+JSON, wrong types, out-of-range bounds, and unknown excerpt indexes fail
+validation truthfully (`AIValidationError`, terminal) and never persist.
+
+**Prompt and injection boundary.** The production prompt is versioned
+(`article_analysis_v1`, persisted with every record) and requests structured
+factual output only — never chain-of-thought. The system prompt explicitly
+separates SYSTEM INSTRUCTIONS, the NEWSROOM INFORMATION NEED/approved scope
+terms, and the UNTRUSTED ARTICLE CONTENT (delimited with `BEGIN/END ARTICLE`
+markers and treated as data, not instructions). Article text can never alter
+the output schema, provider configuration, tool behavior, or policy; no
+model-driven tool calling exists in Phase 21. The prompt is never persisted
+or exported, and prompts/keys are redacted from logs, job errors, and exports.
+
+**Provider architecture — one real provider.** The AIRouter is reused
+unchanged: `article_analysis` is a new capability with local, paid, and
+deterministic provider slots, its own `_OUTPUT_TYPES` entry, and
+`RoutePolicy` budgets. Exactly one real provider exists:
+`OpenAICompatibleArticleAnalysisProvider`, which calls an OpenAI-compatible
+`/chat/completions` endpoint through the official `openai` SDK with an
+explicit `httpx.Timeout` (connect/read/write) and bounded `max_retries`
+(default 2), requests the structured JSON-schema response format, and
+re-validates the response through the Pydantic contract. No multi-provider
+marketplace exists; `NEWSROOM_ANALYSIS_BASE_URL` makes the adapter usable with
+any OpenAI-compatible endpoint. The deterministic local provider
+(`LocalArticleAnalysisProvider`) returns the exact same schema from the
+verified source text — intentionally crude, honestly labeled (`provider=local`,
+`model=local`), and never presented as semantic LLM analysis.
+
+**Configuration — safe by default.** A fresh installation with no
+configuration performs zero paid calls and analyzes locally. Remote use is an
+explicit opt-in requiring `NEWSROOM_ANALYSIS_PROVIDER=openai` plus
+`NEWSROOM_ANALYSIS_API_KEY` (never logged), the existing
+`budget.paid_enabled` settings flag, and per-call budget limits
+(`NEWSROOM_ANALYSIS_MAX_PAID_CALLS`, `_MAX_PAID_COST_USD`,
+`_MAX_PAID_CALLS_PER_WORK`, `_MAX_PAID_COST_USD_PER_WORK`,
+`_REQUEST_COST_USD`). Missing key → explicit `AIConfigurationError`
+(terminal); budget disabled/exhausted → `AIDisabled` with a `blocked`
+telemetry row (no provider call). Provider choice stays behind the capability
+abstraction; the processing handler never instantiates a provider directly.
+
+**Remote-call transaction boundary.** The relevance decision is persisted in
+its own short write transaction before analysis; no SQLite write transaction
+is held during the provider call. The validated analysis plus its telemetry
+persist in a short write transaction before the handler returns, so a provider
+failure never falsely records processing success, and there is no crash gap
+between a successful remote analysis and its durable record (a crash after
+persistence is healed idempotently by retry).
+
+**Persistence and identity (Migration 0018, schema 18).** `article_analyses`
+stores document_version/relevance/monitor/job references, pinned scope
+version, artifact id + normalized hash, `identity_hash` (UNIQUE), analysis
+schema version, prompt version, provider, model, paid flag, confidence,
+input/analyzed char counts, truncation flag, validated `result_json`, and
+created time — never the article body and never secrets. The canonical
+identity is `sha256(document_version_id, relevance_id, scope_version,
+schema_version, prompt_version, provider, model)`: retries, lease recovery,
+and explicit reruns reuse one analysis (duplicate protection is the UNIQUE
+index, not a race-prone pre-check); a provider/model/prompt/schema change
+produces a new analysis version while preserving history; nothing is silently
+overwritten. Rows are immutable (append-only triggers).
+
+**Timeout, retry, budget, telemetry.** Real network timeouts are enforced by
+the provider SDK (`httpx.Timeout` connect/read/write); the router's
+`Future.result(timeout=...)` remains only an outer guard with a margin.
+Retryable failures (429/5xx, timeouts, connection/network errors) raise
+`RetryableJobFailure` and use the existing bounded Job retry semantics;
+terminal failures (invalid credentials/model, configuration, schema
+validation, budget refusal) fail without retry. The SDK's own retries are
+explicitly bounded by config. Every call records one `provider_usage` row via
+`SQLiteTelemetrySink` (capability, route local/paid, provider, model, latency,
+outcome, token usage where the provider exposes it, estimated cost — never
+fabricated). Provider exceptions stored in Jobs/telemetry are sanitized:
+messages never include API keys, Authorization headers, or raw response
+bodies.
+
+**Read path.** A bounded authenticated API read path exposes analysis
+metadata + validated structured result (`GET /document-versions/{id}/analyses`,
+`GET /article-analyses/{id}`) without article text, prompts, or secrets.
 
 ### Relevance and scope governance
 
@@ -458,19 +594,22 @@ and (since Phase 18) a durable normalized content artifact referenced by each
 new version; since Phase 19 every changed acquisition also leaves a durable
 `document_version_process` obligation, and since Phase 20 that obligation
 evaluates the verified content automatically against the Monitor's approved
-semantic scope and persists a deterministic relevant/not-relevant decision
-(relevant versions are eligible for Phase 21 analysis). Article analysis,
-Evidence/Claims ingestion, Story evolution, Report revision, and Alert
-emission remain Phase 21+ work. No monitor is allowed to recursively create
-unbounded work.
+semantic scope and persists a deterministic relevant/not-relevant decision;
+since Phase 21, relevant versions also produce a durable structured
+`article_analyses` record (candidate Claims/Excerpts only). Evidence/Claims
+ingestion, Story evolution, Report revision, and Alert emission remain
+Phase 22+ work; article analysis never creates accepted Evidence/Claims, and
+no monitor is allowed to recursively create unbounded work.
 
-The current applied schema is migration 0017 / schema version 17 (see
+The current applied schema is migration 0018 / schema version 18 (see
 `newsroom/migrations.py`). Migration 0015 added the Phase 18 content artifact
 substrate; migration 0016 added the Phase 19 processing-ownership column
 (`jobs.document_version_id`), the durable result column (`jobs.result_json`),
 and the obligation index; migration 0017 (Phase 20) added the Monitor
 information-need association (`monitors.need_type` / `need_id`) and the
-`document_version_relevance` decision table; the post-audit reconciliation
+`document_version_relevance` decision table; migration 0018 (Phase 21) added
+the durable `article_analyses` table with canonical identity and
+provider/model/prompt/schema provenance; the post-audit reconciliation
 (Phase 17) added no migration.
 
 Due Research Questions use a separate bounded scheduler path: each tick can

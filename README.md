@@ -39,14 +39,16 @@ configuration with final acceptance rehearsal evidence; final promotion remains
 pending.
 
 The post-audit roadmap is authoritative at `plan/phases/README.md`. Phases
-01–16 remain historical implementation records; **Phase 20 — Semantic Scope
-and Automatic Relevance** is complete, following the completed Phase 19
-changed-DocumentVersion processing jobs and Phase 18 durable content
-artifact work. The current production Monitor path is reliable through Source
-acquisition and DocumentVersion persistence: since Phase 18 every newly
-acquired DocumentVersion references a durable, immutable, hash-verifiable
-normalized content artifact stored in SQLite (`content_artifacts`), since
-Phase 19 every changed acquisition also creates exactly one durable
+01–16 remain historical implementation records; **Phase 21 — Structured
+Article Analysis and one real AI provider** is complete (offline gate; Live
+Test B pending an operator-provided credential), following the completed
+Phase 20 semantic-scope/automatic-relevance, Phase 19 changed-DocumentVersion
+processing jobs, and Phase 18 durable content artifact work. The current
+production Monitor path is reliable through Source acquisition and
+DocumentVersion persistence: since Phase 18 every newly acquired
+DocumentVersion references a durable, immutable, hash-verifiable normalized
+content artifact stored in SQLite (`content_artifacts`), since Phase 19 every
+changed acquisition also creates exactly one durable
 `document_version_process` Job, and since Phase 20 that Job automatically
 evaluates the verified content against the approved semantic scope of the
 originating Monitor (explicit `need_type`/`need_id` information-need
@@ -55,12 +57,20 @@ local `RelevanceCascade`, and persists an explainable relevant/not-relevant
 decision (`document_version_relevance`, Migration 0017). A confirmed
 relevance emits the existing `relevant_change` activity and minimum-cadence
 acceleration; a truthful not-relevant or acquisition-only result is a
-successful outcome and never fails the Job. It still does not produce
-article analysis, Evidence/Claims, Stories, Reports, or Alerts. Only `source`
-Monitor targets perform real acquisition today; `topic`, `subject`, `story`,
-and `research_question` are accepted by the schema/API but explicitly
-unsupported at runtime (`error`/`unsupported_target`). The current applied
-schema is migration 0017 / schema version 17.
+successful outcome and never fails the Job. Since Phase 21, a `relevant=true`
+decision also produces a durable structured ArticleAnalysis record
+(`article_analyses`, Migration 0018) through the provider-neutral `AIRouter`:
+the deterministic local provider by default (zero cost, offline), or exactly
+one opt-in real provider (OpenAI-compatible chat completions) when
+`NEWSROOM_ANALYSIS_PROVIDER=openai` plus `NEWSROOM_ANALYSIS_API_KEY` are set
+in the environment and the `budget.paid_enabled` setting is enabled. Model
+input always comes from the verified Phase 18 artifact; candidate
+Claims/Excerpts remain proposals — Phase 21 never creates accepted
+Evidence/Claims, Stories, Reports, or Alerts (Phase 22 is the verification
+boundary). The current applied schema is migration 0018 / schema version 18.
+Only `source` Monitor targets perform real acquisition today; `topic`,
+`subject`, `story`, and `research_question` are accepted by the schema/API
+but explicitly unsupported at runtime (`error`/`unsupported_target`).
 
 ## Authority
 

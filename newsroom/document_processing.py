@@ -11,10 +11,19 @@ the worker resolves the canonical version, verifies the Phase 18 normalized
 content artifact, evaluates the verified text against the approved scope
 snapshot pinned at acquisition (``scope_version``) using the local
 ``RelevanceCascade``, and persists one canonical relevance decision with full
-provenance. No AI providers, Evidence/Claims, Story, Report, or Alert work
-happens here; a not-relevant or acquisition-only outcome is a successful
+provenance. A not-relevant or acquisition-only outcome is a successful
 processing outcome, and a missing scope/provenance is a truthful terminal
 failure (``COULD NOT EVALUATE RELEVANCE``), never a false negative.
+
+Phase 21 adds the structured article-analysis stage to the same handler for
+``relevant=true`` decisions only: the exact verified artifact content is sent
+through the provider-neutral AIRouter to one opt-in real provider or the
+deterministic local provider, and the validated structured output is persisted
+as a durable ArticleAnalysis (with provider/model/prompt/schema provenance)
+before the job completes. AI analysis is not evidence: candidate
+Claims/Excerpts remain proposals inside the analysis record and never reach the
+canonical Evidence/Claims tables. No Story, Report, or Alert work happens here;
+Phase 23 owns those connections.
 
 Ownership contract:
 
@@ -180,10 +189,18 @@ class DocumentProcessingExecutionService:
     evaluates the verified content against the approved scope snapshot pinned
     at acquisition (``scope_version``) using the deterministic local
     ``RelevanceCascade``, persists one canonical decision, and only then
-    returns a bounded deterministic result. It never invokes AI providers,
-    semantic extraction, Evidence/Claims, Story evolution, Reports, or Alerts,
-    never accepts caller-supplied text or relevance terms, and never re-fetches
-    remote content.
+    returns a bounded deterministic result. It never invokes semantic
+    extraction, Story evolution, Reports, or Alerts, never accepts
+    caller-supplied text or relevance terms, and never re-fetches remote
+    content.
+
+    Phase 21 (article analysis): when the persisted decision is
+    ``relevant=true``, the handler additionally runs the structured
+    article-analysis stage against the exact verified artifact and persists a
+    durable ArticleAnalysis before completing. That stage is provider-neutral
+    and remains a proposal only: candidate Claims/Excerpts never enter the
+    canonical Evidence/Claims tables here. Non-relevant, not-applicable, and
+    relevance-failure outcomes complete without any analysis provider call.
 
     Outcome semantics are explicit:
 
@@ -199,9 +216,23 @@ class DocumentProcessingExecutionService:
       ``COULD NOT EVALUATE RELEVANCE``, never ``relevant=false``.
     """
 
-    def __init__(self, db_path: str | Path, *, artifacts: ContentArtifactService | None = None):
+    def __init__(
+        self,
+        db_path: str | Path,
+        *,
+        artifacts: ContentArtifactService | None = None,
+        analysis_service: Any | None = None,
+    ):
         self.db_path = Path(db_path)
         self.artifacts = artifacts or ContentArtifactService(db_path)
+        self.analysis_service = analysis_service
+
+    def _analysis(self) -> Any:
+        if self.analysis_service is None:
+            from .article_analysis import ArticleAnalysisService  # noqa: PLC0415
+
+            self.analysis_service = ArticleAnalysisService(self.db_path)
+        return self.analysis_service
 
     def handlers(self) -> dict[str, Any]:
         return {DOCUMENT_VERSION_PROCESS_JOB_TYPE: self.handle}
@@ -271,7 +302,10 @@ class DocumentProcessingExecutionService:
             )
 
         relevance = self._evaluate_relevance(job, payload, monitor_id, row, content)
-        return {
+        analysis = None
+        if relevance.get("status") == "evaluated" and relevance.get("relevant") is True:
+            analysis = self._run_article_analysis(job, row, content, relevance)
+        result: dict[str, Any] = {
             "document_version_id": version_id,
             "document_id": row["document_id"],
             "source_id": row["source_id"],
@@ -284,6 +318,35 @@ class DocumentProcessingExecutionService:
             "relevance": relevance,
             "processing_status": "completed",
         }
+        if analysis is not None:
+            result["analysis"] = analysis
+        return result
+
+    def _run_article_analysis(
+        self,
+        job: Mapping[str, Any],
+        version_row: sqlite3.Row,
+        content: Mapping[str, Any],
+        relevance: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        """Run the Phase-21 structured analysis stage for a relevant version.
+
+        The relevance decision has already been durably persisted in its own
+        short write transaction before this stage, so no database write
+        transaction is held while the analysis provider is called. The durable
+        ArticleAnalysis (with its telemetry) is persisted before the handler
+        returns; a provider failure therefore never falsely records processing
+        success. No candidate evidence is promoted to EvidenceSpans/Claims.
+        The job outcome carries bounded analysis metadata; the full validated
+        structured result lives only in ``article_analyses.result_json``.
+        """
+        record = self._analysis().analyze(
+            document_version_id=str(version_row["id"]),
+            relevance=relevance,
+            content=content,
+            job_id=job.get("id"),
+        )
+        return {key: value for key, value in record.items() if key != "result"}
 
     def _evaluate_relevance(
         self,
@@ -351,6 +414,7 @@ class DocumentProcessingExecutionService:
             "stage": result.stage,
             "score": result.score,
             "matched_terms": list(result.matched_terms),
+            "scope_terms": list(scope.all_terms())[:200],
             "reason": result.reason,
             "algorithm": "deterministic_relevance_cascade_v1",
             "paid_used": False,

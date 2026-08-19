@@ -61,9 +61,9 @@ ATOM_FIXTURE = b"""
 
 
 def test_phase06_migration_is_idempotent_and_adds_acquisition_tables(tmp_db):
-    assert apply_migrations(tmp_db).applied_versions == (1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17)
+    assert apply_migrations(tmp_db).applied_versions == (1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18)
     assert apply_migrations(tmp_db).applied_versions == ()
-    assert migration_status(tmp_db) == (1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17)
+    assert migration_status(tmp_db) == (1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18)
 
     conn = storage.connect(tmp_db)
     try:

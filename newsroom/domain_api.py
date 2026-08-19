@@ -15,6 +15,7 @@ from .acquisition import (
     SourceProfileService,
     SourceSuggestionService,
 )
+from .article_analysis import ArticleAnalysisService
 from .domain import CoreService, DomainValidation
 from .evidence import EvidenceService
 from .jobs import BudgetService, JobService, SchedulerService, compose_completion_hooks
@@ -736,6 +737,7 @@ def create_domain_router(
     diagnostics = DiagnosticsService(service.db_path)
     workbench = WorkbenchService(service.db_path)
     ask = AskService(service.db_path)
+    analyses = ArticleAnalysisService(service.db_path)
 
     def read_guard(request: Request):
         return require_user(request)
@@ -1209,6 +1211,23 @@ def create_domain_router(
     async def evidence_span(request: Request, identifier: str):
         read_guard(request)
         return ledger.get_evidence_span(identifier)
+
+    @router.get("/document-versions/{document_version_id}/analyses")
+    async def document_version_analyses(
+        request: Request,
+        document_version_id: str,
+        page: int = Query(1, ge=1),
+        page_size: int = Query(25, ge=1, le=100),
+    ):
+        read_guard(request)
+        return analyses.list_for_document_version(
+            document_version_id, page=page, page_size=page_size
+        )
+
+    @router.get("/article-analyses/{identifier}")
+    async def article_analysis_detail(request: Request, identifier: str):
+        read_guard(request)
+        return analyses.get(identifier)
 
     @router.get("/research-questions")
     async def research_questions(

@@ -11,12 +11,13 @@ import json
 import math
 import re
 import time
+import uuid
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeout
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Mapping, Protocol, Sequence, TypeVar
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
 
 from . import storage
 from .domain import utc_now
@@ -47,6 +48,10 @@ class AIBudgetExceeded(AIError):
 
 class AIDisabled(AIError):
     """No enabled route is available for a capability."""
+
+
+class AIConfigurationError(AIError):
+    """Provider configuration is invalid or incomplete (terminal)."""
 
 
 class AIModel(BaseModel):
@@ -121,6 +126,107 @@ class SynthesisOutput(AIModel):
     confidence: float = Field(ge=0.0, le=1.0)
 
 
+class ArticleAnalysisEntity(AIModel):
+    """Structured entity mention in analyzed article content."""
+
+    name: str = Field(min_length=1, max_length=300)
+    category: str | None = Field(default=None, max_length=100)
+
+
+class CandidateClaimOutput(AIModel):
+    """Atomic factual proposition proposed by article analysis.
+
+    This is a candidate claim only: it never enters the canonical ``claims``
+    table. Phase 22 verifies candidate evidence before any canonical Claim may
+    be created.
+    """
+
+    index: int = Field(ge=0, le=10_000)
+    proposition: str = Field(min_length=1, max_length=2000)
+
+
+class CandidateExcerptOutput(AIModel):
+    """Short source-derived excerpt proposed as support for a candidate Claim.
+
+    This is a candidate excerpt only: it never enters the canonical
+    ``evidence_spans`` table. Phase 22 verifies membership against the
+    immutable Phase 18 artifact before any EvidenceSpan may be created.
+    """
+
+    candidate_claim_index: int = Field(ge=0, le=10_000)
+    excerpt: str = Field(min_length=1, max_length=2000)
+    locator_type: str | None = Field(default=None, max_length=100)
+    locator_value: str | None = Field(default=None, max_length=500)
+
+
+class ArticleAnalysisOutput(AIModel):
+    """Validated structured article-analysis proposal (Phase 21).
+
+    All fields are bounded and strictly validated before the result can be
+    persisted as a durable ArticleAnalysis. ``candidate_claims`` and
+    ``candidate_evidence_excerpts`` are proposals: AI analysis is not evidence.
+    """
+
+    summary: str = Field(min_length=1, max_length=3000)
+    key_developments: list[str] = Field(min_length=1, max_length=25)
+    entities: list[ArticleAnalysisEntity] = Field(default_factory=list, max_length=100)
+    dates: list[str] = Field(default_factory=list, max_length=50)
+    locations: list[str] = Field(default_factory=list, max_length=50)
+    significance: str = Field(min_length=1, max_length=3000)
+    novelty: str = Field(min_length=1, max_length=3000)
+    candidate_claims: list[CandidateClaimOutput] = Field(default_factory=list, max_length=50)
+    candidate_evidence_excerpts: list[CandidateExcerptOutput] = Field(default_factory=list, max_length=50)
+    confidence: float = Field(ge=0.0, le=1.0)
+
+    @field_validator("key_developments")
+    @classmethod
+    def _bounded_developments(cls, value: list[str]) -> list[str]:
+        for item in value:
+            if not str(item).strip() or len(str(item)) > 2000:
+                raise ValueError("key developments must be non-empty strings bounded to 2000 characters")
+        return value
+
+    @field_validator("dates", "locations")
+    @classmethod
+    def _bounded_strings(cls, value: list[str]) -> list[str]:
+        for item in value:
+            if not str(item).strip() or len(str(item)) > 300:
+                raise ValueError("dates and locations must be non-empty strings bounded to 300 characters")
+        return value
+
+    @model_validator(mode="after")
+    def _excerpt_indexes_reference_candidate_claims(self) -> "ArticleAnalysisOutput":
+        indexes = {claim.index for claim in self.candidate_claims}
+        for excerpt in self.candidate_evidence_excerpts:
+            if excerpt.candidate_claim_index not in indexes:
+                raise ValueError(
+                    f"candidate excerpt references unknown candidate claim index "
+                    f"{excerpt.candidate_claim_index}"
+                )
+        return self
+
+
+@dataclass(frozen=True)
+class ArticleAnalysisRequest:
+    """Bounded input contract for article analysis.
+
+    ``text`` is the exact verified Phase 18 normalized content (never
+    caller-supplied, never re-fetched). ``scope_terms`` are the approved scope
+    terms of the pinned relevance decision.
+    """
+
+    title: str
+    text: str
+    scope_terms: Sequence[str]
+    work_id: str | None = None
+
+    def __post_init__(self) -> None:
+        if not str(self.text).strip():
+            raise ValueError("article analysis text must not be empty")
+        if len(self.text) > 2_000_000:
+            raise ValueError("article analysis text is unreasonably large")
+
+
 class EmbeddingProvider(Protocol):
     def embed(self, text: str) -> EmbeddingOutput | Mapping[str, Any]: ...
 
@@ -143,6 +249,10 @@ class ExtractionProvider(Protocol):
 
 class SynthesisProvider(Protocol):
     def synthesize(self, story_headline: str, claims: Sequence[ClaimDraft]) -> SynthesisOutput | Mapping[str, Any]: ...
+
+
+class ArticleAnalysisProvider(Protocol):
+    def analyze(self, request: ArticleAnalysisRequest) -> ArticleAnalysisOutput | Mapping[str, Any]: ...
 
 
 def _tokens(text: str) -> set[str]:
@@ -332,6 +442,106 @@ class DeterministicSynthesisProvider:
         return LocalSynthesisProvider().synthesize(story_headline, claims)
 
 
+_CAPITALIZED_WORDS = re.compile(r"\b[A-Z][a-zA-Z][a-zA-Z'\-]{1,60}\b")
+_ISO_DATE = re.compile(
+    r"\b\d{4}-\d{1,2}-\d{1,2}\b|\b\d{1,2}\s+(?:January|February|March|April|May|June|July|"
+    r"August|September|October|November|December)[a-z]*\s+\d{4}\b|\b(?:January|February|"
+    r"March|April|May|June|July|August|September|October|November|December)\s+\d{1,2},?\s+\d{4}\b"
+)
+_NON_ENTITY_WORDS = frozenset(
+    {
+        "The", "A", "An", "New", "This", "That", "These", "Those", "For", "And", "But", "With",
+        "From", "After", "Before", "During", "Against", "Although", "While", "Since", "Until",
+        "Among", "When", "Where", "What", "Who", "More", "Most", "Last", "First", "Next", "Our",
+        "Their", "Its", "His", "Her", "Its", "Over", "Under", "Inside", "Outside", "Some", "Many",
+        "Every", "Each", "Both", "Few", "Late", "Early", "Recent", "Today", "Yesterday",
+    }
+)
+
+
+class LocalArticleAnalysisProvider:
+    """Deterministic, offline ArticleAnalysis provider derived from source text.
+
+    Intentionally crude: its purpose is architecture, offline testing, and
+    zero-cost fallback, not semantic LLM analysis. It always returns the exact
+    validated ``ArticleAnalysisOutput`` schema so local and real provider paths
+    are interchangeable. Candidate Claims/Excerpts are sentence-level proposals
+    and never enter canonical Evidence/Claims tables.
+    """
+
+    def __init__(self, *, max_claims: int = 10):
+        if isinstance(max_claims, bool) or not isinstance(max_claims, int) or not 1 <= max_claims <= 50:
+            raise ValueError("max_claims must be an integer between 1 and 50")
+        self.max_claims = max_claims
+
+    def analyze(self, request: ArticleAnalysisRequest) -> ArticleAnalysisOutput:
+        sentences = _split_sentences(request.text)
+        if not sentences:
+            raise AIValidationError("local article analysis found no sentence-sized content")
+        summary = sentences[0][:2000] or "No summary sentence available."
+        developments = [sentence[:2000] for sentence in sentences[: min(5, self.max_claims)]]
+        if not developments:
+            developments = [summary[:2000]]
+        entities: list[ArticleAnalysisEntity] = []
+        for token in _CAPITALIZED_WORDS.findall(request.text):
+            if token in _NON_ENTITY_WORDS or len(token) < 3:
+                continue
+            candidate = ArticleAnalysisEntity(name=token)
+            if all(extract.name != token for extract in entities):
+                entities.append(candidate)
+        dates = [match.strip(".,") for match in _ISO_DATE.findall(request.text)][:10]
+        locations = [token for token in _CAPITALIZED_WORDS.findall(request.text) if token not in _NON_ENTITY_WORDS and len(token) >= 3][:6]
+        scope_text = ", ".join(str(term).strip() for term in request.scope_terms if str(term).strip())
+        significance = (
+            f"Article text matches the approved monitoring scope for this information need"
+            f" ({scope_text or 'approved scope terms'}) and was acquired because the source "
+            f"changed. Its importance for the need is assessed by the local provider only; "
+            f"semantic significance requires the real provider."
+        )[:3000]
+        novelty = (
+            "Article-level observation: this is a new changed acquisition for the monitor. "
+            "The local provider performs no cross-article or Story-level novelty comparison; "
+            "no Story evolution is invoked."
+        )[:3000]
+        claims = [
+            CandidateClaimOutput(index=index, proposition=sentence[:2000])
+            for index, sentence in enumerate(sentences[: self.max_claims])
+        ]
+        excerpts = [
+            CandidateExcerptOutput(
+                candidate_claim_index=index,
+                excerpt=sentence[:2000],
+                locator_type="sentence",
+                locator_value=str(index + 1),
+            )
+            for index, sentence in enumerate(sentences[: self.max_claims])
+        ]
+        return ArticleAnalysisOutput(
+            summary=summary,
+            key_developments=developments,
+            entities=entities,
+            dates=dates,
+            locations=locations,
+            significance=significance,
+            novelty=novelty,
+            candidate_claims=claims,
+            candidate_evidence_excerpts=excerpts,
+            confidence=0.85,
+        )
+
+
+class DeterministicArticleAnalysisProvider:
+    def __init__(self, output: Mapping[str, Any] | ArticleAnalysisOutput | None = None):
+        if output is not None:
+            _validated(ArticleAnalysisOutput, output)
+        self._output = output
+
+    def analyze(self, request: ArticleAnalysisRequest) -> ArticleAnalysisOutput | Mapping[str, Any]:
+        if self._output is not None:
+            return self._output
+        return LocalArticleAnalysisProvider().analyze(request)
+
+
 @dataclass(frozen=True)
 class CapabilityBundle:
     embedding: EmbeddingProvider | None = None
@@ -340,6 +550,7 @@ class CapabilityBundle:
     relevance: RelevanceProvider | None = None
     extraction: ExtractionProvider | None = None
     synthesis: SynthesisProvider | None = None
+    article_analysis: ArticleAnalysisProvider | None = None
 
     @classmethod
     def local_defaults(cls) -> "CapabilityBundle":
@@ -350,6 +561,7 @@ class CapabilityBundle:
             relevance=LocalRelevanceProvider(),
             extraction=LocalExtractionProvider(),
             synthesis=LocalSynthesisProvider(),
+            article_analysis=LocalArticleAnalysisProvider(),
         )
 
 
@@ -438,7 +650,7 @@ class SQLiteTelemetrySink:
                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
-                        f"ai_{hashlib.sha256(f'{event.capability}:{event.route}:{event.work_id}:{time.monotonic_ns()}'.encode()).hexdigest()[:24]}",
+                        f"ai_{uuid.uuid4().hex[:24]}",
                         self.job_id,
                         self.monitor_id,
                         self.research_question_id,
@@ -471,6 +683,7 @@ _OUTPUT_TYPES: dict[str, type[AIModel]] = {
     "relevance": RelevanceOutput,
     "extraction": ExtractionOutput,
     "synthesis": SynthesisOutput,
+    "article_analysis": ArticleAnalysisOutput,
 }
 
 
@@ -511,6 +724,9 @@ class AIRouter:
 
     def synthesis(self, story_headline: str, claims: Sequence[ClaimDraft], *, work_id: str | None = None) -> SynthesisOutput:
         return self._execute("synthesis", lambda provider: provider.synthesize(story_headline, claims), work_id=work_id)
+
+    def article_analysis(self, request: ArticleAnalysisRequest, *, work_id: str | None = None) -> ArticleAnalysisOutput:
+        return self._execute("article_analysis", lambda provider: provider.analyze(request), work_id=work_id)
 
     def _execute(self, capability: str, call: Callable[[Any], Any], *, work_id: str | None) -> Any:
         local_provider = getattr(self.local, capability)
@@ -590,19 +806,32 @@ class AIRouter:
             executor.shutdown(wait=False, cancel_futures=True)
         confidence = getattr(result, "confidence", None)
         signal = getattr(result, "signal", None)
+        provider_model = getattr(provider, "model_name", None) or type(provider).__name__
+        usage = getattr(provider, "last_usage", None)
+        token_units = None
+        if isinstance(usage, Mapping):
+            raw_units = usage.get("token_units")
+            if isinstance(raw_units, (int, float)) and math.isfinite(float(raw_units)):
+                token_units = int(raw_units)
+        actual_cost = usage.get("cost_usd") if isinstance(usage, Mapping) else None
+        if isinstance(actual_cost, (int, float)) and math.isfinite(float(actual_cost)):
+            estimated_cost = float(actual_cost)
+        else:
+            estimated_cost = self.policy.paid_request_cost_usd if route == "paid" else 0.0
         _record_telemetry(
             self.telemetry,
             TelemetryEvent(
                 capability=capability,
                 route=route,
                 provider=type(provider).__name__,
-                model=type(provider).__name__,
+                model=provider_model,
                 outcome="low_confidence" if confidence is not None and confidence < self.policy.min_confidence else "succeeded",
                 work_id=work_id,
                 confidence=confidence,
                 decision_signal=signal,
                 latency_ms=max(0, int((time.monotonic() - started) * 1000)),
-                estimated_cost_usd=self.policy.paid_request_cost_usd if route == "paid" else 0.0,
+                token_units=token_units,
+                estimated_cost_usd=estimated_cost,
                 escalation_reason=escalation_reason,
             ),
         )
@@ -661,6 +890,7 @@ __all__ = [
     "AITimeout",
     "AIBudgetExceeded",
     "AIDisabled",
+    "AIConfigurationError",
     "AIModel",
     "EmbeddingOutput",
     "RankingOutput",
@@ -672,24 +902,32 @@ __all__ = [
     "ClaimDraft",
     "SynthesisProposition",
     "SynthesisOutput",
+    "ArticleAnalysisEntity",
+    "CandidateClaimOutput",
+    "CandidateExcerptOutput",
+    "ArticleAnalysisOutput",
+    "ArticleAnalysisRequest",
     "EmbeddingProvider",
     "RerankerProvider",
     "EntailmentProvider",
     "RelevanceProvider",
     "ExtractionProvider",
     "SynthesisProvider",
+    "ArticleAnalysisProvider",
     "LocalEmbeddingProvider",
     "LocalRerankerProvider",
     "LocalEntailmentProvider",
     "LocalRelevanceProvider",
     "LocalExtractionProvider",
     "LocalSynthesisProvider",
+    "LocalArticleAnalysisProvider",
     "DeterministicRelevanceProvider",
     "DeterministicEmbeddingProvider",
     "DeterministicRerankerProvider",
     "DeterministicEntailmentProvider",
     "DeterministicExtractionProvider",
     "DeterministicSynthesisProvider",
+    "DeterministicArticleAnalysisProvider",
     "CapabilityBundle",
     "RoutePolicy",
     "TelemetryEvent",

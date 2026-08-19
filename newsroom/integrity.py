@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 from dataclasses import dataclass
 from typing import Optional
 
@@ -180,6 +181,93 @@ def check_database(db_path: Optional[str] = None) -> IntegrityReport:
                             f"artifact={row[0]} stored_length={len(row[2])} recorded={row[3]}",
                         )
                     )
+
+        # Phase 21 — durable article analyses. Detection is read-only (no model
+        # is ever re-run). Structural references are FK-guarded but are checked
+        # explicitly like the other durable families; provenance states that
+        # can never be produced by the writer (paid local analysis, empty
+        # provider/model, malformed result_json) are flagged.
+        if _table_exists(conn, "article_analyses"):
+            if not _table_exists(conn, "document_versions"):
+                issues.append(IntegrityIssue("missing_schema", "document_versions is absent"))
+            else:
+                rows = conn.execute(
+                    """
+                    SELECT aa.id, aa.document_version_id
+                    FROM article_analyses AS aa
+                    WHERE NOT EXISTS (
+                        SELECT 1 FROM document_versions AS dv WHERE dv.id = aa.document_version_id
+                    )
+                    ORDER BY aa.id
+                    """
+                )
+                issues.extend(
+                    IntegrityIssue(
+                        "orphan_analysis_version",
+                        f"analysis={row[0]} document_version={row[1]}",
+                    )
+                    for row in rows
+                )
+            if not _table_exists(conn, "document_version_relevance"):
+                issues.append(IntegrityIssue("missing_schema", "document_version_relevance is absent"))
+            else:
+                rows = conn.execute(
+                    """
+                    SELECT aa.id, aa.relevance_id
+                    FROM article_analyses AS aa
+                    WHERE NOT EXISTS (
+                        SELECT 1 FROM document_version_relevance AS dvr
+                        WHERE dvr.id = aa.relevance_id
+                    )
+                    ORDER BY aa.id
+                    """
+                )
+                issues.extend(
+                    IntegrityIssue(
+                        "orphan_analysis_relevance",
+                        f"analysis={row[0]} relevance={row[1]}",
+                    )
+                    for row in rows
+                )
+            for row in conn.execute(
+                """
+                SELECT aa.id, aa.provider, aa.model, aa.paid, aa.result_json
+                FROM article_analyses AS aa
+                ORDER BY aa.id
+                """
+            ):
+                analysis_id, provider, model, paid, result_json = row
+                if str(provider or "").strip() == "local" and paid == 1:
+                    issues.append(
+                        IntegrityIssue(
+                            "invalid_analysis_provenance",
+                            f"analysis={analysis_id} paid local analysis is impossible",
+                        )
+                    )
+                if not str(model or "").strip():
+                    issues.append(
+                        IntegrityIssue(
+                            "invalid_analysis_provenance",
+                            f"analysis={analysis_id} has an empty model label",
+                        )
+                    )
+                try:
+                    parsed = json.loads(result_json)
+                except (TypeError, ValueError):
+                    issues.append(
+                        IntegrityIssue(
+                            "malformed_analysis_result",
+                            f"analysis={analysis_id} result_json is not valid JSON",
+                        )
+                    )
+                else:
+                    if not isinstance(parsed, dict) or "summary" not in parsed:
+                        issues.append(
+                            IntegrityIssue(
+                                "malformed_analysis_result",
+                                f"analysis={analysis_id} result_json is not the analysis schema",
+                            )
+                        )
         return IntegrityReport(not issues, tuple(issues))
     finally:
         conn.close()

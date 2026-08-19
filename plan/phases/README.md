@@ -17,11 +17,13 @@ Phases 17–28 are the audit-driven integration and completion roadmap. They
 supersede conflicting or insufficient acceptance assumptions from Phases 01–16
 without rewriting those historical records.
 
-**Current active phase: Phase 21 — Article Analysis and Real AI Provider.**
+**Current active phase: Phase 22 — Verified Evidence and Claims Automation.**
 Phases 17 (runtime reconciliation and green baseline), Live Test A, Phase 18
 (durable normalized content artifact), Phase 19 (changed DocumentVersion
-processing Jobs), and Phase 20 (semantic scope and automatic relevance) are
-complete; those gates passed.
+processing Jobs), Phase 20 (semantic scope and automatic relevance), and
+Phase 21 (structured article analysis and one real AI provider) are complete;
+those gates passed. Phase 21's Live Test B remains blocked pending an
+operator-provided provider credential (see its Completion Record).
 
 ## How to assign work to Luna
 
@@ -145,3 +147,16 @@ disabled-monitor safety. One genuine acquisition defect was exposed and fixed
 minimally (redirect handler followed the re-normalized `www.`-stripped target,
 causing a self-bounce). No AI/relevance/analysis was invoked. The post-audit
 sequence (Phase 18) may begin.
+
+### Live Test B status — 2026-08-18
+
+**BLOCKED — provider credential/configuration absent** (Phase 21 completed
+offline). The real-provider path is fully implemented behind explicit
+opt-in configuration, and the offline architecture/regression gates pass
+(488 tests green). To run Live Test B the operator must set
+`NEWSROOM_ANALYSIS_PROVIDER=openai` and `NEWSROOM_ANALYSIS_API_KEY` in the
+worker process environment, enable `budget.paid_enabled`
+(`PUT /api/v1/budgets/paid-enabled`), and rerun a deliberately scoped
+relevant public Source through the pipeline; one successful relevant article
+with zero Evidence/Claims rows completes the canary. Phase 22 may begin; Live
+Test B may be completed at any point before or during Phase 22.

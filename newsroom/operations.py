@@ -70,6 +70,7 @@ _EXPORT_COLUMNS: dict[str, tuple[str, ...]] = {
     "search_index_meta": ("id", "dirty", "updated_at"),
     "ask_conversations": ("id", "scope_type", "scope_id", "created_at", "updated_at"),
     "ask_runs": ("id", "conversation_id", "turn_number", "status", "refusal_code", "context_units", "provider_route", "estimated_cost_usd", "created_at", "completed_at"),
+    "article_analyses": ("id", "document_version_id", "relevance_id", "monitor_id", "scope_version", "schema_version", "prompt_version", "provider", "model", "paid", "confidence", "input_char_count", "analyzed_char_count", "truncated", "created_at"),
 }
 
 

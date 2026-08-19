@@ -50,9 +50,9 @@ def _policy_and_monitor(db_path, *, target_id="src_1", next_check_at=T0, cadence
 
 
 def test_phase07_migration_adds_budget_and_scheduler_state_idempotently(tmp_db):
-    assert apply_migrations(tmp_db).applied_versions == (1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17)
+    assert apply_migrations(tmp_db).applied_versions == (1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18)
     assert apply_migrations(tmp_db).applied_versions == ()
-    assert migration_status(tmp_db) == (1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17)
+    assert migration_status(tmp_db) == (1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18)
 
     conn = storage.connect(tmp_db)
     try:
