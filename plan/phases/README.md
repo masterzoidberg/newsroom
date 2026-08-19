@@ -22,8 +22,10 @@ Phases 17 (runtime reconciliation and green baseline), Live Test A, Phase 18
 (durable normalized content artifact), Phase 19 (changed DocumentVersion
 processing Jobs), Phase 20 (semantic scope and automatic relevance), and
 Phase 21 (structured article analysis and one real AI provider) are complete;
-those gates passed. Phase 21's Live Test B remains blocked pending an
-operator-provided provider credential (see its Completion Record).
+those gates passed. **Live Test B PASSED** on 2026-08-18 against the Phase 21
+checkpoint (real NASA UAP page → relevance=true → real gpt-4o-mini
+ArticleAnalysis → durable record, zero Evidence/Claims); evidence in the
+Phase 21 file's Live Test B Completion Addendum.
 
 ## How to assign work to Luna
 
@@ -150,13 +152,16 @@ sequence (Phase 18) may begin.
 
 ### Live Test B status — 2026-08-18
 
-**BLOCKED — provider credential/configuration absent** (Phase 21 completed
-offline). The real-provider path is fully implemented behind explicit
-opt-in configuration, and the offline architecture/regression gates pass
-(488 tests green). To run Live Test B the operator must set
-`NEWSROOM_ANALYSIS_PROVIDER=openai` and `NEWSROOM_ANALYSIS_API_KEY` in the
-worker process environment, enable `budget.paid_enabled`
-(`PUT /api/v1/budgets/paid-enabled`), and rerun a deliberately scoped
-relevant public Source through the pipeline; one successful relevant article
-with zero Evidence/Claims rows completes the canary. Phase 22 may begin; Live
-Test B may be completed at any point before or during Phase 22.
+**PASSED** against the Phase 21 checkpoint (`eb1663b`). Evidence recorded in
+`PHASE_21_ARTICLE_ANALYSIS_AND_REAL_AI_PROVIDER.md` (Live Test B Completion
+Addendum). A real NASA public page (`science.nasa.gov/uap/`) acquired through
+the production Scheduler → Worker → Acquisition → DocumentVersion path was
+automatically evaluated relevant (exact scope match on `UAP`) and analyzed by
+one real model call (OpenAI-compatible chat completions, gpt-4o-mini, SDK
+1.109.1): validated structured ArticleAnalysis persisted
+(`ana_5bf1bb198e647fd90b81c2ba717de9dc`, ~4k tokens, ~8.7 s) with zero
+EvidenceSpans, zero Claims, and no Story/Report/Alert automation. A second
+live acquisition of an irrelevant page proved the zero-call gate
+(relevance=false, no analysis provider call). Operator prerequisites:
+`openai>=1.68,<2.0` dependency (now declared in pyproject.toml) and a
+credential via `NEWSROOM_ANALYSIS_API_KEY` or `OPENAI_API_KEY`.

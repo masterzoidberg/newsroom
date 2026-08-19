@@ -264,10 +264,19 @@ class AnalysisProviderConfig:
 
     @classmethod
     def from_env(cls, environ: Mapping[str, str] | None = None) -> "AnalysisProviderConfig":
+        """Load operator configuration from the environment.
+
+        The Newsroom-specific ``NEWSROOM_ANALYSIS_API_KEY`` takes precedence;
+        the conventional ``OPENAI_API_KEY`` (the variable the openai SDK
+        itself reads by default) is accepted as a fallback so an existing
+        standard SDK credential enables the opt-in paid route. Keys are never
+        logged, persisted, or exported.
+        """
         values = os.environ if environ is None else environ
+        api_key = values.get("NEWSROOM_ANALYSIS_API_KEY") or values.get("OPENAI_API_KEY") or None
         return cls(
             provider=_env_text(values, "NEWSROOM_ANALYSIS_PROVIDER", ANALYSIS_PROVIDER_LOCAL),
-            api_key=values.get("NEWSROOM_ANALYSIS_API_KEY") or None,
+            api_key=api_key,
             base_url=values.get("NEWSROOM_ANALYSIS_BASE_URL") or None,
             model=_env_text(values, "NEWSROOM_ANALYSIS_MODEL", DEFAULT_MODEL),
             timeout_seconds=_env_float(values, "NEWSROOM_ANALYSIS_TIMEOUT_SECONDS", DEFAULT_TIMEOUT_SECONDS),
@@ -363,9 +372,11 @@ class OpenAICompatibleArticleAnalysisProvider:
             content = str(getattr(message, "content", "") or "")
         usage = getattr(completion, "usage", None) or {}
         token_units = getattr(usage, "total_tokens", None)
-        if not isinstance(token_units, (int, float)):
-            token_units = None
+        input_tokens = getattr(usage, "prompt_tokens", None)
+        output_tokens = getattr(usage, "completion_tokens", None)
         self.last_usage = {
+            "input_tokens": int(input_tokens) if isinstance(input_tokens, (int, float)) else None,
+            "output_tokens": int(output_tokens) if isinstance(output_tokens, (int, float)) else None,
             "token_units": int(token_units) if isinstance(token_units, (int, float)) else None,
             "cost_usd": None,  # provider billing metadata is unavailable; never fabricated
         }

@@ -545,7 +545,12 @@ def test_real_provider_adapter_parses_mocked_sdk_response(tmp_db):
     validated = ArticleAnalysisOutput.model_validate(result)
     assert validated.summary == "The Pentagon released a new UAP report today."
     assert len(validated.candidate_claims) == 2
-    assert provider.last_usage == {"token_units": 321, "cost_usd": None}
+    assert provider.last_usage == {
+        "input_tokens": None,
+        "output_tokens": None,
+        "token_units": 321,
+        "cost_usd": None,
+    }
     # The adapter requested the structured JSON-schema response format.
     assert _captured["kwargs"]["response_format"]["type"] == "json_schema"
     assert _captured["kwargs"]["response_format"]["json_schema"]["name"] == "article_analysis"

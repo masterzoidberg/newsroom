@@ -371,9 +371,11 @@ verified source text — intentionally crude, honestly labeled (`provider=local`
 
 **Configuration — safe by default.** A fresh installation with no
 configuration performs zero paid calls and analyzes locally. Remote use is an
-explicit opt-in requiring `NEWSROOM_ANALYSIS_PROVIDER=openai` plus
-`NEWSROOM_ANALYSIS_API_KEY` (never logged), the existing
-`budget.paid_enabled` settings flag, and per-call budget limits
+explicit opt-in requiring `NEWSROOM_ANALYSIS_PROVIDER=openai` plus an API key
+(`NEWSROOM_ANALYSIS_API_KEY`; the conventional `OPENAI_API_KEY` that the
+openai SDK itself reads by default is accepted as a fallback — never logged),
+the bundled `openai>=1.68,<2.0` SDK, the existing `budget.paid_enabled`
+settings flag, and per-call budget limits
 (`NEWSROOM_ANALYSIS_MAX_PAID_CALLS`, `_MAX_PAID_COST_USD`,
 `_MAX_PAID_CALLS_PER_WORK`, `_MAX_PAID_COST_USD_PER_WORK`,
 `_REQUEST_COST_USD`). Missing key → explicit `AIConfigurationError`

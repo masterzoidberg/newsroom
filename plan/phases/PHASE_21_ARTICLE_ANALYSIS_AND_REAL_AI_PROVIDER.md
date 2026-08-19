@@ -231,3 +231,100 @@ implementation and architecture gates are complete without it.
   queue's active-obligation coalescing makes the simultaneous case
   effectively unreachable).
 
+## Live Test B Completion Addendum — 2026-08-18
+
+**LIVE TEST B: PASS — real provider call succeeded.**
+
+### SDK compatibility
+
+- Previous installed SDK: `openai 1.3.7` (predates the chat-completions
+  `json_schema` `response_format`).
+- Verified requirement (Context7, official openai-python docs, v1.68
+  contract): the Phase 21 provider implementation was already correct for a
+  modern SDK (case A) — client construction, `chat.completions.create`,
+  `response_format` JSON-schema, `httpx.Timeout`, `max_retries`, usage shape,
+  exception classes all match the documented contract; the environment simply
+  lacked a compatible SDK.
+- Dependency declaration: `pyproject.toml` now declares
+  `openai>=1.68,<2.0` in runtime dependencies, so a fresh Newsroom install
+  receives a compatible SDK.
+- Final installed version actually tested: **`openai 1.109.1`**.
+- Provider code changed minimally: `last_usage` now also exposes
+  `input_tokens` / `output_tokens` (the telemetry sink continues to persist
+  `token_units` = total); `AnalysisProviderConfig.from_env` now accepts the
+  conventional `OPENAI_API_KEY` as a fallback for
+  `NEWSROOM_ANALYSIS_API_KEY` (the variable the openai SDK itself reads by
+  default; keys are still never logged/persisted/exported).
+
+### Configuration used for the live canary
+
+- provider=`openai`, model=`gpt-4o-mini`, base URL = default (api.openai.com).
+- timeout 90 s (SDK `httpx.Timeout`, connect 10 s), SDK `max_retries=0`,
+  `max_tokens=1200` (output capped), paid budget: lifetime USD $0.10 and 2
+  paid requests in the disposable test DB, `budget.paid_enabled=true`.
+- API key: taken from the operator's existing `OPENAI_API_KEY` environment
+  variable; never printed, logged, persisted, or committed.
+
+### Live source / scope
+
+- Source: `https://science.nasa.gov/uap/` (official US government, NASA
+  Science — UAP independent study page).
+- Information need: Topic "UAP" with approved scope terms `UAP`, `UFO`,
+  `unidentified anomalous phenomena`, `anomalous phenomena`,
+  `unidentified flying object`, `flying saucer`.
+- Relevance result: **evaluated, relevant=true**, stage=exact, score=1.0
+  (matched term `UAP`), persisted `document_version_relevance` with
+  scope_version 1.
+
+### Live analysis
+
+- `article_analyses` id **`ana_5bf1bb198e647fd90b81c2ba717de9dc`**;
+  provider=openai, model=gpt-4o-mini, paid=true.
+- Schema validation: PASS — full `ArticleAnalysisOutput` validated before
+  persistence (`article_analysis_schema_v1`, prompt `article_analysis_v1`);
+  all structured fields populated (summary, key_developments, entities,
+  dates, locations, significance, novelty, 4 candidate claims, 4 candidate
+  excerpts, confidence 0.9).
+- Provenance persisted: document_version_id, relevance_id, monitor_id,
+  scope_version=1, artifact_id, normalized_content_hash, schema/prompt
+  versions, provider/model, paid, created_at.
+
+### Usage / cost
+
+- Input tokens 3514, output tokens 544, total 4058; latency ~8.7 s (wall and
+  telemetry agree: 8796/8734 ms); provider billing metadata unavailable so no
+  exact dollar cost is claimed — Newsroom's configured estimate
+  `NEWSROOM_ANALYSIS_REQUEST_COST_USD` = $0.01 was recorded in
+  `provider_usage` (one `article_analysis` row, route=paid, status=succeeded).
+
+### Evidence boundary
+
+`evidence_spans=0`, `claims=0`, `claim_evidence=0`, `stories=0`,
+`story_revisions=0`, `story_evolution_events=0`, `living_reports=0`,
+`alerts=0`, `briefings=0`. The model output remains candidate intelligence
+only; Phase 22 is untouched.
+
+### Zero-call gate (live)
+
+A second live acquisition of `https://example.com/` (irrelevant page) through
+the same harness produced `relevance=false`, zero `article_analyses` rows,
+zero `article_analysis` provider_usage rows, zero paid usage — no provider
+call was made.
+
+### Regression results
+
+- Phase 21 tests: 33 passed; Phase 20 + Phase 19 + Phase 21 combined: 85
+  passed; full backend suite: **488 passed, 39 warnings**; `compileall`
+  clean; `git diff --check` clean.
+
+### Remaining risks
+
+- Only one live model (gpt-4o-mini) and one live endpoint verified; other
+  OpenAI-compatible endpoints via `NEWSROOM_ANALYSIS_BASE_URL` remain
+  unverified live.
+- `response_format` JSON-schema behavior validated live on gpt-4o-mini;
+  strict-mode nuances on other models remain the Pydantic layer's
+  responsibility.
+- Theoretical double-paid-call race (unchanged, effectively unreachable via
+  queue coalescing).
+
