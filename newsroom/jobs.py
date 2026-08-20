@@ -39,6 +39,20 @@ class BudgetExhausted(DomainError):
         self.reason = reason
 
 
+class PaidInvocationBusy(BudgetExhausted):
+    """Another worker owns the canonical paid analysis invocation."""
+
+    def __init__(self, message: str = "paid analysis invocation is already active"):
+        super().__init__(message, reason="analysis_invocation_active")
+
+
+class PaidInvocationUncertain(BudgetExhausted):
+    """A previous provider call may have been processed remotely."""
+
+    def __init__(self, message: str = "paid analysis invocation has uncertain remote state"):
+        super().__init__(message, reason="analysis_invocation_uncertain")
+
+
 JOB_STATUSES = frozenset({"queued", "running", "succeeded", "partial", "failed", "cancelled"})
 TERMINAL_JOB_STATUSES = frozenset({"succeeded", "partial", "failed", "cancelled"})
 ATTEMPT_STATUSES = frozenset({"running", "succeeded", "failed", "cancelled"})
@@ -517,7 +531,7 @@ class BudgetService:
         where = "WHERE u.created_at >= ?" if start else ""
         params: list[Any] = [start] if start else []
         rows = conn.execute(
-            f"SELECT u.*, m.policy_id AS usage_policy_id FROM provider_usage AS u {joins} {where}",
+            f"SELECT u.*, m.policy_id AS usage_policy_id, NULL AS invocation_policy_id FROM provider_usage AS u {joins} {where}",
             params,
         ).fetchall()
         return list(rows)
@@ -531,10 +545,15 @@ class BudgetService:
         if scope_type == "research_question":
             return row["research_question_id"] == scope_id
         policy_id = scope_id
-        return row["usage_policy_id"] == policy_id
+        return (row["usage_policy_id"] or row["invocation_policy_id"]) == policy_id
 
     @staticmethod
     def _usage_value(row: sqlite3.Row, cap_type: str) -> float:
+        # A linked article-analysis usage row is already represented by its
+        # durable invocation reservation. Counting it again would make a
+        # configured budget appear to consume two requests for one call.
+        if row["invocation_id"] is not None:
+            return 0.0
         if cap_type == "acquisition_units":
             return float(row["query_units"] or 0)
         if cap_type == "local_model_units":
@@ -552,6 +571,335 @@ class BudgetService:
     @staticmethod
     def _reservation_value(row: sqlite3.Row, cap_type: str) -> float:
         return float(row["estimated_cost_usd"] if cap_type == "usd" else row[cap_type])
+
+    @staticmethod
+    def _analysis_invocation_rows(conn: sqlite3.Connection, *, period: str, now: str) -> list[sqlite3.Row]:
+        start = BudgetService._period_start(period, now)
+        predicate = "ai.state <> 'retryable'"
+        params: list[Any] = []
+        if start:
+            predicate += " AND ai.created_at >= ?"
+            params.append(start)
+        return list(
+            conn.execute(
+                """
+                SELECT ai.*, m.policy_id AS invocation_policy_id
+                FROM analysis_invocations AS ai
+                LEFT JOIN monitors AS m ON m.id = ai.monitor_id
+                WHERE """ + predicate,
+                params,
+            ).fetchall()
+        )
+
+    @staticmethod
+    def _analysis_invocation_value(row: sqlite3.Row, cap_type: str) -> float:
+        return float(row["reserved_cost_usd"] or 0.0) if cap_type == "usd" else float(row["reserved_requests"] or 0)
+
+    @staticmethod
+    def _analysis_scope_match(row: sqlite3.Row, scope_type: str, scope_id: str) -> bool:
+        if scope_type == "global":
+            return True
+        if scope_type == "job":
+            return row["job_id"] == scope_id
+        if scope_type == "research_question":
+            return "research_question_id" in row.keys() and row["research_question_id"] == scope_id
+        usage_policy = row["usage_policy_id"] if "usage_policy_id" in row.keys() else None
+        invocation_policy = row["invocation_policy_id"] if "invocation_policy_id" in row.keys() else None
+        return (usage_policy or invocation_policy) == scope_id
+
+    @staticmethod
+    def _legacy_paid_analysis_usage(conn: sqlite3.Connection) -> tuple[float, float]:
+        row = conn.execute(
+            """
+            SELECT COUNT(*) AS requests, COALESCE(SUM(estimated_cost_usd), 0.0) AS cost
+            FROM provider_usage
+            WHERE capability = 'article_analysis'
+              AND request_type = 'ai:paid'
+              AND invocation_id IS NULL
+            """
+        ).fetchone()
+        return float(row["requests"] or 0), float(row["cost"] or 0.0)
+
+    def _analysis_usage_totals_tx(self, conn: sqlite3.Connection) -> tuple[float, float]:
+        row = conn.execute(
+            """
+            SELECT COALESCE(SUM(reserved_requests), 0) AS requests,
+                   COALESCE(SUM(reserved_cost_usd), 0.0) AS cost
+            FROM analysis_invocations
+            WHERE state <> 'retryable'
+            """
+        ).fetchone()
+        legacy_requests, legacy_cost = self._legacy_paid_analysis_usage(conn)
+        return (
+            float(row["requests"] or 0) + legacy_requests,
+            float(row["cost"] or 0.0) + legacy_cost,
+        )
+
+    def _check_analysis_budget_limits_tx(
+        self,
+        conn: sqlite3.Connection,
+        *,
+        monitor_id: str,
+        job_id: str | None,
+        request_cost_usd: float,
+        now: str,
+    ) -> None:
+        monitor = conn.execute("SELECT policy_id FROM monitors WHERE id = ?", (monitor_id,)).fetchone()
+        specs = [("global", "")]
+        if monitor is not None and monitor["policy_id"]:
+            specs.append(("policy", monitor["policy_id"]))
+        if job_id:
+            specs.append(("job", job_id))
+        for scope_type, scope_id in specs:
+            limits = conn.execute(
+                """
+                SELECT * FROM budget_limits
+                WHERE scope_type = ? AND scope_id = ? AND enabled = 1
+                  AND cap_type IN ('paid_requests', 'usd')
+                """,
+                (scope_type, scope_id),
+            ).fetchall()
+            if not limits:
+                continue
+            usage_rows = self._usage_rows(
+                conn,
+                conn.execute(
+                    "SELECT ? AS id, ? AS monitor_id, ? AS research_question_id",
+                    (job_id, monitor_id, None),
+                ).fetchone(),
+                "lifetime",
+                now,
+            )
+            invocation_rows = self._analysis_invocation_rows(conn, period="lifetime", now=now)
+            for limit in limits:
+                start = self._period_start(limit["period"], now)
+                usage = 0.0
+                for row in usage_rows:
+                    if start and row["created_at"] < start:
+                        continue
+                    if self._analysis_scope_match(row, limit["scope_type"], limit["scope_id"]):
+                        usage += self._usage_value(row, limit["cap_type"])
+                for row in invocation_rows:
+                    if start and row["created_at"] < start:
+                        continue
+                    if self._analysis_scope_match(row, limit["scope_type"], limit["scope_id"]):
+                        usage += self._analysis_invocation_value(row, limit["cap_type"])
+                for reservation in conn.execute(
+                    "SELECT * FROM budget_reservations WHERE status = 'reserved'"
+                ).fetchall():
+                    if self._reservation_in_scope(conn, reservation, limit["scope_type"], limit["scope_id"]):
+                        usage += self._reservation_value(reservation, limit["cap_type"])
+                requested = 1.0 if limit["cap_type"] == "paid_requests" else request_cost_usd
+                if usage + requested > float(limit["cap_value"]) + 1e-12:
+                    raise BudgetExhausted(
+                        f"{scope_type} {limit['cap_type']} budget exhausted",
+                        reason="budget_exhausted",
+                    )
+
+    @staticmethod
+    def _reservation_in_scope(
+        conn: sqlite3.Connection,
+        reservation: sqlite3.Row,
+        scope_type: str,
+        scope_id: str,
+    ) -> bool:
+        job = conn.execute(
+            "SELECT id, monitor_id, research_question_id FROM jobs WHERE id = ?",
+            (reservation["job_id"],),
+        ).fetchone()
+        if job is None:
+            return False
+        if scope_type == "global":
+            return True
+        if scope_type == "job":
+            return job["id"] == scope_id
+        if scope_type == "research_question":
+            return job["research_question_id"] == scope_id
+        monitor = conn.execute("SELECT policy_id FROM monitors WHERE id = ?", (job["monitor_id"],)).fetchone()
+        return monitor is not None and monitor["policy_id"] == scope_id
+
+    def reserve_paid_analysis(
+        self,
+        *,
+        identity_hash: str,
+        document_version_id: str,
+        relevance_id: str,
+        monitor_id: str,
+        job_id: str | None,
+        estimated_cost_usd: float,
+        max_paid_calls: int,
+        max_paid_cost_usd: float,
+        lease_seconds: int = 300,
+    ) -> dict[str, Any]:
+        """Atomically authorize one automatic paid analysis invocation."""
+        if not str(identity_hash).strip():
+            raise DomainValidation("paid analysis identity_hash is required")
+        estimated_cost_usd = _nonnegative_float(estimated_cost_usd, "estimated_cost_usd")
+        max_paid_calls = _nonnegative_int(max_paid_calls, "max_paid_calls")
+        max_paid_cost_usd = _nonnegative_float(max_paid_cost_usd, "max_paid_cost_usd")
+        if lease_seconds < 1:
+            raise DomainValidation("paid analysis invocation lease must be positive")
+        now = utc_now()
+        owner_token = new_id("inv-owner")
+        conn = storage.connect(self.db_path)
+        try:
+            with storage.write_tx(conn):
+                existing = conn.execute(
+                    "SELECT * FROM analysis_invocations WHERE identity_hash = ?",
+                    (identity_hash,),
+                ).fetchone()
+                if existing is not None:
+                    state = existing["state"]
+                    if state == "succeeded":
+                        return {"state": state, "id": existing["id"], "identity_hash": identity_hash}
+                    if state in {"reserved", "running"}:
+                        raise PaidInvocationBusy()
+                    if state == "uncertain":
+                        raise PaidInvocationUncertain()
+                    if state == "failed_terminal":
+                        raise BudgetExhausted(
+                            "paid analysis invocation is terminally failed",
+                            reason="analysis_invocation_terminal",
+                        )
+                    conn.execute(
+                        """
+                        UPDATE analysis_invocations
+                        SET state = 'running', owner_token = ?,
+                            lease_expires_at = ?, started_at = ?,
+                            completed_at = NULL, failure_code = NULL, updated_at = ?
+                        WHERE id = ? AND state = 'retryable'
+                        """,
+                        (owner_token, _plus_seconds(now, lease_seconds), now, now, existing["id"]),
+                    )
+                    return {
+                        "state": "running",
+                        "id": existing["id"],
+                        "identity_hash": identity_hash,
+                        "owner_token": owner_token,
+                    }
+                if not self._paid_enabled_tx(conn):
+                    raise BudgetExhausted("paid dispatch is disabled", reason="paid_disabled")
+                used_requests, used_cost = self._analysis_usage_totals_tx(conn)
+                if used_requests + 1 > max_paid_calls:
+                    raise BudgetExhausted(
+                        "configured paid analysis request limit exhausted",
+                        reason="paid_budget_exhausted",
+                    )
+                if used_cost + estimated_cost_usd > max_paid_cost_usd + 1e-12:
+                    raise BudgetExhausted(
+                        "configured paid analysis USD limit exhausted",
+                        reason="paid_budget_exhausted",
+                    )
+                self._check_analysis_budget_limits_tx(
+                    conn,
+                    monitor_id=monitor_id,
+                    job_id=job_id,
+                    request_cost_usd=estimated_cost_usd,
+                    now=now,
+                )
+                identifier = new_id("inv")
+                conn.execute(
+                    """
+                    INSERT INTO analysis_invocations
+                        (id, identity_hash, document_version_id, relevance_id,
+                         monitor_id, job_id, state, paid, reserved_requests,
+                         reserved_cost_usd, owner_token, lease_expires_at,
+                         started_at, created_at, updated_at)
+                    VALUES (?, ?, ?, ?, ?, ?, 'running', 1, 1, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        identifier,
+                        identity_hash,
+                        document_version_id,
+                        relevance_id,
+                        monitor_id,
+                        job_id,
+                        estimated_cost_usd,
+                        owner_token,
+                        _plus_seconds(now, lease_seconds),
+                        now,
+                        now,
+                        now,
+                    ),
+                )
+                return {
+                    "state": "running",
+                    "id": identifier,
+                    "identity_hash": identity_hash,
+                    "owner_token": owner_token,
+                }
+        finally:
+            conn.close()
+
+    def complete_paid_analysis(self, invocation_id: str, owner_token: str) -> None:
+        now = utc_now()
+        conn = storage.connect(self.db_path)
+        try:
+            with storage.write_tx(conn):
+                result = conn.execute(
+                    """
+                    UPDATE analysis_invocations
+                    SET state = 'succeeded', owner_token = NULL,
+                        lease_expires_at = NULL, completed_at = ?, updated_at = ?
+                    WHERE id = ? AND state = 'running' AND owner_token = ?
+                    """,
+                    (now, now, invocation_id, owner_token),
+                )
+                if result.rowcount != 1:
+                    raise DomainConflict("paid analysis invocation ownership was lost")
+        finally:
+            conn.close()
+
+    def fail_paid_analysis(
+        self,
+        invocation_id: str,
+        owner_token: str,
+        *,
+        state: str,
+        failure_code: str,
+    ) -> None:
+        if state not in {"failed_terminal", "uncertain", "retryable"}:
+            raise DomainValidation("invalid paid analysis invocation failure state")
+        now = utc_now()
+        conn = storage.connect(self.db_path)
+        try:
+            with storage.write_tx(conn):
+                conn.execute(
+                    """
+                    UPDATE analysis_invocations
+                    SET state = ?, owner_token = NULL, lease_expires_at = NULL,
+                        completed_at = ?, failure_code = ?, updated_at = ?
+                    WHERE id = ? AND state = 'running' AND owner_token = ?
+                    """,
+                    (state, now, str(failure_code)[:120], now, invocation_id, owner_token),
+                )
+        finally:
+            conn.close()
+
+    def release_paid_analysis_if_not_started(
+        self,
+        identity_hash: str,
+        *,
+        reason: str = "operator_confirmed_not_started",
+    ) -> None:
+        """Explicitly release a reservation only after no request began."""
+        now = utc_now()
+        conn = storage.connect(self.db_path)
+        try:
+            with storage.write_tx(conn):
+                result = conn.execute(
+                    """
+                    UPDATE analysis_invocations
+                    SET state = 'retryable', owner_token = NULL,
+                        lease_expires_at = NULL, failure_code = ?, updated_at = ?
+                    WHERE identity_hash = ? AND state IN ('running', 'uncertain')
+                    """,
+                    (str(reason)[:120], now, identity_hash),
+                )
+                if result.rowcount != 1:
+                    raise DomainConflict("paid analysis invocation is not releasable")
+        finally:
+            conn.close()
 
     def _reserve_tx(self, conn: sqlite3.Connection, job: sqlite3.Row, now: str) -> None:
         plan = _budget_plan(_decode(job["payload_json"], {}))

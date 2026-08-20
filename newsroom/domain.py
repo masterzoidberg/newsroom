@@ -580,8 +580,19 @@ class CoreService:
         conn = storage.connect(self.db_path)
         try:
             with storage.write_tx(conn):
-                self._require(conn, "subjects", identifier, "subject", live=True)
+                current = self._require(conn, "subjects", identifier, "subject", live=True)
                 self._update(conn, "subjects", identifier, values)
+                if "canonical_name" in values and values["canonical_name"] != current["canonical_name"]:
+                    from .monitoring import MonitorService
+
+                    MonitorService._refresh_need_scopes_tx(
+                        conn,
+                        "subject",
+                        identifier,
+                        changed_by=data.get("changed_by"),
+                        change_type="approved",
+                        created_at=values["updated_at"],
+                    )
         finally:
             conn.close()
         return self.get_subject(identifier, include_deleted=True)
@@ -604,6 +615,15 @@ class CoreService:
                         "alias_normalized": normalized_text(alias),
                         "created_at": utc_now(),
                     },
+                )
+                from .monitoring import MonitorService
+
+                MonitorService._refresh_need_scopes_tx(
+                    conn,
+                    "subject",
+                    identifier,
+                    changed_by=None,
+                    change_type="approved",
                 )
         finally:
             conn.close()

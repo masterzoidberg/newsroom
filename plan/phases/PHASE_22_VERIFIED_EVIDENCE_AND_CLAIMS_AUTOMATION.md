@@ -95,6 +95,26 @@ permitted only after Phase 23 connects Stories, Reports, and Alerts.
 
 Phases 18, 20, and 21.
 
+## Phase 21H design constraints — Phase 22 not started
+
+The following constraints are prerequisites, not implementation work in this
+phase:
+
+- Use Unicode/Python `str` codepoint offsets against one canonical normalized
+  evidence view. Never use byte offsets or trust model-provided offsets.
+- Define and persist the canonical evidence view used for verification. HTML
+  and text artifacts use the exact normalized artifact text.
+- Feed artifacts require a deterministic evidence projection from the
+  persisted feed-entry metadata, including projection version and field path;
+  feed metadata must not be treated as raw HTML/text implicitly.
+- Require a passing Phase 21H full provenance validation before any
+  EvidenceSpan or Claim write.
+- Treat the durable Phase 21H paid invocation/reservation state as a
+  prerequisite. Evidence retries must not create another paid analysis call.
+
+Phase 22 has not started and no evidence-promotion runtime is authorized by
+this note.
+
 ## Exit criteria
 
 Every automatically generated EvidenceSpan is content-verified and every

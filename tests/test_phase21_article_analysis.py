@@ -183,12 +183,13 @@ def _persist_relevance(db, version_id: str, monitor_id: str) -> dict[str, Any]:
     """Persist the canonical relevant=true decision for direct service tests."""
     from newsroom.monitoring import RelevanceResult, RelevanceScope  # noqa: PLC0415
 
+    monitor_scope = MonitorService(db).scope_at_version(monitor_id, 1)
     return DocumentVersionRelevanceService(db).persist_decision(
         job_id=None,
         document_version_id=version_id,
         monitor_id=monitor_id,
         scope_version=1,
-        scope=RelevanceScope(exact_terms=("UAP",)),
+        scope=monitor_scope,
         result=RelevanceResult(True, "exact", 1.0, ("UAP",), "match"),
         observed_at=T0,
     )
@@ -1440,10 +1441,10 @@ def test_uap_fixture_structured_analysis_demonstrates_all_fields(tmp_db):
 
 
 def test_migration_0018_fresh_upgrade_and_rerun(tmp_db):
-    # Fresh DB migrates 1..18 with schema_version 18.
+    # Fresh DB migrates 1..19 with schema_version 19.
     apply_migrations(tmp_db)
-    assert migration_status(tmp_db) == tuple(range(1, 19))
-    assert _get(tmp_db, "SELECT value FROM app_meta WHERE key = 'schema_version'")[0] == "18"
+    assert migration_status(tmp_db) == tuple(range(1, 20))
+    assert _get(tmp_db, "SELECT value FROM app_meta WHERE key = 'schema_version'")[0] == "19"
     assert _count(tmp_db, "article_analyses") == 0
 
     # Upgrade: a schema-17 DB upgrades safely with data preserved.
@@ -1491,17 +1492,17 @@ def test_migration_0018_fresh_upgrade_and_rerun(tmp_db):
         conn.close()
 
     result = apply_migrations(db2)
-    assert result.applied_versions == (18,)
-    assert result.current_version == 18
-    assert migration_status(db2) == tuple(range(1, 19))
-    assert _get(db2, "SELECT value FROM app_meta WHERE key = 'schema_version'")[0] == "18"
+    assert result.applied_versions == (18, 19)
+    assert result.current_version == 19
+    assert migration_status(db2) == tuple(range(1, 20))
+    assert _get(db2, "SELECT value FROM app_meta WHERE key = 'schema_version'")[0] == "19"
     assert _get(db2, "SELECT name FROM sources WHERE id = 'src-old21'")[0] == "Old"
     assert _count(db2, "article_analyses") == 0
 
     # Rerun is a no-op.
     result = apply_migrations(db2)
     assert result.applied_versions == ()
-    assert result.current_version == 18
+    assert result.current_version == 19
     assert check_database(db2).ok is True
 
 

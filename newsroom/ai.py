@@ -621,11 +621,13 @@ class SQLiteTelemetrySink:
         job_id: str | None = None,
         monitor_id: str | None = None,
         research_question_id: str | None = None,
+        invocation_id: str | None = None,
     ):
         self.db_path = Path(db_path)
         self.job_id = job_id
         self.monitor_id = monitor_id
         self.research_question_id = research_question_id
+        self.invocation_id = invocation_id
 
     def record(self, event: TelemetryEvent) -> None:
         metadata = {
@@ -646,8 +648,9 @@ class SQLiteTelemetrySink:
                     INSERT INTO provider_usage
                         (id, job_id, monitor_id, research_question_id, capability,
                          provider, request_type, query_units, token_units,
-                         estimated_cost_usd, latency_ms, outcome, created_at)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                         estimated_cost_usd, latency_ms, outcome, created_at,
+                         invocation_id)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         f"ai_{uuid.uuid4().hex[:24]}",
@@ -663,6 +666,7 @@ class SQLiteTelemetrySink:
                         event.latency_ms,
                         json.dumps({"status": event.outcome, **metadata}, sort_keys=True),
                         utc_now(),
+                        self.invocation_id,
                     ),
                 )
         finally:

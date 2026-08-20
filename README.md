@@ -59,7 +59,8 @@ relevance emits the existing `relevant_change` activity and minimum-cadence
 acceleration; a truthful not-relevant or acquisition-only result is a
 successful outcome and never fails the Job. Since Phase 21, a `relevant=true`
 decision also produces a durable structured ArticleAnalysis record
-(`article_analyses`, Migration 0018) through the provider-neutral `AIRouter`:
+(`article_analyses`, Migration 0018; durable paid invocation hardening in
+Migration 0019) through the provider-neutral `AIRouter`:
 the deterministic local provider by default (zero cost, offline), or exactly
 one opt-in real provider (OpenAI-compatible chat completions, bundled SDK
 `openai>=1.68,<2.0`) when `NEWSROOM_ANALYSIS_PROVIDER=openai` plus an API key
@@ -70,8 +71,9 @@ manual harness is `scripts/live_test_b.py` (never part of CI, no secrets, tiny
 bounded budget). Model input always comes from the verified Phase 18
 artifact; candidate Claims/Excerpts remain proposals — Phase 21 never creates
 accepted Evidence/Claims, Stories, Reports, or Alerts (Phase 22 is the
-verification boundary). The current applied schema is migration 0018 / schema
-version 18. Only `source` Monitor targets perform real acquisition today;
+verification boundary). The current applied schema is migration 0019 / schema
+version 19; Phase 22 remains blocked pending Phase 21H re-review. Only `source`
+Monitor targets perform real acquisition today;
 `topic`, `subject`, `story`, and `research_question` are accepted by the
 schema/API but explicitly unsupported at runtime
 (`error`/`unsupported_target`).

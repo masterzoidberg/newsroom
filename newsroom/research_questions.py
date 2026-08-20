@@ -291,6 +291,16 @@ class ResearchQuestionService:
                     f"UPDATE research_questions SET {assignments}, updated_at = ? WHERE id = ?",
                     [*values.values(), utc_now(), identifier],
                 )
+                if "question" in values and values["question"] != current["question"]:
+                    from .monitoring import MonitorService
+
+                    MonitorService._refresh_need_scopes_tx(
+                        conn,
+                        "research_question",
+                        identifier,
+                        changed_by=data.get("changed_by"),
+                        change_type="approved",
+                    )
         finally:
             conn.close()
         return self.get(identifier)

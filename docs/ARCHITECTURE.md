@@ -391,7 +391,8 @@ failure never falsely records processing success, and there is no crash gap
 between a successful remote analysis and its durable record (a crash after
 persistence is healed idempotently by retry).
 
-**Persistence and identity (Migration 0018, schema 18).** `article_analyses`
+**Persistence and identity (Migration 0018, schema 18; paid invocation
+hardening in Migration 0019).** `article_analyses`
 stores document_version/relevance/monitor/job references, pinned scope
 version, artifact id + normalized hash, `identity_hash` (UNIQUE), analysis
 schema version, prompt version, provider, model, paid flag, confidence,
@@ -417,6 +418,12 @@ outcome, token usage where the provider exposes it, estimated cost — never
 fabricated). Provider exceptions stored in Jobs/telemetry are sanitized:
 messages never include API keys, Authorization headers, or raw response
 bodies.
+
+Before a paid provider is constructed, Migration 0019's unique
+`analysis_invocations` row reserves the request and estimated cost. Its owner
+lease covers the remote call and its state is completed in the same write
+transaction as the durable analysis. Concurrent work waits on that identity;
+uncertain remote outcomes are not automatically replayed.
 
 **Read path.** A bounded authenticated API read path exposes analysis
 metadata + validated structured result (`GET /document-versions/{id}/analyses`,
@@ -603,7 +610,36 @@ ingestion, Story evolution, Report revision, and Alert emission remain
 Phase 22+ work; article analysis never creates accepted Evidence/Claims, and
 no monitor is allowed to recursively create unbounded work.
 
-The current applied schema is migration 0018 / schema version 18 (see
+### Phase 21H pre-evidence hardening
+
+Paid ArticleAnalysis uses the durable `analysis_invocations` reservation
+ledger (migration 0019). The reservation is created before provider execution,
+counts against configured global/policy/job limits, and links provider-usage
+telemetry without double-counting. A unique analysis identity gives one
+canonical invocation; concurrent workers converge on its durable result, while
+an uncertain remote outcome blocks automatic replay until explicitly released.
+The provider SDK is not treated as an idempotency authority; Newsroom's local
+state machine is the authoritative duplicate-call boundary.
+
+`validate_analysis_provenance` is a read-only, fail-closed validator for the
+complete analysis chain: relevance decision, monitor and immutable scope
+history, processing job payload, DocumentVersion, ContentArtifact, Source,
+analysis identity, hashes/lengths, and structured result. Database integrity
+checks run this validator without invoking a model.
+
+Subject, Story, and Research Question mutations refresh only future monitor
+scope snapshots in the same transaction as the mutation. Historical snapshots
+remain immutable for already-pinned processing jobs.
+
+The production HTTP transport validates each redirect hop's raw hostname and
+resolved public address, connects directly to that address, verifies the peer,
+and preserves the hostname for Host/SNI. This closes validation-to-connect DNS
+rebinding without changing the persisted canonical URL contract.
+
+Phase 22 remains blocked until 21H re-review. No EvidenceSpan, Claim, Story,
+Report, or Alert automation is introduced by this hardening phase.
+
+The current applied schema is migration 0019 / schema version 19 (see
 `newsroom/migrations.py`). Migration 0015 added the Phase 18 content artifact
 substrate; migration 0016 added the Phase 19 processing-ownership column
 (`jobs.document_version_id`), the durable result column (`jobs.result_json`),
@@ -611,8 +647,9 @@ and the obligation index; migration 0017 (Phase 20) added the Monitor
 information-need association (`monitors.need_type` / `need_id`) and the
 `document_version_relevance` decision table; migration 0018 (Phase 21) added
 the durable `article_analyses` table with canonical identity and
-provider/model/prompt/schema provenance; the post-audit reconciliation
-(Phase 17) added no migration.
+provider/model/prompt/schema provenance; migration 0019 (Phase 21H) added the
+durable paid analysis invocation ledger and provider-usage invocation link; the
+post-audit reconciliation (Phase 17) added no migration.
 
 Due Research Questions use a separate bounded scheduler path: each tick can
 enqueue at most one durable `research_question` Job per due Question, and the

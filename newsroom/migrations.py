@@ -1625,6 +1625,47 @@ MIGRATION_0018_CHECKSUM = hashlib.sha256(
 ).hexdigest()
 
 
+# Phase 21H — durable paid analysis invocations. The invocation row is the
+# serialized authorization boundary for an automatic paid ArticleAnalysis:
+# its unique identity prevents two workers from entering the remote provider,
+# while its reserved request/cost remains durable before the call begins. A
+# remote provider without a documented idempotency contract cannot be retried
+# automatically after an uncertain call, so failed/uncertain rows remain
+# budget-consuming until an explicit operator reconciliation releases only a
+# definitely-not-started invocation.
+MIGRATION_0019_STATEMENTS: tuple[str, ...] = (
+    """
+    CREATE TABLE analysis_invocations (
+        id TEXT PRIMARY KEY,
+        identity_hash TEXT NOT NULL UNIQUE,
+        document_version_id TEXT NOT NULL REFERENCES document_versions(id),
+        relevance_id TEXT NOT NULL REFERENCES document_version_relevance(id),
+        monitor_id TEXT NOT NULL REFERENCES monitors(id),
+        job_id TEXT REFERENCES jobs(id),
+        state TEXT NOT NULL CHECK (state IN ('reserved', 'running', 'succeeded', 'failed_terminal', 'retryable', 'uncertain')),
+        paid INTEGER NOT NULL DEFAULT 1 CHECK (paid IN (0, 1)),
+        reserved_requests INTEGER NOT NULL DEFAULT 0 CHECK (reserved_requests >= 0),
+        reserved_cost_usd REAL NOT NULL DEFAULT 0.0 CHECK (reserved_cost_usd >= 0),
+        owner_token TEXT,
+        lease_expires_at TEXT,
+        started_at TEXT,
+        completed_at TEXT,
+        failure_code TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+    )
+    """,
+    "CREATE INDEX analysis_invocations_state_idx ON analysis_invocations(state, updated_at)",
+    "CREATE INDEX analysis_invocations_document_idx ON analysis_invocations(document_version_id, created_at, id)",
+    "ALTER TABLE provider_usage ADD COLUMN invocation_id TEXT REFERENCES analysis_invocations(id)",
+    "CREATE INDEX provider_usage_invocation_idx ON provider_usage(invocation_id)",
+)
+
+MIGRATION_0019_CHECKSUM = hashlib.sha256(
+    "\n".join(MIGRATION_0019_STATEMENTS).encode("utf-8")
+).hexdigest()
+
+
 @dataclass(frozen=True)
 class MigrationResult:
     applied_versions: tuple[int, ...]
@@ -1685,6 +1726,7 @@ def apply_migrations(db_path: Optional[str | Path] = None) -> MigrationResult:
                 16: MIGRATION_0016_STATEMENTS,
                 17: MIGRATION_0017_STATEMENTS,
                 18: MIGRATION_0018_STATEMENTS,
+                19: MIGRATION_0019_STATEMENTS,
             }
             for version, statements in migrations.items():
                 if version in existing:

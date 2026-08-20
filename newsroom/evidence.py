@@ -621,6 +621,15 @@ class EvidenceService:
         try:
             with storage.write_tx(conn):
                 revision_id, _ = self._create_revision_tx(conn, story_id, data)
+                from .monitoring import MonitorService
+
+                MonitorService._refresh_need_scopes_tx(
+                    conn,
+                    "story",
+                    story_id,
+                    changed_by=data.get("changed_by"),
+                    change_type="approved",
+                )
         finally:
             conn.close()
         revision = next(item for item in self.get_story_revisions(story_id) if item["id"] == revision_id)

@@ -4,7 +4,7 @@ This directory is the authoritative execution sequence for completing Newsroom.
 The product contract remains `plan/STANDALONE_NEWSROOM_PRODUCT_SPEC.md`; the
 mature-product description and `plan/MASTER_PLAN.md` provide broader context.
 
-## Post-Audit Status — 2026-08-18
+## Post-Audit Status — 2026-08-19
 
 Phases 01–16 are the original implementation program and remain historical
 records. An independent post-remediation audit verified that the Source Monitor
@@ -17,7 +17,8 @@ Phases 17–28 are the audit-driven integration and completion roadmap. They
 supersede conflicting or insufficient acceptance assumptions from Phases 01–16
 without rewriting those historical records.
 
-**Current active phase: Phase 22 — Verified Evidence and Claims Automation.**
+**Current active phase: Phase 21H — Pre-Evidence Hardening. Phase 22 is
+blocked pending re-review.**
 Phases 17 (runtime reconciliation and green baseline), Live Test A, Phase 18
 (durable normalized content artifact), Phase 19 (changed DocumentVersion
 processing Jobs), Phase 20 (semantic scope and automatic relevance), and
@@ -25,7 +26,8 @@ Phase 21 (structured article analysis and one real AI provider) are complete;
 those gates passed. **Live Test B PASSED** on 2026-08-18 against the Phase 21
 checkpoint (real NASA UAP page → relevance=true → real gpt-4o-mini
 ArticleAnalysis → durable record, zero Evidence/Claims); evidence in the
-Phase 21 file's Live Test B Completion Addendum.
+Phase 21 file's Live Test B Completion Addendum. The post-audit is complete;
+Phase 21H is the bounded remediation gate before Phase 22 may begin.
 
 ## How to assign work to Luna
 
@@ -98,8 +100,9 @@ were required.
 | 18 | Durable normalized content artifact | Artifact verification |
 | 19 | Changed DocumentVersion processing Jobs | Processing lifecycle |
 | 20 | Semantic scope and automatic relevance | Relevance result |
-| 21 | Article analysis and real AI provider | Live Test B |
-| 22 | Verified Evidence and Claims automation | Evidence verification |
+| 21 | Article analysis and real AI provider | Live Test B — complete |
+| 21H | Pre-Evidence Hardening | Re-review before Phase 22 |
+| 22 | Verified Evidence and Claims automation | Blocked pending 21H re-review |
 | 23 | Story, Living Report, and Alert automation | Live Test C |
 | 24 | Source discovery and semantic vocabulary | Discovery canary |
 | 25 | External Research Question pursuit | External evidence |
@@ -133,9 +136,9 @@ isolated service or schema as an unattended product capability.
 - **Final Live Test — after Phase 28:** public-source production workflow,
   real browser delivery, and multi-day unattended execution.
 
-The historical review gates remain evidence for Phases 01–16. Phase 17 is the
-new active gate and must establish the baseline before the post-audit sequence
-advances.
+The historical review gates remain evidence for Phases 01–16. The post-audit
+is complete; Phase 21H is the active pre-evidence hardening gate and Phase 22
+cannot begin until its independent re-review passes.
 
 ### Live Test A status — 2026-08-18
 

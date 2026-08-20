@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from typing import Optional
 
 from . import storage
+from .provenance import ProvenanceValidationError, validate_analysis_provenance
 
 
 @dataclass(frozen=True)
@@ -90,6 +91,30 @@ def check_database(db_path: Optional[str] = None) -> IntegrityReport:
                 )
                 for row in rows
             )
+
+        if _table_exists(conn, "monitors"):
+            for need_type, table in _MONITOR_TARGET_TABLES.items():
+                if not _table_exists(conn, table):
+                    continue
+                rows = conn.execute(
+                    f"""
+                    SELECT m.id, m.need_id
+                    FROM monitors AS m
+                    WHERE m.need_type = ?
+                      AND (m.need_id IS NULL OR NOT EXISTS (
+                          SELECT 1 FROM {table} AS target WHERE target.id = m.need_id
+                      ))
+                    ORDER BY m.id
+                    """,
+                    (need_type,),
+                )
+                issues.extend(
+                    IntegrityIssue(
+                        "invalid_monitor_need_reference",
+                        f"monitor={row[0]} need_type={need_type} need_id={row[1]}",
+                    )
+                    for row in rows
+                )
 
         if not _table_exists(conn, "research_questions"):
             issues.append(IntegrityIssue("missing_schema", "research_questions is absent"))
@@ -268,6 +293,15 @@ def check_database(db_path: Optional[str] = None) -> IntegrityReport:
                                 f"analysis={analysis_id} result_json is not the analysis schema",
                             )
                         )
+            for row in conn.execute("SELECT id FROM article_analyses ORDER BY id"):
+                try:
+                    validate_analysis_provenance(db_path, row[0])
+                except ProvenanceValidationError as exc:
+                    for detail in exc.issues:
+                        code, _, message = detail.partition(":")
+                        issues.append(IntegrityIssue(code or "invalid_analysis_provenance", f"analysis={row[0]} {message.strip()}"))
+                except Exception as exc:
+                    issues.append(IntegrityIssue("invalid_analysis_provenance", f"analysis={row[0]} {exc}"))
         return IntegrityReport(not issues, tuple(issues))
     finally:
         conn.close()

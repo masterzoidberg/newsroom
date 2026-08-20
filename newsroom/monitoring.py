@@ -793,25 +793,89 @@ class MonitorService:
         changed = 0
         try:
             with storage.write_tx(conn):
-                if conn.execute("SELECT 1 FROM topics WHERE id = ? AND deleted_at IS NULL", (topic_id,)).fetchone() is None:
-                    raise DomainNotFound("topic not found")
-                # Refresh every monitor whose approved scope derives from this
-                # topic: monitors that directly target the topic and semantic
-                # monitors whose information need references the topic.
-                rows = conn.execute(
-                    """
-                    SELECT id FROM monitors
-                    WHERE (target_type = 'topic' AND target_id = ?)
-                       OR (need_type = 'topic' AND need_id = ?)
-                    """,
-                    (topic_id, topic_id),
-                ).fetchall()
-                scope = _scope_for_target(conn, "topic", topic_id)
-                for row in rows:
-                    changed += int(self._write_scope_history(conn, row[0], scope, change_type=change_type, changed_by=changed_by, created_at=now))
+                changed = self._refresh_need_scopes_tx(
+                    conn,
+                    "topic",
+                    topic_id,
+                    changed_by=changed_by,
+                    change_type=change_type,
+                    created_at=now,
+                )
         finally:
             conn.close()
         return changed
+
+    @classmethod
+    def _refresh_need_scopes_tx(
+        cls,
+        conn: sqlite3.Connection,
+        need_type: str,
+        need_id: str,
+        *,
+        changed_by: str | None = None,
+        change_type: str = "approved",
+        created_at: str | None = None,
+    ) -> int:
+        """Refresh all monitor scopes derived from one mutable information need.
+
+        The caller owns the write transaction so the edit and its new
+        append-only scope snapshots commit atomically.
+        """
+        if need_type not in TARGET_TABLES:
+            raise DomainValidation("information need type is unsupported")
+        target = conn.execute(
+            f"SELECT * FROM {TARGET_TABLES[need_type]} WHERE id = ?",
+            (need_id,),
+        ).fetchone()
+        if target is None or ("deleted_at" in target.keys() and target["deleted_at"] is not None):
+            raise DomainNotFound(f"{need_type} not found")
+        rows = conn.execute(
+            """
+            SELECT id FROM monitors
+            WHERE (target_type = ? AND target_id = ?)
+               OR (need_type = ? AND need_id = ?)
+            ORDER BY id
+            """,
+            (need_type, need_id, need_type, need_id),
+        ).fetchall()
+        scope = _scope_for_target(conn, need_type, need_id)
+        timestamp = created_at or utc_now()
+        return sum(
+            int(
+                cls._write_scope_history(
+                    conn,
+                    row[0],
+                    scope,
+                    change_type=change_type,
+                    changed_by=changed_by,
+                    created_at=timestamp,
+                )
+            )
+            for row in rows
+        )
+
+    def refresh_subject_scopes(self, subject_id: str, *, changed_by: str | None = None, change_type: str = "approved") -> int:
+        return self._refresh_scopes("subject", subject_id, changed_by=changed_by, change_type=change_type)
+
+    def refresh_story_scopes(self, story_id: str, *, changed_by: str | None = None, change_type: str = "approved") -> int:
+        return self._refresh_scopes("story", story_id, changed_by=changed_by, change_type=change_type)
+
+    def refresh_research_question_scopes(self, question_id: str, *, changed_by: str | None = None, change_type: str = "approved") -> int:
+        return self._refresh_scopes("research_question", question_id, changed_by=changed_by, change_type=change_type)
+
+    def _refresh_scopes(self, need_type: str, need_id: str, *, changed_by: str | None, change_type: str) -> int:
+        conn = storage.connect(self.db_path)
+        try:
+            with storage.write_tx(conn):
+                return self._refresh_need_scopes_tx(
+                    conn,
+                    need_type,
+                    need_id,
+                    changed_by=changed_by,
+                    change_type=change_type,
+                )
+        finally:
+            conn.close()
 
     def relevance(self, identifier: str, text: str) -> RelevanceResult:
         return RelevanceCascade().evaluate(text, self.scope(identifier))

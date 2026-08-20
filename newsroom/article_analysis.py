@@ -38,6 +38,7 @@ import json
 import math
 import os
 import sqlite3
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping, Sequence
@@ -47,6 +48,7 @@ from .ai import (
     AIConfigurationError,
     AIDisabled,
     AIError,
+    AIProviderError,
     AITimeout,
     AIValidationError,
     AIRouter,
@@ -56,10 +58,11 @@ from .ai import (
     LocalArticleAnalysisProvider,
     RoutePolicy,
     SQLiteTelemetrySink,
+    TelemetryEvent,
     TelemetrySink,
 )
-from .domain import DomainNotFound, DomainValidation, new_id, utc_now
-from .jobs import BudgetService
+from .domain import DomainConflict, DomainNotFound, DomainValidation, new_id, utc_now
+from .jobs import BudgetExhausted, BudgetService, PaidInvocationBusy, PaidInvocationUncertain
 from .worker import RetryableJobFailure
 
 
@@ -485,6 +488,50 @@ class ArticleAnalysisService:
         finally:
             conn.close()
 
+    def validate_analysis_provenance(self, analysis_id: str) -> dict[str, Any]:
+        from .provenance import validate_analysis_provenance
+
+        return validate_analysis_provenance(self.db_path, analysis_id)
+
+    def _wait_for_existing_paid_invocation(self, identity_hash: str, *, timeout_seconds: float = 15.0) -> dict[str, Any] | None:
+        deadline = time.monotonic() + timeout_seconds
+        while time.monotonic() < deadline:
+            existing = self.find_by_identity_hash(identity_hash)
+            if existing is not None:
+                self.validate_analysis_provenance(existing["id"])
+                return existing
+            conn = storage.connect(self.db_path)
+            try:
+                row = conn.execute(
+                    "SELECT state FROM analysis_invocations WHERE identity_hash = ?",
+                    (identity_hash,),
+                ).fetchone()
+            finally:
+                conn.close()
+            if row is None or row["state"] in {"uncertain", "failed_terminal"}:
+                return None
+            time.sleep(0.02)
+        return None
+
+    def _record_blocked_paid(self, *, job_id: str | None, monitor_id: str, work_id: str, reason: str) -> None:
+        sink = self.telemetry
+        if sink is None:
+            sink = SQLiteTelemetrySink(self.db_path, job_id=job_id, monitor_id=monitor_id)
+        event = TelemetryEvent(
+            capability=ARTICLE_ANALYSIS_CAPABILITY,
+            route="paid",
+            provider=ANALYSIS_PROVIDER_OPENAI,
+            outcome="blocked",
+            work_id=work_id,
+            model=self.config.model,
+            escalation_reason="durable_paid_reservation",
+            error_code=reason,
+        )
+        if isinstance(sink, list):
+            sink.append(event)
+        else:
+            sink.record(event)
+
     def records_for_document_version(self, document_version_id: str) -> list[dict[str, Any]]:
         conn = storage.connect(self.db_path)
         try:
@@ -571,9 +618,45 @@ class ArticleAnalysisService:
         )
         existing = self.find_by_identity_hash(identity_hash)
         if existing is not None:
+            self.validate_analysis_provenance(existing["id"])
             return existing
 
         paid_route, provider_label, model_label = self._resolve_route()
+        invocation: dict[str, Any] | None = None
+        work_id = f"analysis:{document_version_id}:{relevance_id}"
+        if paid_route:
+            if self.config.max_paid_calls < 1 or self.config.max_paid_cost_usd + 1e-12 < self.config.request_cost_usd:
+                self._record_blocked_paid(job_id=job_id, monitor_id=monitor_id, work_id=work_id, reason="paid_budget_exhausted")
+                raise AIDisabled("paid article analysis is disabled by the configured per-work budget")
+            try:
+                invocation = BudgetService(self.db_path).reserve_paid_analysis(
+                    identity_hash=identity_hash,
+                    document_version_id=document_version_id,
+                    relevance_id=relevance_id,
+                    monitor_id=monitor_id,
+                    job_id=job_id,
+                    estimated_cost_usd=self.config.request_cost_usd,
+                    max_paid_calls=self.config.max_paid_calls,
+                    max_paid_cost_usd=self.config.max_paid_cost_usd,
+                )
+            except PaidInvocationBusy:
+                existing = self._wait_for_existing_paid_invocation(identity_hash)
+                if existing is not None:
+                    return existing
+                self._record_blocked_paid(job_id=job_id, monitor_id=monitor_id, work_id=work_id, reason="analysis_invocation_active")
+                raise AIDisabled("paid article analysis is already being completed by another worker")
+            except PaidInvocationUncertain as exc:
+                self._record_blocked_paid(job_id=job_id, monitor_id=monitor_id, work_id=work_id, reason=exc.reason)
+                raise AIDisabled("paid article analysis has uncertain remote state; explicit operator confirmation is required") from exc
+            except BudgetExhausted as exc:
+                self._record_blocked_paid(job_id=job_id, monitor_id=monitor_id, work_id=work_id, reason=exc.reason)
+                raise AIDisabled("paid article analysis was blocked by a durable budget reservation") from exc
+            if invocation["state"] == "succeeded":
+                existing = self.find_by_identity_hash(identity_hash)
+                if existing is not None:
+                    self.validate_analysis_provenance(existing["id"])
+                    return existing
+                raise AIDisabled("paid analysis invocation is marked complete without a durable analysis")
         policy = RoutePolicy(
             local_enabled=not paid_route,
             paid_enabled=paid_route,
@@ -590,15 +673,21 @@ class ArticleAnalysisService:
         local_bundle = CapabilityBundle(article_analysis=LocalArticleAnalysisProvider())
         paid_bundle: CapabilityBundle | None = None
         if paid_route:
-            paid_bundle = CapabilityBundle(
-                article_analysis=self.paid_provider_factory(self.config)
-            )
+            try:
+                paid_bundle = CapabilityBundle(article_analysis=self.paid_provider_factory(self.config))
+            except Exception as exc:
+                if invocation is not None:
+                    BudgetService(self.db_path).fail_paid_analysis(
+                        invocation["id"], invocation["owner_token"], state="retryable", failure_code="provider_not_started"
+                    )
+                raise AIProviderError("article analysis provider could not be initialized") from exc
         sink = self.telemetry
         if sink is None:
             sink = SQLiteTelemetrySink(
                 self.db_path,
                 job_id=job_id,
                 monitor_id=monitor_id,
+                invocation_id=invocation["id"] if invocation is not None else None,
             )
         router = AIRouter(
             local=local_bundle,
@@ -610,37 +699,66 @@ class ArticleAnalysisService:
             title=title,
             text=analyzed_text,
             scope_terms=scope_terms,
-            work_id=f"analysis:{document_version_id}:{relevance_id}",
+            work_id=work_id,
         )
         try:
-            result = router.article_analysis(request, work_id=f"analysis:{document_version_id}:{relevance_id}")
+            result = router.article_analysis(request, work_id=work_id)
         except AIValidationError:
+            if invocation is not None:
+                BudgetService(self.db_path).fail_paid_analysis(
+                    invocation["id"], invocation["owner_token"], state="failed_terminal", failure_code="invalid_output"
+                )
             raise  # terminal, truthful schema validation failure
         except AIConfigurationError:
+            if invocation is not None:
+                BudgetService(self.db_path).fail_paid_analysis(
+                    invocation["id"], invocation["owner_token"], state="failed_terminal", failure_code="provider_configuration"
+                )
             raise  # terminal, explicit configuration failure
         except AIError as exc:
+            if invocation is not None:
+                cause = exc.__cause__ or getattr(exc, "__context__", None)
+                status = getattr(cause, "status_code", None) if cause is not None else None
+                confirmed_not_started = isinstance(exc, AIProviderError) and status in {401, 403}
+                BudgetService(self.db_path).fail_paid_analysis(
+                    invocation["id"],
+                    invocation["owner_token"],
+                    state="uncertain" if _is_retryable_provider_failure(exc) else "retryable" if confirmed_not_started else "failed_terminal",
+                    failure_code="remote_state_uncertain" if _is_retryable_provider_failure(exc) else "provider_rejected" if confirmed_not_started else "provider_error",
+                )
             _rethrow_analysis_failure(exc)  # raises RetryableJobFailure or re-raises
             raise
-        return self.persist(
-            document_version_id=document_version_id,
-            relevance_id=relevance_id,
-            monitor_id=monitor_id,
-            scope_version=scope_version,
-            job_id=job_id,
-            artifact_id=str(content.get("artifact_id") or ""),
-            normalized_content_hash=str(content.get("normalized_content_hash") or ""),
-            schema_version=ANALYSIS_SCHEMA_VERSION,
-            prompt_version=ANALYSIS_PROMPT_VERSION,
-            identity_hash=identity_hash,
-            provider=provider_label,
-            model=model_label,
-            paid=paid_route,
-            confidence=float(result.confidence),
-            input_char_count=input_char_count,
-            analyzed_char_count=analyzed_char_count,
-            truncated=truncated,
-            result=result.model_dump(),
-        )
+        try:
+            saved = self.persist(
+                document_version_id=document_version_id,
+                relevance_id=relevance_id,
+                monitor_id=monitor_id,
+                scope_version=scope_version,
+                job_id=job_id,
+                artifact_id=str(content.get("artifact_id") or ""),
+                normalized_content_hash=str(content.get("normalized_content_hash") or ""),
+                schema_version=ANALYSIS_SCHEMA_VERSION,
+                prompt_version=ANALYSIS_PROMPT_VERSION,
+                identity_hash=identity_hash,
+                provider=provider_label,
+                model=model_label,
+                paid=paid_route,
+                confidence=float(result.confidence),
+                input_char_count=input_char_count,
+                analyzed_char_count=analyzed_char_count,
+                truncated=truncated,
+                result=result.model_dump(),
+                invocation_id=invocation["id"] if invocation is not None else None,
+                invocation_owner_token=invocation["owner_token"] if invocation is not None else None,
+            )
+        except Exception:
+            if invocation is not None:
+                BudgetService(self.db_path).fail_paid_analysis(
+                    invocation["id"], invocation["owner_token"], state="uncertain", failure_code="persistence_uncertain"
+                )
+            raise
+        self.validate_analysis_provenance(saved["id"])
+        return saved
 
     def _resolve_route(self) -> tuple[bool, str, str]:
         """Decide local vs paid route from config + budget, with explicit failures."""
@@ -677,6 +795,8 @@ class ArticleAnalysisService:
         analyzed_char_count: int,
         truncated: bool,
         result: Mapping[str, Any],
+        invocation_id: str | None = None,
+        invocation_owner_token: str | None = None,
     ) -> dict[str, Any]:
         if not artifact_id or not normalized_content_hash:
             raise DomainValidation("article analysis requires artifact provenance")
@@ -740,6 +860,18 @@ class ArticleAnalysisService:
                 row = conn.execute(
                     "SELECT * FROM article_analyses WHERE id = ?", (identifier,)
                 ).fetchone()
+                if invocation_id is not None:
+                    completed = conn.execute(
+                        """
+                        UPDATE analysis_invocations
+                        SET state = 'succeeded', owner_token = NULL,
+                            lease_expires_at = NULL, completed_at = ?, updated_at = ?
+                        WHERE id = ? AND state = 'running' AND owner_token = ?
+                        """,
+                        (utc_now(), utc_now(), invocation_id, invocation_owner_token),
+                    )
+                    if completed.rowcount != 1:
+                        raise DomainConflict("paid analysis invocation ownership was lost")
                 return self._readable(row)
         finally:
             conn.close()

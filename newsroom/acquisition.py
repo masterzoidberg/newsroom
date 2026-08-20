@@ -7,10 +7,12 @@ enter the evidence ledger.
 from __future__ import annotations
 
 import hashlib
+import http.client
 import ipaddress
 import json
 import re
 import socket
+import ssl
 import urllib.error
 import urllib.request
 import xml.etree.ElementTree as ET
@@ -94,12 +96,27 @@ class AcquisitionPolicy:
 
     def check_resolved_url(self, url: str) -> str:
         """Validate the URL and reject any non-public resolved address."""
+        canonical, _parsed, _addresses = self._validated_addresses(url)
+        return canonical
+
+    def _validated_addresses(self, url: str) -> tuple[str, Any, tuple[tuple[Any, ...], ...]]:
         canonical = self.check_url(url)
-        parsed = urlparse(canonical)
+        try:
+            parsed = urlparse(url)
+            host = (parsed.hostname or "").casefold().rstrip(".")
+            port = parsed.port or (443 if parsed.scheme == "https" else 80)
+        except ValueError as exc:
+            raise AcquisitionBlocked("URL is invalid") from exc
+        if not host or _is_private_host(host):
+            raise AcquisitionBlocked("private, loopback, and local hosts are not permitted")
+        if any(_domain_matches(host, domain) for domain in self.denied_domains):
+            raise AcquisitionBlocked("URL host is denied")
+        if self.allowed_domains and not any(_domain_matches(host, domain) for domain in self.allowed_domains):
+            raise AcquisitionBlocked("URL host is not allow-listed")
         try:
             addresses = socket.getaddrinfo(
-                parsed.hostname,
-                parsed.port or (443 if parsed.scheme == "https" else 80),
+                host,
+                port,
                 type=socket.SOCK_STREAM,
             )
         except socket.gaierror as exc:
@@ -108,7 +125,14 @@ class AcquisitionPolicy:
             raise AcquisitionError("URL host could not be resolved")
         if any(_is_private_host(item[4][0]) for item in addresses):
             raise AcquisitionBlocked("URL host resolves to a non-public address")
-        return canonical
+        unique: list[tuple[Any, ...]] = []
+        seen: set[tuple[Any, str]] = set()
+        for item in addresses:
+            key = (item[0], item[4][0])
+            if key not in seen:
+                seen.add(key)
+                unique.append(item)
+        return canonical, parsed, tuple(unique)
 
 
 def _clean_domain(value: str) -> str:
@@ -365,33 +389,131 @@ class _BoundedRedirectHandler(urllib.request.HTTPRedirectHandler):
         return super().redirect_request(req, fp, code, msg, headers, newurl)
 
 
+def _verify_connected_peer(sock: Any, expected_address: str) -> None:
+    try:
+        peer = sock.getpeername()[0]
+    except (AttributeError, OSError, TypeError, IndexError) as exc:
+        try:
+            sock.close()
+        finally:
+            raise AcquisitionBlocked("connected peer address could not be verified") from exc
+    if peer != expected_address or _is_private_host(peer):
+        try:
+            sock.close()
+        finally:
+            raise AcquisitionBlocked("connected address failed DNS rebinding validation")
+
+
+class _PinnedHTTPConnection(http.client.HTTPConnection):
+    def __init__(self, host: str, port: int, address: str, *, timeout: float):
+        super().__init__(host, port, timeout=timeout)
+        self._pinned_address = address
+
+    def connect(self) -> None:
+        self.sock = socket.create_connection((self._pinned_address, self.port), self.timeout)
+        _verify_connected_peer(self.sock, self._pinned_address)
+
+
+class _PinnedHTTPSConnection(http.client.HTTPSConnection):
+    def __init__(self, host: str, port: int, address: str, *, timeout: float):
+        super().__init__(host, port, timeout=timeout, context=ssl.create_default_context())
+        self._pinned_address = address
+
+    def connect(self) -> None:
+        raw_socket = socket.create_connection((self._pinned_address, self.port), self.timeout)
+        _verify_connected_peer(raw_socket, self._pinned_address)
+        self.sock = self._context.wrap_socket(raw_socket, server_hostname=self.host)
+
+
 class UrllibHttpTransport:
     """Bounded HTTP GET transport; never executes browser JavaScript."""
 
     user_agent = "Newsroom/0.1 (+local source acquisition)"
 
-    def get(self, url: str, *, headers: Mapping[str, str], policy: AcquisitionPolicy) -> HttpResponse:
-        canonical = policy.check_resolved_url(url)
-        request = urllib.request.Request(canonical, headers={"User-Agent": self.user_agent, **dict(headers)}, method="GET")
-        opener = urllib.request.build_opener(_BoundedRedirectHandler(policy.max_redirects, policy))
+    def _open_connection(
+        self,
+        scheme: str,
+        host: str,
+        port: int,
+        address: str,
+        policy: AcquisitionPolicy,
+    ) -> http.client.HTTPConnection:
+        if _is_private_host(address):
+            raise AcquisitionBlocked("connected address is not public")
+        connection_type = _PinnedHTTPSConnection if scheme == "https" else _PinnedHTTPConnection
+        connection = connection_type(host, port, address, timeout=policy.timeout_seconds)
         try:
-            with opener.open(request, timeout=policy.timeout_seconds) as response:
-                content_length = _header_int(response.headers.get("Content-Length"))
+            connection.connect()
+        except AcquisitionBlocked:
+            raise
+        except (TimeoutError, socket.timeout) as exc:
+            connection.close()
+            raise AcquisitionTimeout("HTTP connection timed out") from exc
+        except OSError:
+            connection.close()
+            raise
+        return connection
+
+    def get(self, url: str, *, headers: Mapping[str, str], policy: AcquisitionPolicy) -> HttpResponse:
+        current_url = url
+        for redirect_count in range(policy.max_redirects + 1):
+            canonical, parsed, addresses = policy._validated_addresses(current_url)
+            host = parsed.hostname
+            port = parsed.port or (443 if parsed.scheme == "https" else 80)
+            connection: http.client.HTTPConnection | None = None
+            last_error: BaseException | None = None
+            for address_info in addresses:
+                try:
+                    connection = self._open_connection(parsed.scheme, host, port, address_info[4][0], policy)
+                    break
+                except AcquisitionBlocked:
+                    raise
+                except (TimeoutError, socket.timeout) as exc:
+                    last_error = exc
+                    break
+                except OSError as exc:
+                    last_error = exc
+            if connection is None:
+                if isinstance(last_error, (TimeoutError, socket.timeout)):
+                    raise AcquisitionTimeout("HTTP connection timed out") from last_error
+                raise AcquisitionError("HTTP connection failed") from last_error
+            target = parsed.path or "/"
+            if parsed.query:
+                target += f"?{parsed.query}"
+            request_headers = {"User-Agent": self.user_agent, **dict(headers)}
+            if not any(key.casefold() == "host" for key in request_headers):
+                request_headers["Host"] = host if port in {80, 443} else f"{host}:{port}"
+            try:
+                connection.request("GET", target, headers=request_headers)
+                response = connection.getresponse()
+                response_headers = _headers(response.headers)
+                if response.status in {301, 302, 303, 307, 308}:
+                    location = response_headers.get("location")
+                    response.close()
+                    connection.close()
+                    if not location:
+                        raise AcquisitionError("redirect response did not include a Location")
+                    if redirect_count >= policy.max_redirects:
+                        raise AcquisitionBlocked("redirect limit exceeded")
+                    current_url = urljoin(current_url, location)
+                    continue
+                content_length = _header_int(response_headers.get("content-length"))
                 policy.check_content_length(content_length)
-                body = response.read(policy.max_response_bytes + 1)
+                body = b"" if response.status == 304 else response.read(policy.max_response_bytes + 1)
                 policy.check_content_length(len(body))
-                final_url = policy.check_url(response.geturl())
-                return HttpResponse(response.status, final_url, _headers(response.headers), body)
-        except urllib.error.HTTPError as exc:
-            if exc.code == 304:
-                return HttpResponse(304, canonical, _headers(exc.headers), b"")
-            raise AcquisitionError(f"HTTP status {exc.code}") from exc
-        except TimeoutError as exc:
-            raise AcquisitionTimeout("HTTP request timed out") from exc
-        except urllib.error.URLError as exc:
-            if isinstance(exc.reason, TimeoutError):
+                response.close()
+                connection.close()
+                return HttpResponse(response.status, canonical, response_headers, body)
+            except AcquisitionError:
+                connection.close()
+                raise
+            except (TimeoutError, socket.timeout) as exc:
+                connection.close()
                 raise AcquisitionTimeout("HTTP request timed out") from exc
-            raise AcquisitionError("HTTP request failed") from exc
+            except (OSError, http.client.HTTPException) as exc:
+                connection.close()
+                raise AcquisitionError("HTTP request failed") from exc
+        raise AcquisitionBlocked("redirect limit exceeded")
 
 
 def _header_int(value: str | None) -> int | None:
