@@ -112,6 +112,190 @@ phase:
 - Treat the durable Phase 21H paid invocation/reservation state as a
   prerequisite. Evidence retries must not create another paid analysis call.
 
+## Phase 21H.1 — evidence-coordinate specification (binding for Phase 22)
+
+This section fixes a deterministic coordinate contract for the Phase 22
+evidence verifier. The next implementation agent MUST implement these rules
+exactly; they are not design suggestions. No Phase 22 runtime exists yet and
+nothing below authorizes evidence promotion in this checkpoint.
+
+### 1. Canonical evidence text views
+
+Every evidence excerpt is verified against exactly one canonical FINITE text
+view derived from the Phase 18 immutable ContentArtifact. There are exactly
+two view families:
+
+- `artifact_view`: HTML/text/fallback artifacts (`content_kind` in
+  `{"visible_text", "html", "full_text", "excerpt", "fallback"}`). The
+  canonical evidence view IS the artifact's exact stored
+  `normalized_text` — the same byte-for-byte text whose
+  `normalized_content_hash` and `text_length` were verified by the Phase 18
+  loader. No re-normalization, no whitespace repair, no entity decoding, no
+  case folding. The view identity is the ``artifact_id``.
+- `feed_entry_view`: feed-metadata artifacts (`content_kind ==
+  "feed_metadata"`). The evidence view is a deterministic projection of the
+  exact persisted metadata JSON. The view identity is the triple
+  ``(artifact_id, view_version, field_path)``. Feed metadata is NEVER treated
+  as raw HTML/text and NEVER passed through artifact normalization.
+
+### 2. Feed-entry evidence view (`feed_entry_meta_v1`)
+
+The projection contract `feed_entry_meta_v1` over the persisted metadata
+JSON (an object) is:
+
+- field path = `["title", "summary"]`;
+- exclusions: `link`, `guid`, `id`, `updated`, `published`, `author`,
+  `content_html`, `content_text` (and any other structural/foreign-key field)
+  never participate in evidence text;
+- `title` string contributes first, then `summary` if present;
+- separator: a single `"\n"` (U+000A) between the two parts when both are
+  present; no trailing separator;
+- each part is the exact stored JSON string value after JSON unescaping
+  (Python `json.loads` semantics), verbatim — no HTML/A markup parsing, no
+  whitespace folding;
+- if `title` is missing/empty and `summary` is empty too, the view is the
+  empty string and every excerpt match fails (zero-length view is globally
+  ineligible);
+- projection version `"feed_entry_projection_v1"` and field path
+  `"title;summary"` are persisted with the resulting EvidenceSpan.
+
+Historical rule: once a feed-entry EvidenceSpan is persisted, later changes
+to the projection rules do NOT retroactively alter existing spans; a new
+projection version creates a NEW view identity. Feed entries without a stored
+metadata artifact record have no evidence view and every verification fails.
+
+### 3. View hashing
+
+The verifier loads the artifact, recomputes the exact canonical view (raw
+`normalized_text` or the `feed_entry_projection_v1` projection), and rehashes
+it with `sha256(view_text.encode("utf-8")).hexdigest()`. The recomputed hash
+must equal the stored `normalized_content_hash` (and the recomputed length
+must equal `text_length`), or the artifact is corrupt and every verification
+fails closed. The EvidenceSpan never stores the view text; it stores the
+excerpt, its code-point offsets over the view, the view identity, and
+`artifact_content_hash`.
+
+### 3.a Analysis-input truncation bound
+
+If `article_analyses.analyzed_char_count < article_analyses.input_char_count`
+(the model saw a truncated suffix of the input text), a candidate excerpt may
+only be verified against the first `analyzed_char_count` code points of the
+canonical view: the excerpt must be fully inside that prefix, and its
+recomputed offset must satisfy `end <= analyzed_char_count`. No accepted
+excerpt content is expanded beyond what the model actually saw, and never
+beyond the Phase 18 artifact text.
+
+### 3.b Candidate provenance on the span
+
+Every automatically promoted span stores
+`{ "analysis_id", "candidate_claim_index", "candidate_excerpt_index" }` in
+its provenance JSON so Phase 22+ can trace exactly which model proposal
+became verified.
+
+### 4. Unicode code-point offsets
+
+All offsets stored and compared are Python `str` code-point offsets (0-based)
+over the canonical view text:
+
+- `start`: smallest code-point index of the first matched character;
+- `end`: one-past-the-last matched character's index (`excerpt == view[start:end]`).
+
+Model-supplied offsets are NEVER accepted; the excerpt and all offsets are
+always recomputed locally from the canonical view.
+
+### 5. Exact excerpt matching
+
+- The candidate excerpt is matched as an EXACT substring of the canonical
+  view: `view.find(excerpt)`. No normalization, no fuzzy/`difflib` matching,
+  no token overlap, no sentence restitching.
+- A candidate excerpt may be a truncated suffix of a model-produced sentence,
+  as long as it is an exact verbatim substring.
+- Empty excerpts fail. Excerpts whose length or code-point span exceeds the
+  Phase 18 view bounds fail.
+- 5.c Index-resolved occurrence (unique-resolution rule): when the candidate
+  excerpt carries `locator_type == "candidate_excerpt_index"`, the verifier
+  reads the analysis record's `candidate_evidence_excerpts` array, takes the
+  exact stored excerpt string at `candidate_excerpt_index`, and matches THAT
+  string verbatim. If it still occurs more than once, the evidence is
+  rejected as ambiguous (rule 7). No positional tie-breaking or partial
+  locator tolerance is permitted.
+
+### 6. Zero-match rejection
+
+- If the excerpt does not occur in the view (`find` returns `-1`), the
+  evidence is rejected; the transaction aborts and no EvidenceSpan, Claim,
+  ClaimEvidence, or state change is persisted for that candidate.
+
+### 7. Ambiguous multiple-match rejection
+
+- If the excerpt occurs more than once in the view, the evidence is AMBIGUOUS
+  and rejected unless a uniqueness rule deterministically resolves it. The
+  ONLY permitted resolution is the index-annotated excerpt in 5.c:
+  `locator_type == "candidate_excerpt_index"` with the analysis JSON's
+  candidate excerpt string as the excerpt — if THAT exact string still occurs
+  more than once, the evidence is rejected. No tie-breaking by position,
+  length, or any other heuristic is permitted with accepting ambiguity.
+- The verifier returns a distinct outcome code, e.g. `ambiguous_evidence`,
+  so operators can re-examine the candidate — the excerpt still never becomes
+  an EvidenceSpan.
+
+### 8. Locally recomputed offsets
+
+- The verifier ALWAYS recomputes `start`/`end`/`excerpt_hash` from the
+  canonical view + stored excerpt candidates. Stored or model-supplied locator
+  values are treated as input hints only and are validated against the real
+  recomputed match, unless the index-resolved occurrence rule says the match
+  is exact and complete.
+
+### 9. Artifact/view provenance
+
+- Every automatically created EvidenceSpan must persist:
+  - `document_version_id` FK (owner);
+  - `artifact_id` (the immutable content row);
+  - `artifact_content_hash` (`normalized_content_hash`);
+  - `view_kind` ∈ `{"artifact", "feed"}`;
+  - `view_version` (`"artifact_norm_v1"` or `"feed_entry_projection_v1"`);
+  - `field_path` (`null` for artifact views, `"title;summary"` for feed);
+
+### 10. Atomic promotion
+
+- The EvidenceSpan row, the canonical Claim row, and the `claim_evidence`
+  relationship are created in ONE SQLite write transaction, or none of them
+  are. A failed excerpt/ambiguity/hash/migration check rolls the whole
+  promotion back: no EvidenceSpan, no Claim, no ClaimEvidence and no state
+  change.
+- The verifier runs inside the same job that owns the analysis invocation;
+  a failed promotion is a FAILED processing outcome visible to the queue,
+  never a silent `no_change`.
+
+### 11. Deterministic promotion identity
+
+- `evidence_span_hash(excerpt, locator_type, locator_value)` (existing)
+  determines EvidenceSpan identity; `locator_type`/`locator_value` are the
+  deterministic recomputed `view_kind` + `start`/`end` (e.g.
+  `locator_type="codepoint_offset"`, locator_value `"start;end"`).
+- A candidate Claim is promoted once per canonical (document_version,
+  artifact, candidate_claim_index) triple: the `claims` identity is the
+  existing canonical form (proposition + originating `story_id`), and the
+  `claim_evidence` relationship references `claims.id` + `evidence_spans.id`
+  with the existing relationship vocabulary. Duplicate promotion attempts are
+  idempotent (UNIQUE indexes + existing-select), never duplicated.
+
+### 12. Source membership vs logical support — never conflated
+
+- Membership: the exact excerpt occurs in the artifact/view (proof of
+  presence in the acquired content).
+- Logical support: entailment/claims/contradiction relationships between a
+  canonical Claim and the evidence span. These are separate since Phase 22
+  does not use prompt/output as evidence: verified membership is necessary but
+  NOT sufficient for acceptance — the Claim's state machines and support/
+  contradiction/CAUTION classification are unchanged and remain closed-world.
+  The verifier creates Claims/EvidenceSpans from verified excerpts when (and
+  only when) all the rules in this section plus the full Phase 21H provenance
+  chain hold; a member excerpt of a story that was NOT active through the
+  chain (run/no entity, missing Story lineage, no relevant canonical Claim) is
+  still not acceptable evidence.
+
 Phase 22 has not started and no evidence-promotion runtime is authorized by
 this note.
 

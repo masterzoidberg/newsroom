@@ -92,3 +92,53 @@ unavailable rather than adding tooling or dependencies.
 `READY FOR CODEX RE-REVIEW BEFORE PHASE 22` is permitted only when concurrency,
 budget, provenance, scope-refresh, SSRF, schema/migration, and regression
 invariants all pass and the Git diff contains no evidence-promotion path.
+
+## Phase 21H.1 — Final pre-evidence corrections (2026-08-19)
+
+One bounded pre-gate snapshot that closes the remaining provenance gaps before
+Phase 22:
+
+- **Historical provenance.** `validate_analysis_provenance` now separates
+  historical validity from current need eligibility. A historically valid
+  ArticleAnalysis stays valid against its pinned `monitor_scope_history`
+  snapshot and relevance scope snapshot even when the current
+  Topic/Subject/Story/Research Question is later deleted, disabled, or retired
+  (reported as `current_need_available` / `current_need_status` metadata).
+  Future processing still fails closed or becomes explicitly non-semantic at
+  enqueue time (`current_information_need_status`) rather than silently
+  reusing a stale scope; historical scope history remains immutable.
+- **Automatic processing-Job provenance.** Every ArticleAnalysis now carries a
+  classified chain: `automatic` (analysis.job_id == the durable relevance
+  decision's `document_version_process` Job, full chain validated through
+  relevance → Job → DocumentVersion → Monitor → pinned scope snapshot →
+  ContentArtifact → Source), `standalone` (no Job on either side; readable but
+  never automatically promotable), or inconsistent (rejected at
+  creation and by the read-only validator). The processing handler records the
+  analysis under the decision's canonical Job (stable across rerun/lease
+  recovery), and the analysis service fails closed before any provider call
+  when an automatic analysis is missing its Job or a standalone analysis
+  claims one. Deterministic promotion eligibility is a derived flag
+  (`eligible_for_automatic_promotion`), distinct from historical readability.
+- **Phase 22 evidence-coordinate specification.** `PHASE_22_
+  VERIFIED_EVIDENCE_AND_CLAIMS_AUTOMATION.md` now carries a binding
+  deterministic contract: canonical evidence views (exact artifact text /
+  `feed_entry_projection_v1` feed metadata projection with field path),
+  view hashing, Unicode code-point offsets, exact substring matching,
+  zero-match and ambiguous multiple-match rejection with the only permitted
+  deterministic resolution, locally recomputed offsets, artifact/view
+  provenance, truncation bounds, atomic promotion, deterministic promotion
+  identity, and the source-membership vs logical-support distinction. The
+  next Phase 22 implementation agent must not invent these rules.
+- **Verification.** `tests/test_phase21h_hardening.py` grown to 34 tests
+  (retry reauthorization, historical validity vs current eligibility,
+  automatic/standalone classification, missing/wrong Job/DocumentVersion/
+  Monitor/scope relationships, migration, concurrency, SSRF pinning).
+  Post-audit suites: Phase 21 33, Phase 20 28, Phase 19 24, Phase 18 20 all
+  pass; focused regression 139 passed; full backend suite **522 passed, 39
+  warnings** (twice); `npm run typecheck` and `npm run build` in `frontend`
+  pass; `python -m compileall -q newsroom scripts tests` passes;
+  `git diff --check` passes.
+
+Evidence boundary unchanged: this checkpoint still stops at persisting
+ArticleAnalysis; no EvidenceSpan, Claim, ClaimEvidence, Story, Report, or
+Alert automation exists in the diff.

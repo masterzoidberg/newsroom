@@ -38,6 +38,7 @@ TARGET_TABLES = {
     "research_question": "research_questions",
 }
 INFORMATION_NEED_TYPES = frozenset({"topic", "subject", "story", "research_question"})
+RETIRED_NEED_STATUSES = frozenset({"abandoned", "archived", "closed", "resolved", "retired"})
 ALLOWED_CHANNELS = frozenset({"rss", "atom", "direct_http", "page", "search", "api", "local"})
 POLICY_PRIORITIES = frozenset({"low", "normal", "high", "urgent"})
 SUGGESTION_TYPES = frozenset(
@@ -76,6 +77,31 @@ def _decode(value: str | None, default: Any) -> Any:
         return json.loads(value)
     except (TypeError, ValueError) as exc:
         raise DomainValidation("stored monitor JSON is invalid") from exc
+
+
+def current_information_need_status(
+    conn: sqlite3.Connection,
+    need_type: str | None,
+    need_id: str | None,
+) -> tuple[bool, str]:
+    """Return current eligibility without changing historical scope history."""
+    if not need_type or not need_id:
+        return False, "unbound"
+    if need_type not in INFORMATION_NEED_TYPES:
+        return False, "unsupported"
+    target = conn.execute(
+        f"SELECT * FROM {TARGET_TABLES[need_type]} WHERE id = ?",
+        (need_id,),
+    ).fetchone()
+    if target is None:
+        return False, "missing"
+    if "deleted_at" in target.keys() and target["deleted_at"] is not None:
+        return False, "deleted"
+    if "enabled" in target.keys() and target["enabled"] == 0:
+        return False, "disabled"
+    if "status" in target.keys() and target["status"] in RETIRED_NEED_STATUSES:
+        return False, "retired"
+    return True, "active"
 
 
 def _json_object(value: Any, field: str) -> str:
@@ -823,12 +849,9 @@ class MonitorService:
         """
         if need_type not in TARGET_TABLES:
             raise DomainValidation("information need type is unsupported")
-        target = conn.execute(
-            f"SELECT * FROM {TARGET_TABLES[need_type]} WHERE id = ?",
-            (need_id,),
-        ).fetchone()
-        if target is None or ("deleted_at" in target.keys() and target["deleted_at"] is not None):
-            raise DomainNotFound(f"{need_type} not found")
+        available, status = current_information_need_status(conn, need_type, need_id)
+        if not available:
+            raise DomainNotFound(f"{need_type} is not available ({status})")
         rows = conn.execute(
             """
             SELECT id FROM monitors

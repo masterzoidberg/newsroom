@@ -28,6 +28,10 @@ checkpoint (real NASA UAP page → relevance=true → real gpt-4o-mini
 ArticleAnalysis → durable record, zero Evidence/Claims); evidence in the
 Phase 21 file's Live Test B Completion Addendum. The post-audit is complete;
 Phase 21H is the bounded remediation gate before Phase 22 may begin.
+**Phase 21H.1 (historical provenance, automatic processing-Job provenance,
+and the Phase 22 evidence-coordinate specification) is implemented and
+verified** — see the Phase 21H file's 21H.1 record. The remaining gate is the
+final independent re-review before Phase 22 may start.
 
 ## How to assign work to Luna
 

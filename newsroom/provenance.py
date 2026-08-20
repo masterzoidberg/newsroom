@@ -9,6 +9,7 @@ from typing import Any
 
 from . import storage
 from .domain import DomainNotFound, DomainValidation
+from .monitoring import current_information_need_status
 
 
 class ProvenanceValidationError(DomainValidation):
@@ -44,8 +45,44 @@ def _issue(issues: list[str], code: str, detail: str) -> None:
     issues.append(f"{code}: {detail}")
 
 
+def _resolve_provenance_class(
+    *,
+    analysis_job_id: str | None,
+    relevance_job_id: str | None,
+    issues: list[str],
+) -> str:
+    """Classify the analysis chain and enforce job-linkage consistency.
+
+    - ``automatic``: the analysis is anchored to a durable
+      ``document_version_process`` Job through the relevance decision
+      (analysis.job_id == relevance.job_id, both set).
+    - ``standalone``: neither the analysis nor the decision references a
+      processing Job (manual/one-off analysis: readable, never automatically
+      promotable).
+    - anything else (job on exactly one side, or two different jobs) is an
+      inconsistent automatic provenance and fails closed.
+    """
+    if analysis_job_id != relevance_job_id:
+        _issue(
+            issues,
+            "analysis_job_mismatch",
+            "analysis job does not match the relevance decision job",
+        )
+    return "automatic" if relevance_job_id is not None else "standalone"
+
+
 def validate_analysis_provenance(db_path: str | Path, analysis_id: str) -> dict[str, Any]:
     """Return a verified ArticleAnalysis provenance bundle or fail closed.
+
+    Historical validity is judged against the pinned historical scope
+    (monitor_scope_history snapshot and relevance scope snapshot at
+    ``scope_version``) and the immutable artifact chain. The CURRENT
+    availability of the bound Topic/Subject/Story/Research Question is a
+    separate axis reported as ``current_need_available`` /
+    ``current_need_status`` and never invalidates a historically valid
+    analysis: future processing eligibility for the Monitor is governed by
+    ``current_information_need_status`` at enqueue time, never by reusing a
+    stale scope.
 
     This function is intentionally read-only. It never re-runs relevance,
     models, acquisition, or any future evidence automation.
@@ -110,6 +147,8 @@ def validate_analysis_provenance(db_path: str | Path, analysis_id: str) -> dict[
                 if int(artifact["text_length"]) != len(artifact["normalized_text"]):
                     _issue(issues, "analysis_artifact_length_corrupt", "artifact length does not match its content")
 
+        current_need_available = True
+        current_need_status = "unbound"
         if monitor is not None and version is not None:
             if monitor["target_type"] != "source" or monitor["target_id"] != version["source_id"]:
                 _issue(issues, "relevance_monitor_source_mismatch", "monitor provenance does not own the DocumentVersion source")
@@ -121,11 +160,15 @@ def validate_analysis_provenance(db_path: str | Path, analysis_id: str) -> dict[
             elif need_type not in _NEED_TABLES:
                 _issue(issues, "invalid_monitor_need_reference", f"unsupported need_type={need_type}")
             else:
-                target = conn.execute(
-                    f"SELECT * FROM {_NEED_TABLES[need_type]} WHERE id = ?", (need_id,)
-                ).fetchone()
-                if target is None or ("deleted_at" in target.keys() and target["deleted_at"] is not None):
-                    _issue(issues, "invalid_monitor_need_reference", f"missing {need_type} need={need_id}")
+                # The CURRENT availability of the bound information need is
+                # separate from historical validity: the analysis stays valid
+                # against its pinned historical scope even when the need is
+                # later deleted, disabled, or retired. Unavailability is
+                # reported as metadata, never as a historical provenance issue.
+                _current_available, current_need_status = current_information_need_status(
+                    conn, need_type, need_id
+                )
+                current_need_available = _current_available
 
             scope_history = conn.execute(
                 "SELECT * FROM monitor_scope_history WHERE monitor_id = ? AND version = ?",
@@ -145,10 +188,16 @@ def validate_analysis_provenance(db_path: str | Path, analysis_id: str) -> dict[
             scope_history = None
 
         job = None
-        if relevance is not None and relevance["job_id"]:
-            job = conn.execute("SELECT * FROM jobs WHERE id = ?", (relevance["job_id"],)).fetchone()
+        relevance_job_id = relevance["job_id"] if relevance is not None else None
+        provenance_class = _resolve_provenance_class(
+            analysis_job_id=analysis["job_id"],
+            relevance_job_id=relevance_job_id,
+            issues=issues,
+        )
+        if relevance_job_id:
+            job = conn.execute("SELECT * FROM jobs WHERE id = ?", (relevance_job_id,)).fetchone()
             if job is None:
-                _issue(issues, "orphan_relevance_job", f"job={relevance['job_id']}")
+                _issue(issues, "orphan_relevance_job", f"job={relevance_job_id}")
             else:
                 if job["job_type"] != "document_version_process":
                     _issue(issues, "relevance_job_type_mismatch", "relevance is not owned by a document processing job")
@@ -162,8 +211,6 @@ def validate_analysis_provenance(db_path: str | Path, analysis_id: str) -> dict[
                         _issue(issues, "relevance_job_monitor_mismatch", "processing job monitor differs from relevance monitor")
                     if int(payload.get("scope_version", -1)) != int(relevance["scope_version"]):
                         _issue(issues, "relevance_job_scope_mismatch", "processing job scope differs from relevance scope")
-        if analysis["job_id"] and relevance is not None and analysis["job_id"] != relevance["job_id"]:
-            _issue(issues, "analysis_job_mismatch", "analysis and relevance belong to different jobs")
 
         try:
             result = _json(analysis["result_json"], label="analysis result")
@@ -190,6 +237,10 @@ def validate_analysis_provenance(db_path: str | Path, analysis_id: str) -> dict[
         if issues:
             raise ProvenanceValidationError("; ".join(issues), issues=tuple(issues))
         return {
+            "provenance_class": provenance_class,
+            "eligible_for_automatic_promotion": provenance_class == "automatic",
+            "current_need_available": current_need_available,
+            "current_need_status": current_need_status,
             "analysis": dict(analysis),
             "relevance": dict(relevance),
             "document_version": dict(version),

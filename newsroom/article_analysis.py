@@ -62,7 +62,14 @@ from .ai import (
     TelemetrySink,
 )
 from .domain import DomainConflict, DomainNotFound, DomainValidation, new_id, utc_now
-from .jobs import BudgetExhausted, BudgetService, PaidInvocationBusy, PaidInvocationUncertain
+from .jobs import (
+    DOCUMENT_VERSION_PROCESS_JOB_TYPE,
+    BudgetExhausted,
+    BudgetService,
+    PaidInvocationBusy,
+    PaidInvocationUncertain,
+)
+from .provenance import ProvenanceValidationError
 from .worker import RetryableJobFailure
 
 
@@ -601,6 +608,53 @@ class ArticleAnalysisService:
             raise DomainValidation("article analysis requires a valid scope_version") from exc
         scope_terms = [str(term) for term in (relevance.get("scope_terms") or []) if str(term).strip()]
 
+        # Automatic-vs-standalone provenance gate (Phase 21H). The durable
+        # relevance decision owns the canonical processing Job; the analysis
+        # is recorded under exactly that Job (both set for an automatic
+        # analysis, or both None for a standalone/manual analysis). An
+        # automatic analysis missing its Job, or a standalone analysis
+        # claiming one, is an inconsistent chain and fails closed before any
+        # provider call or persistence. On explicit rerun or lease recovery
+        # the executing Job may differ from the canonical decision Job; it
+        # must still be a document_version_process Job owning this version.
+        durable_job_id: str | None = None
+        conn = storage.connect(self.db_path)
+        try:
+            decision = conn.execute(
+                "SELECT job_id FROM document_version_relevance WHERE id = ?",
+                (relevance_id,),
+            ).fetchone()
+            if decision is not None:
+                durable_job_id = decision["job_id"]
+        finally:
+            conn.close()
+        if durable_job_id is None and job_id is not None:
+            raise ProvenanceValidationError(
+                "standalone analysis must not claim a processing job"
+            )
+        if durable_job_id is not None and job_id is None:
+            raise ProvenanceValidationError(
+                "automatic analysis requires its owning document_version_process job"
+            )
+        if job_id is not None:
+            conn = storage.connect(self.db_path)
+            try:
+                caller_job = conn.execute(
+                    "SELECT job_type, document_version_id FROM jobs WHERE id = ?",
+                    (job_id,),
+                ).fetchone()
+            finally:
+                conn.close()
+            if caller_job is None or caller_job["job_type"] != DOCUMENT_VERSION_PROCESS_JOB_TYPE:
+                raise ProvenanceValidationError(
+                    "analysis job is not a document_version_process job"
+                )
+            if caller_job["document_version_id"] != document_version_id:
+                raise ProvenanceValidationError(
+                    "analysis job does not own this document version"
+                )
+        canonical_job_id = durable_job_id
+
         title, text = analysis_input_text(content)
         if not str(text).strip():
             raise DomainValidation("cannot analyze: verified artifact text is empty")
@@ -734,7 +788,7 @@ class ArticleAnalysisService:
                 relevance_id=relevance_id,
                 monitor_id=monitor_id,
                 scope_version=scope_version,
-                job_id=job_id,
+                job_id=canonical_job_id,
                 artifact_id=str(content.get("artifact_id") or ""),
                 normalized_content_hash=str(content.get("normalized_content_hash") or ""),
                 schema_version=ANALYSIS_SCHEMA_VERSION,

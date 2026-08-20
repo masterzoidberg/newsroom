@@ -760,6 +760,10 @@ def test_rerun_preserves_audit_history(tmp_db):
             "scope_version": relevance["scope_version"],
         },
         content=content,
+        # The decision was created by the worker's first run and owns its
+        # canonical processing Job; a re-analysis under a new model must
+        # preserve the automatic chain.
+        job_id=relevance["job_id"],
     )
     assert third["identity_hash"] != canonical_hash
     records = _analysis_records(tmp_db)
@@ -841,6 +845,9 @@ def test_local_vs_paid_usage_metadata_persists_accurately(tmp_db):
             "scope_version": relevance["scope_version"],
         },
         content=content,
+        # The decision already owns its canonical processing Job from the
+        # worker's local run; the paid re-analysis keeps the automatic chain.
+        job_id=relevance["job_id"],
     )
     assert record["paid"] is True
     assert record["provider"] == "openai"
@@ -1088,8 +1095,19 @@ def test_invalid_credentials_and_model_errors_are_terminal(tmp_db):
     from newsroom.ai import AIProviderError  # noqa: PLC0415
 
     assert type(excinfo.value) is AIProviderError
-    # Terminal through the worker: no bounded retry is scheduled.
-    finished = _processing_worker(tmp_db, analysis_service=service).run_once(now=T1)
+    # Terminal through the worker: no bounded retry is scheduled. A fresh
+    # pipeline is used so the processing Job itself persists the relevance
+    # decision (and its canonical Job), keeping the automatic chain valid.
+    db2 = tmp_db.parent / "credentials-pipeline.db"
+    apply_migrations(db2)
+    BudgetService(db2).set_paid_enabled(True)
+    _setup_relevant(db2)
+    service2 = ArticleAnalysisService(
+        db2,
+        config=AnalysisProviderConfig(provider="openai", api_key=FAKE_KEY),
+        paid_provider_factory=lambda cfg: provider,
+    )
+    finished = _processing_worker(db2, analysis_service=service2).run_once(now=T1)
     assert finished["status"] == "failed"
     assert finished["failure_cause"] == "AIProviderError"
     assert finished["attempts"] == 1

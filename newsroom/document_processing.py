@@ -124,15 +124,23 @@ def enqueue_document_version_processing_tx(
             raise DomainValidation("monitor does not own this document version's source")
     canonical_scope_version: int | None = None
     if monitor_id is not None and monitor["need_type"] is not None and monitor["need_id"] is not None:
-        scope_version = conn.execute(
-            "SELECT COALESCE(MAX(version), 0) FROM monitor_scope_history WHERE monitor_id = ?",
-            (monitor_id,),
-        ).fetchone()[0]
-        if not scope_version:
-            raise DomainValidation(
-                f"monitor '{monitor_id}' has an approved information need but no scope snapshot"
-            )
-        canonical_scope_version = int(scope_version)
+        from .monitoring import current_information_need_status
+
+        available, _status = current_information_need_status(
+            conn,
+            monitor["need_type"],
+            monitor["need_id"],
+        )
+        if available:
+            scope_version = conn.execute(
+                "SELECT COALESCE(MAX(version), 0) FROM monitor_scope_history WHERE monitor_id = ?",
+                (monitor_id,),
+            ).fetchone()[0]
+            if not scope_version:
+                raise DomainValidation(
+                    f"monitor '{monitor_id}' has an approved information need but no scope snapshot"
+                )
+            canonical_scope_version = int(scope_version)
 
     key = f"document:{version_id}"
     existing = conn.execute("SELECT id, status FROM jobs WHERE idempotency_key = ?", (key,)).fetchone()
@@ -344,7 +352,12 @@ class DocumentProcessingExecutionService:
             document_version_id=str(version_row["id"]),
             relevance=relevance,
             content=content,
-            job_id=job.get("id"),
+            # The canonical processing Job is owned by the durable relevance
+            # decision (the Job that persisted it). On explicit rerun or lease
+            # recovery the current Job may differ; the analysis is always
+            # recorded under the decision's canonical Job so the
+            # ArticleAnalysis → relevance → Job chain stays consistent.
+            job_id=relevance.get("job_id") or job.get("id"),
         )
         return {key: value for key, value in record.items() if key != "result"}
 
@@ -409,6 +422,7 @@ class DocumentProcessingExecutionService:
             "status": "evaluated",
             "relevant": result.relevant,
             "relevance_id": record["id"],
+            "job_id": record["job_id"],
             "monitor_id": monitor_id,
             "scope_version": scope_version,
             "stage": result.stage,

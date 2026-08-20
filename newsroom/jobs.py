@@ -635,6 +635,39 @@ class BudgetService:
             float(row["cost"] or 0.0) + legacy_cost,
         )
 
+    def _authorize_paid_analysis_tx(
+        self,
+        conn: sqlite3.Connection,
+        *,
+        monitor_id: str,
+        job_id: str | None,
+        estimated_cost_usd: float,
+        max_paid_calls: int,
+        max_paid_cost_usd: float,
+        now: str,
+    ) -> None:
+        """Authorize a paid analysis against current durable state."""
+        if not self._paid_enabled_tx(conn):
+            raise BudgetExhausted("paid dispatch is disabled", reason="paid_disabled")
+        used_requests, used_cost = self._analysis_usage_totals_tx(conn)
+        if used_requests + 1 > max_paid_calls:
+            raise BudgetExhausted(
+                "configured paid analysis request limit exhausted",
+                reason="paid_budget_exhausted",
+            )
+        if used_cost + estimated_cost_usd > max_paid_cost_usd + 1e-12:
+            raise BudgetExhausted(
+                "configured paid analysis USD limit exhausted",
+                reason="paid_budget_exhausted",
+            )
+        self._check_analysis_budget_limits_tx(
+            conn,
+            monitor_id=monitor_id,
+            job_id=job_id,
+            request_cost_usd=estimated_cost_usd,
+            now=now,
+        )
+
     def _check_analysis_budget_limits_tx(
         self,
         conn: sqlite3.Connection,
@@ -761,15 +794,41 @@ class BudgetService:
                             "paid analysis invocation is terminally failed",
                             reason="analysis_invocation_terminal",
                         )
+                    if (
+                        existing["document_version_id"] != document_version_id
+                        or existing["relevance_id"] != relevance_id
+                        or existing["monitor_id"] != monitor_id
+                        or existing["job_id"] != job_id
+                    ):
+                        raise DomainConflict("paid analysis invocation provenance does not match the retry")
+                    if int(existing["paid"] or 0) != 1 or int(existing["reserved_requests"] or 0) != 1:
+                        raise DomainConflict("paid analysis invocation reservation is invalid")
+                    self._authorize_paid_analysis_tx(
+                        conn,
+                        monitor_id=monitor_id,
+                        job_id=job_id,
+                        estimated_cost_usd=estimated_cost_usd,
+                        max_paid_calls=max_paid_calls,
+                        max_paid_cost_usd=max_paid_cost_usd,
+                        now=now,
+                    )
                     conn.execute(
                         """
                         UPDATE analysis_invocations
                         SET state = 'running', owner_token = ?,
                             lease_expires_at = ?, started_at = ?,
-                            completed_at = NULL, failure_code = NULL, updated_at = ?
+                            completed_at = NULL, failure_code = NULL,
+                            reserved_requests = 1, reserved_cost_usd = ?, updated_at = ?
                         WHERE id = ? AND state = 'retryable'
                         """,
-                        (owner_token, _plus_seconds(now, lease_seconds), now, now, existing["id"]),
+                        (
+                            owner_token,
+                            _plus_seconds(now, lease_seconds),
+                            now,
+                            estimated_cost_usd,
+                            now,
+                            existing["id"],
+                        ),
                     )
                     return {
                         "state": "running",
@@ -777,24 +836,13 @@ class BudgetService:
                         "identity_hash": identity_hash,
                         "owner_token": owner_token,
                     }
-                if not self._paid_enabled_tx(conn):
-                    raise BudgetExhausted("paid dispatch is disabled", reason="paid_disabled")
-                used_requests, used_cost = self._analysis_usage_totals_tx(conn)
-                if used_requests + 1 > max_paid_calls:
-                    raise BudgetExhausted(
-                        "configured paid analysis request limit exhausted",
-                        reason="paid_budget_exhausted",
-                    )
-                if used_cost + estimated_cost_usd > max_paid_cost_usd + 1e-12:
-                    raise BudgetExhausted(
-                        "configured paid analysis USD limit exhausted",
-                        reason="paid_budget_exhausted",
-                    )
-                self._check_analysis_budget_limits_tx(
+                self._authorize_paid_analysis_tx(
                     conn,
                     monitor_id=monitor_id,
                     job_id=job_id,
-                    request_cost_usd=estimated_cost_usd,
+                    estimated_cost_usd=estimated_cost_usd,
+                    max_paid_calls=max_paid_calls,
+                    max_paid_cost_usd=max_paid_cost_usd,
                     now=now,
                 )
                 identifier = new_id("inv")
