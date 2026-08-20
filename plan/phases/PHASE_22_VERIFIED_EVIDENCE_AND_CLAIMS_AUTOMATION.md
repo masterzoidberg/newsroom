@@ -126,7 +126,7 @@ view derived from the Phase 18 immutable ContentArtifact. There are exactly
 two view families:
 
 - `artifact_view`: HTML/text/fallback artifacts (`content_kind` in
-  `{"visible_text", "html", "full_text", "excerpt", "fallback"}`). The
+  `{"visible_text", "fallback_text"}`). The
   canonical evidence view IS the artifact's exact stored
   `normalized_text` — the same byte-for-byte text whose
   `normalized_content_hash` and `text_length` were verified by the Phase 18
@@ -138,24 +138,25 @@ two view families:
   ``(artifact_id, view_version, field_path)``. Feed metadata is NEVER treated
   as raw HTML/text and NEVER passed through artifact normalization.
 
-### 2. Feed-entry evidence view (`feed_entry_meta_v1`)
+### 2. Feed-entry evidence view (`feed_entry_projection_v1`)
 
-The projection contract `feed_entry_meta_v1` over the persisted metadata
+The projection contract `feed_entry_projection_v1` over the persisted metadata
 JSON (an object) is:
 
 - field path = `["title", "summary"]`;
 - exclusions: `link`, `guid`, `id`, `updated`, `published`, `author`,
   `content_html`, `content_text` (and any other structural/foreign-key field)
   never participate in evidence text;
-- `title` string contributes first, then `summary` if present;
-- separator: a single `"\n"` (U+000A) between the two parts when both are
-  present; no trailing separator;
+- view text is always `title + "\n" + summary`, including when either exact
+  JSON-decoded string is empty;
+- separator: exactly one `"\n"` (U+000A), never conditionally removed;
 - each part is the exact stored JSON string value after JSON unescaping
   (Python `json.loads` semantics), verbatim — no HTML/A markup parsing, no
   whitespace folding;
-- if `title` is missing/empty and `summary` is empty too, the view is the
-  empty string and every excerpt match fails (zero-length view is globally
-  ineligible);
+- missing values are treated as empty strings, so empty title and summary have
+  the canonical representation `"\n"`; because both underlying fields contain
+  no meaningful text, the record is separately ineligible for analysis or
+  evidence promotion;
 - projection version `"feed_entry_projection_v1"` and field path
   `"title;summary"` are persisted with the resulting EvidenceSpan.
 
@@ -166,17 +167,22 @@ metadata artifact record have no evidence view and every verification fails.
 
 ### 3. View hashing
 
-The verifier loads the artifact, recomputes the exact canonical view (raw
-`normalized_text` or the `feed_entry_projection_v1` projection), and rehashes
-it with `sha256(view_text.encode("utf-8")).hexdigest()`. The recomputed hash
-must equal the stored `normalized_content_hash` (and the recomputed length
-must equal `text_length`), or the artifact is corrupt and every verification
-fails closed. The EvidenceSpan never stores the view text; it stores the
-excerpt, its code-point offsets over the view, the view identity, and
-`artifact_content_hash`.
+The verifier first rehashes the exact artifact `normalized_text` and verifies
+that hash and length against `normalized_content_hash` / `text_length`. It then
+derives the canonical view and hashes that distinct representation with
+`sha256(view_text.encode("utf-8")).hexdigest()`. For artifact views the two
+hashes are equal. For feed views the artifact hash covers the immutable metadata
+JSON while the view hash covers the deterministic title/summary projection, so
+they are intentionally distinct. The EvidenceSpan never stores the view text;
+it stores the excerpt, code-point offsets, artifact identity/hash, view
+identity/version, and view hash.
 
 ### 3.a Analysis-input truncation bound
 
+Only analyses with a complete Phase 21H.2 input contract are automatically
+promotable. The verifier must reconstruct and validate `input_view_version`,
+`input_content_hash`, `analyzed_content_hash`, `input_char_count`,
+`analyzed_char_count`, and `truncated` through the full provenance validator.
 If `article_analyses.analyzed_char_count < article_analyses.input_char_count`
 (the model saw a truncated suffix of the input text), a candidate excerpt may
 only be verified against the first `analyzed_char_count` code points of the
@@ -253,6 +259,7 @@ always recomputed locally from the canonical view.
   - `document_version_id` FK (owner);
   - `artifact_id` (the immutable content row);
   - `artifact_content_hash` (`normalized_content_hash`);
+  - `view_content_hash` (SHA-256 of the canonical evidence view);
   - `view_kind` ∈ `{"artifact", "feed"}`;
   - `view_version` (`"artifact_norm_v1"` or `"feed_entry_projection_v1"`);
   - `field_path` (`null` for artifact views, `"title;summary"` for feed);

@@ -142,3 +142,28 @@ Phase 22:
 Evidence boundary unchanged: this checkpoint still stops at persisting
 ArticleAnalysis; no EvidenceSpan, Claim, ClaimEvidence, Story, Report, or
 Alert automation exists in the diff.
+
+## Phase 21H.2 — Exact analysis-input provenance corrections (2026-08-20)
+
+Migration 0020 adds an additive v2 analysis-input contract without rewriting
+historical ArticleAnalysis rows. New analyses persist the canonical input-view
+version, SHA-256 of the full derived input, SHA-256 of the exact analyzed slice,
+and the paid invocation FK when applicable. Those values plus artifact identity
+and hash participate in analysis identity, so a different truncation slice
+cannot silently reuse an incompatible result. Historical v1 rows remain
+readable but are not eligible for automatic promotion.
+
+Feed input now uses the same binding `feed_entry_projection_v1` required by
+Phase 22: exact JSON-decoded title plus exactly one newline plus exact
+JSON-decoded summary, even when either field is empty, with no second
+whitespace normalization and no raw-JSON fallback. Empty title and summary
+therefore have the canonical view `"\n"` but remain separately ineligible for
+analysis because the underlying fields contain no meaningful text. Artifact
+and derived-view hashes are separate because they cover separate
+representations.
+
+`validate_analysis_provenance` reconstructs the canonical view and analyzed
+prefix, verifies lengths, truncation state, hashes, identity, and (for paid
+analysis) the matching succeeded invocation. Migration 0020 also makes durable
+relevance decisions database-immutable. The evidence boundary remains
+unchanged: Phase 21H.2 creates no EvidenceSpan, Claim, Story, Report, or Alert.

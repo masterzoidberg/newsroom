@@ -1459,10 +1459,10 @@ def test_uap_fixture_structured_analysis_demonstrates_all_fields(tmp_db):
 
 
 def test_migration_0018_fresh_upgrade_and_rerun(tmp_db):
-    # Fresh DB migrates 1..19 with schema_version 19.
+    # Fresh DB migrates 1..20 with schema_version 20.
     apply_migrations(tmp_db)
-    assert migration_status(tmp_db) == tuple(range(1, 20))
-    assert _get(tmp_db, "SELECT value FROM app_meta WHERE key = 'schema_version'")[0] == "19"
+    assert migration_status(tmp_db) == tuple(range(1, 21))
+    assert _get(tmp_db, "SELECT value FROM app_meta WHERE key = 'schema_version'")[0] == "20"
     assert _count(tmp_db, "article_analyses") == 0
 
     # Upgrade: a schema-17 DB upgrades safely with data preserved.
@@ -1510,17 +1510,17 @@ def test_migration_0018_fresh_upgrade_and_rerun(tmp_db):
         conn.close()
 
     result = apply_migrations(db2)
-    assert result.applied_versions == (18, 19)
-    assert result.current_version == 19
-    assert migration_status(db2) == tuple(range(1, 20))
-    assert _get(db2, "SELECT value FROM app_meta WHERE key = 'schema_version'")[0] == "19"
+    assert result.applied_versions == (18, 19, 20)
+    assert result.current_version == 20
+    assert migration_status(db2) == tuple(range(1, 21))
+    assert _get(db2, "SELECT value FROM app_meta WHERE key = 'schema_version'")[0] == "20"
     assert _get(db2, "SELECT name FROM sources WHERE id = 'src-old21'")[0] == "Old"
     assert _count(db2, "article_analyses") == 0
 
     # Rerun is a no-op.
     result = apply_migrations(db2)
     assert result.applied_versions == ()
-    assert result.current_version == 19
+    assert result.current_version == 20
     assert check_database(db2).ok is True
 
 

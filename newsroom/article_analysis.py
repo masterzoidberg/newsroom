@@ -88,6 +88,8 @@ DEFAULT_MAX_RETRIES = 2
 DEFAULT_MAX_PAID_CALLS = 1
 DEFAULT_MAX_PAID_COST_USD = 0.10
 DEFAULT_REQUEST_COST_USD = 0.01
+ARTIFACT_INPUT_VIEW_VERSION = "artifact_norm_v1"
+FEED_INPUT_VIEW_VERSION = "feed_entry_projection_v1"
 
 
 SYSTEM_PROMPT = (
@@ -127,13 +129,27 @@ def _user_prompt(title: str, scope_terms: Sequence[str], text: str) -> str:
     )
 
 
+def canonical_feed_analysis_view(metadata: Mapping[str, Any]) -> str:
+    """Return the exact title/newline/summary view for persisted feed metadata."""
+    title_value = metadata.get("title")
+    summary_value = metadata.get("summary")
+    if title_value is not None and not isinstance(title_value, str):
+        raise DomainValidation("cannot analyze: feed metadata title is not a string")
+    if summary_value is not None and not isinstance(summary_value, str):
+        raise DomainValidation("cannot analyze: feed metadata summary is not a string")
+    title = title_value or ""
+    summary = summary_value or ""
+    return title + "\n" + summary
+
+
 def analysis_input_text(content: Mapping[str, Any]) -> tuple[str, str]:
     """Derive the bounded (title, text) from the exact verified artifact content.
 
     HTML/text/fallback artifacts analyze their exact normalized visible text.
-    Feed metadata artifacts analyze the entry title and summary extracted from
-    the exact persisted metadata JSON; if a feed entry has no title/summary the
-    exact metadata text is used rather than fabricating content.
+    Feed metadata artifacts analyze one versioned, deterministic projection of
+    the exact persisted metadata JSON. JSON-decoded title and summary values are
+    retained verbatim and joined by one newline. Empty projections are rejected
+    by the caller; raw metadata JSON is never substituted as article content.
     """
     if content.get("content_kind") != "feed_metadata":
         return "", str(content.get("normalized_text") or "")
@@ -144,10 +160,46 @@ def analysis_input_text(content: Mapping[str, Any]) -> tuple[str, str]:
         raise DomainValidation("cannot analyze: feed metadata artifact is corrupted") from exc
     if not isinstance(metadata, Mapping):
         raise DomainValidation("cannot analyze: feed metadata artifact is corrupted")
-    title = str(metadata.get("title") or "")
-    summary = str(metadata.get("summary") or "")
-    parts = [part.strip() for part in (title, summary) if str(part).strip()]
-    return title, "\n".join(parts) or raw
+    title = metadata.get("title") or ""
+    return title, canonical_feed_analysis_view(metadata)
+
+
+@dataclass(frozen=True)
+class AnalysisInputContract:
+    title: str
+    text: str
+    analyzed_text: str
+    view_version: str
+    input_content_hash: str
+    analyzed_content_hash: str
+    input_char_count: int
+    analyzed_char_count: int
+    truncated: bool
+
+
+def build_analysis_input(
+    content: Mapping[str, Any], max_chars: int
+) -> AnalysisInputContract:
+    """Reconstruct the exact versioned text and slice supplied to analysis."""
+    title, text = analysis_input_text(content)
+    if not text.strip():
+        raise DomainValidation("cannot analyze: verified artifact text is empty")
+    analyzed_text, analyzed_char_count, truncated = truncate_for_analysis(text, max_chars)
+    return AnalysisInputContract(
+        title=title,
+        text=text,
+        analyzed_text=analyzed_text,
+        view_version=(
+            FEED_INPUT_VIEW_VERSION
+            if content.get("content_kind") == "feed_metadata"
+            else ARTIFACT_INPUT_VIEW_VERSION
+        ),
+        input_content_hash=hashlib.sha256(text.encode("utf-8")).hexdigest(),
+        analyzed_content_hash=hashlib.sha256(analyzed_text.encode("utf-8")).hexdigest(),
+        input_char_count=len(text),
+        analyzed_char_count=analyzed_char_count,
+        truncated=truncated,
+    )
 
 
 def truncate_for_analysis(text: str, max_chars: int) -> tuple[str, int, bool]:
@@ -178,24 +230,41 @@ def analysis_identity_hash(
     prompt_version: str,
     provider: str,
     model: str,
+    artifact_id: str = "",
+    normalized_content_hash: str = "",
+    input_view_version: str = "",
+    input_content_hash: str = "",
+    analyzed_content_hash: str = "",
 ) -> str:
     """Canonical analysis identity.
 
     Automatic retry/recovery reuses one canonical analysis per identity. A
-    provider, model, prompt-version, or analysis-schema-version change produces
-    a new identity and therefore a new analysis version, preserving history.
+    Provider, model, prompt/schema version, artifact, canonical input view, or
+    analyzed slice change produces a new identity and therefore a new analysis
+    version, preserving history without incompatible result reuse.
     """
-    payload = "\x1f".join(
-        (
-            str(document_version_id),
-            str(relevance_id),
-            str(scope_version),
-            str(schema_version),
-            str(prompt_version),
-            str(provider),
-            str(model),
-        )
-    )
+    fields = [
+        str(document_version_id),
+        str(relevance_id),
+        str(scope_version),
+        str(schema_version),
+        str(prompt_version),
+        str(provider),
+        str(model),
+    ]
+    input_fields = [
+        str(artifact_id),
+        str(normalized_content_hash),
+        str(input_view_version),
+        str(input_content_hash),
+        str(analyzed_content_hash),
+    ]
+    # Preserve the Phase-21 v1 identity for historical rows whose additive
+    # Migration-0020 provenance columns are NULL. New writes always append the
+    # complete v2 contract and therefore cannot collide with a v1 identity.
+    if any(input_fields):
+        fields.extend(input_fields)
+    payload = "\x1f".join(fields)
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
@@ -655,11 +724,7 @@ class ArticleAnalysisService:
                 )
         canonical_job_id = durable_job_id
 
-        title, text = analysis_input_text(content)
-        if not str(text).strip():
-            raise DomainValidation("cannot analyze: verified artifact text is empty")
-        input_char_count = len(text)
-        analyzed_text, analyzed_char_count, truncated = truncate_for_analysis(text, self.config.max_input_chars)
+        analysis_input = build_analysis_input(content, self.config.max_input_chars)
 
         identity_hash = analysis_identity_hash(
             document_version_id=document_version_id,
@@ -669,6 +734,11 @@ class ArticleAnalysisService:
             prompt_version=ANALYSIS_PROMPT_VERSION,
             provider=self.config.provider,
             model=self.config.model if self.config.provider == ANALYSIS_PROVIDER_OPENAI else LOCAL_MODEL_LABEL,
+            artifact_id=str(content.get("artifact_id") or ""),
+            normalized_content_hash=str(content.get("normalized_content_hash") or ""),
+            input_view_version=analysis_input.view_version,
+            input_content_hash=analysis_input.input_content_hash,
+            analyzed_content_hash=analysis_input.analyzed_content_hash,
         )
         existing = self.find_by_identity_hash(identity_hash)
         if existing is not None:
@@ -750,8 +820,8 @@ class ArticleAnalysisService:
             telemetry=sink,
         )
         request = ArticleAnalysisRequest(
-            title=title,
-            text=analyzed_text,
+            title=analysis_input.title,
+            text=analysis_input.analyzed_text,
             scope_terms=scope_terms,
             work_id=work_id,
         )
@@ -798,9 +868,12 @@ class ArticleAnalysisService:
                 model=model_label,
                 paid=paid_route,
                 confidence=float(result.confidence),
-                input_char_count=input_char_count,
-                analyzed_char_count=analyzed_char_count,
-                truncated=truncated,
+                input_char_count=analysis_input.input_char_count,
+                analyzed_char_count=analysis_input.analyzed_char_count,
+                truncated=analysis_input.truncated,
+                input_view_version=analysis_input.view_version,
+                input_content_hash=analysis_input.input_content_hash,
+                analyzed_content_hash=analysis_input.analyzed_content_hash,
                 result=result.model_dump(),
                 invocation_id=invocation["id"] if invocation is not None else None,
                 invocation_owner_token=invocation["owner_token"] if invocation is not None else None,
@@ -848,6 +921,9 @@ class ArticleAnalysisService:
         input_char_count: int,
         analyzed_char_count: int,
         truncated: bool,
+        input_view_version: str,
+        input_content_hash: str,
+        analyzed_content_hash: str,
         result: Mapping[str, Any],
         invocation_id: str | None = None,
         invocation_owner_token: str | None = None,
@@ -875,8 +951,9 @@ class ArticleAnalysisService:
                              scope_version, artifact_id, normalized_content_hash, identity_hash,
                              schema_version, prompt_version, provider, model, paid,
                              confidence, input_char_count, analyzed_char_count, truncated,
-                             result_json, created_at)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                             input_view_version, input_content_hash, analyzed_content_hash,
+                             invocation_id, result_json, created_at)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                         """,
                         (
                             identifier,
@@ -897,6 +974,10 @@ class ArticleAnalysisService:
                             int(input_char_count),
                             int(analyzed_char_count),
                             int(truncated),
+                            input_view_version,
+                            input_content_hash,
+                            analyzed_content_hash,
+                            invocation_id,
                             encoded_result,
                             utc_now(),
                         ),
@@ -936,13 +1017,18 @@ __all__ = [
     "ANALYSIS_PROVIDER_LOCAL",
     "ANALYSIS_PROVIDER_OPENAI",
     "ANALYSIS_SCHEMA_VERSION",
+    "ARTIFACT_INPUT_VIEW_VERSION",
     "ARTICLE_ANALYSIS_CAPABILITY",
     "AnalysisProviderConfig",
     "ArticleAnalysisService",
+    "AnalysisInputContract",
+    "FEED_INPUT_VIEW_VERSION",
     "LOCAL_MODEL_LABEL",
     "OpenAICompatibleArticleAnalysisProvider",
     "SYSTEM_PROMPT",
     "analysis_identity_hash",
     "analysis_input_text",
+    "build_analysis_input",
+    "canonical_feed_analysis_view",
     "truncate_for_analysis",
 ]

@@ -584,12 +584,12 @@ def test_production_composition_persists_reloadable_normalized_artifact(tmp_db):
 
 def test_fresh_database_applies_through_migration_15(tmp_db):
     result = apply_migrations(tmp_db)
-    assert result.applied_versions == (1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19)
-    assert result.current_version == 19
-    assert migration_status(tmp_db) == (1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19)
+    assert result.applied_versions == tuple(range(1, 21))
+    assert result.current_version == 20
+    assert migration_status(tmp_db) == tuple(range(1, 21))
     assert apply_migrations(tmp_db).applied_versions == ()
     row = _get(tmp_db, "SELECT value FROM app_meta WHERE key = 'schema_version'")
-    assert row[0] == "19"
+    assert row[0] == "20"
     tables = {r[0] for r in _get_rows(tmp_db, "SELECT name FROM sqlite_master WHERE type='table'")}
     assert "content_artifacts" in tables
     columns = {r[1] for r in _get_rows(tmp_db, "PRAGMA table_info(document_versions)")}
@@ -642,8 +642,8 @@ def test_schema_14_database_upgrades_to_15_preserving_data(tmp_db):
         conn.close()
 
     result = apply_migrations(tmp_db)
-    assert result.applied_versions == (15, 16, 17, 18, 19)
-    assert migration_status(tmp_db) == (1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19)
+    assert result.applied_versions == (15, 16, 17, 18, 19, 20)
+    assert migration_status(tmp_db) == tuple(range(1, 21))
 
     old = _get(tmp_db, "SELECT * FROM document_versions WHERE id = 'dv_old'")
     assert old["content_hash"] == "old-hash"

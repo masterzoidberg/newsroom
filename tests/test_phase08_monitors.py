@@ -86,7 +86,7 @@ def _policy(db_path, **overrides):
 
 
 def test_phase08_migration_adds_history_and_suggestion_tables_idempotently(tmp_db):
-    assert apply_migrations(tmp_db).applied_versions == (1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19)
+    assert apply_migrations(tmp_db).applied_versions == tuple(range(1, 21))
     assert apply_migrations(tmp_db).applied_versions == ()
 
     conn = storage.connect(tmp_db)
@@ -802,7 +802,7 @@ def test_phase14_migration_widens_outcome_and_preserves_existing_rows(tmp_db):
         conn.close()
 
     result = apply_migrations(tmp_db)
-    assert result.applied_versions == (14, 15, 16, 17, 18, 19)
+    assert result.applied_versions == (14, 15, 16, 17, 18, 19, 20)
 
     conn = storage.connect(tmp_db)
     try:

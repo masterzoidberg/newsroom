@@ -147,6 +147,54 @@ def validate_analysis_provenance(db_path: str | Path, analysis_id: str) -> dict[
                 if int(artifact["text_length"]) != len(artifact["normalized_text"]):
                     _issue(issues, "analysis_artifact_length_corrupt", "artifact length does not match its content")
 
+        input_contract_complete = all(
+            analysis[name]
+            for name in (
+                "input_view_version",
+                "input_content_hash",
+                "analyzed_content_hash",
+            )
+        )
+        if input_contract_complete and artifact is not None:
+            from .article_analysis import (  # noqa: PLC0415
+                ARTIFACT_INPUT_VIEW_VERSION,
+                FEED_INPUT_VIEW_VERSION,
+                analysis_input_text,
+            )
+
+            analyzed_count = int(analysis["analyzed_char_count"])
+            input_count = int(analysis["input_char_count"])
+            if analyzed_count < 1 or analyzed_count > input_count:
+                _issue(issues, "analysis_input_bounds_invalid", "analyzed character count is outside the full input")
+            else:
+                content = {
+                    "available": True,
+                    "normalized_text": artifact["normalized_text"],
+                    "content_kind": artifact["content_kind"],
+                    "artifact_id": artifact["id"],
+                    "normalized_content_hash": artifact["normalized_content_hash"],
+                }
+                _title, reconstructed_text = analysis_input_text(content)
+                reconstructed_slice = reconstructed_text[:analyzed_count]
+                reconstructed_view_version = (
+                    FEED_INPUT_VIEW_VERSION
+                    if artifact["content_kind"] == "feed_metadata"
+                    else ARTIFACT_INPUT_VIEW_VERSION
+                )
+                reconstructed_input_hash = hashlib.sha256(reconstructed_text.encode("utf-8")).hexdigest()
+                reconstructed_slice_hash = hashlib.sha256(reconstructed_slice.encode("utf-8")).hexdigest()
+                if len(reconstructed_text) != input_count:
+                    _issue(issues, "analysis_input_length_mismatch", "recorded full input length cannot be reconstructed")
+                if reconstructed_input_hash != analysis["input_content_hash"]:
+                    _issue(issues, "analysis_input_hash_mismatch", "recorded full input hash cannot be reconstructed")
+                if reconstructed_slice_hash != analysis["analyzed_content_hash"]:
+                    _issue(issues, "analysis_slice_hash_mismatch", "recorded analyzed slice hash cannot be reconstructed")
+                if reconstructed_view_version != analysis["input_view_version"]:
+                    _issue(issues, "analysis_input_view_mismatch", "recorded input view version is not canonical")
+                expected_truncated = analyzed_count < input_count
+                if bool(analysis["truncated"]) != expected_truncated:
+                    _issue(issues, "analysis_truncation_mismatch", "recorded truncation flag conflicts with input lengths")
+
         current_need_available = True
         current_need_status = "unbound"
         if monitor is not None and version is not None:
@@ -230,15 +278,41 @@ def validate_analysis_provenance(db_path: str | Path, analysis_id: str) -> dict[
             prompt_version=analysis["prompt_version"],
             provider=analysis["provider"],
             model=analysis["model"],
+            artifact_id=analysis["artifact_id"] if input_contract_complete else "",
+            normalized_content_hash=analysis["normalized_content_hash"] if input_contract_complete else "",
+            input_view_version=analysis["input_view_version"] or "",
+            input_content_hash=analysis["input_content_hash"] or "",
+            analyzed_content_hash=analysis["analyzed_content_hash"] or "",
         )
         if expected_identity != analysis["identity_hash"]:
             _issue(issues, "analysis_identity_mismatch", "analysis identity hash does not match its canonical fields")
+
+        invocation = None
+        if bool(analysis["paid"]):
+            if input_contract_complete and not analysis["invocation_id"]:
+                _issue(issues, "missing_analysis_invocation", "paid analysis has no durable invocation")
+            elif analysis["invocation_id"]:
+                invocation = conn.execute(
+                    "SELECT * FROM analysis_invocations WHERE id = ?",
+                    (analysis["invocation_id"],),
+                ).fetchone()
+                if invocation is None:
+                    _issue(issues, "missing_analysis_invocation", "paid analysis invocation is absent")
+                else:
+                    if invocation["state"] != "succeeded":
+                        _issue(issues, "analysis_invocation_not_succeeded", "paid invocation is not succeeded")
+                    for field in ("identity_hash", "document_version_id", "relevance_id", "monitor_id", "job_id"):
+                        if invocation[field] != analysis[field]:
+                            _issue(issues, "analysis_invocation_mismatch", f"paid invocation {field} does not match analysis")
+        elif analysis["invocation_id"] is not None:
+            _issue(issues, "unexpected_analysis_invocation", "local analysis claims a paid invocation")
 
         if issues:
             raise ProvenanceValidationError("; ".join(issues), issues=tuple(issues))
         return {
             "provenance_class": provenance_class,
-            "eligible_for_automatic_promotion": provenance_class == "automatic",
+            "eligible_for_automatic_promotion": provenance_class == "automatic" and input_contract_complete,
+            "input_contract_complete": input_contract_complete,
             "current_need_available": current_need_available,
             "current_need_status": current_need_status,
             "analysis": dict(analysis),
@@ -258,6 +332,7 @@ def validate_analysis_provenance(db_path: str | Path, analysis_id: str) -> dict[
             "monitor": dict(monitor),
             "scope_history": dict(scope_history),
             "job": dict(job) if job is not None else None,
+            "invocation": dict(invocation) if invocation is not None else None,
             "artifact": {
                 "id": artifact["id"],
                 "normalized_content_hash": artifact["normalized_content_hash"],

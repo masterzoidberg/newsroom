@@ -1665,6 +1665,55 @@ MIGRATION_0019_CHECKSUM = hashlib.sha256(
     "\n".join(MIGRATION_0019_STATEMENTS).encode("utf-8")
 ).hexdigest()
 
+# Phase 21H.2 — exact analysis-input provenance and immutable relevance.
+# Existing ArticleAnalysis rows remain readable with NULL v2 provenance, but
+# only newly-created rows carrying the complete contract can be eligible for
+# automatic evidence promotion.
+MIGRATION_0020_STATEMENTS: tuple[str, ...] = (
+    "ALTER TABLE article_analyses ADD COLUMN input_view_version TEXT",
+    "ALTER TABLE article_analyses ADD COLUMN input_content_hash TEXT",
+    "ALTER TABLE article_analyses ADD COLUMN analyzed_content_hash TEXT",
+    "ALTER TABLE article_analyses ADD COLUMN invocation_id TEXT REFERENCES analysis_invocations(id)",
+    "CREATE INDEX article_analyses_invocation_idx ON article_analyses(invocation_id)",
+    """
+    CREATE TRIGGER article_analyses_input_contract_insert
+    BEFORE INSERT ON article_analyses
+    WHEN NEW.input_view_version IS NOT NULL
+         OR NEW.input_content_hash IS NOT NULL
+         OR NEW.analyzed_content_hash IS NOT NULL
+    BEGIN
+        SELECT CASE WHEN NEW.input_view_version IS NULL
+                          OR NEW.input_content_hash IS NULL
+                          OR NEW.analyzed_content_hash IS NULL
+                          OR NEW.input_char_count < 1
+                          OR NEW.analyzed_char_count < 1
+                          OR NEW.analyzed_char_count > NEW.input_char_count
+                          OR NEW.truncated != (NEW.analyzed_char_count < NEW.input_char_count)
+                          OR (NEW.paid = 1 AND NEW.invocation_id IS NULL)
+                          OR (NEW.paid = 0 AND NEW.invocation_id IS NOT NULL)
+                    THEN RAISE(ABORT, 'invalid article analysis input contract') END;
+    END
+    """,
+    """
+    CREATE TRIGGER document_version_relevance_immutable_update
+    BEFORE UPDATE ON document_version_relevance
+    BEGIN
+        SELECT RAISE(ABORT, 'document version relevance is immutable');
+    END
+    """,
+    """
+    CREATE TRIGGER document_version_relevance_immutable_delete
+    BEFORE DELETE ON document_version_relevance
+    BEGIN
+        SELECT RAISE(ABORT, 'document version relevance is immutable');
+    END
+    """,
+)
+
+MIGRATION_0020_CHECKSUM = hashlib.sha256(
+    "\n".join(MIGRATION_0020_STATEMENTS).encode("utf-8")
+).hexdigest()
+
 
 @dataclass(frozen=True)
 class MigrationResult:
@@ -1727,6 +1776,7 @@ def apply_migrations(db_path: Optional[str | Path] = None) -> MigrationResult:
                 17: MIGRATION_0017_STATEMENTS,
                 18: MIGRATION_0018_STATEMENTS,
                 19: MIGRATION_0019_STATEMENTS,
+                20: MIGRATION_0020_STATEMENTS,
             }
             for version, statements in migrations.items():
                 if version in existing:

@@ -327,7 +327,10 @@ artifact.
 Phase 18 loader). Nothing re-fetches the URL, accepts `candidate_text`, or
 trusts processing payload article content. HTML/text/fallback artifacts
 analyze their exact normalized visible text; feed metadata artifacts analyze
-the entry title+summary from the exact persisted metadata JSON. Input is
+the exact JSON-decoded title plus one newline plus exact JSON-decoded summary
+from the persisted metadata JSON. The newline is retained when either field is
+empty; when both underlying fields contain no meaningful text the canonical
+view still exists but is separately ineligible for analysis. Input is
 bounded by `NEWSROOM_ANALYSIS_MAX_INPUT_CHARS` (default 24,000) with
 deterministic sentence/paragraph-boundary truncation; `input_char_count`,
 `analyzed_char_count`, and `truncated` are persisted with the record.
@@ -639,7 +642,7 @@ rebinding without changing the persisted canonical URL contract.
 Phase 22 remains blocked until 21H re-review. No EvidenceSpan, Claim, Story,
 Report, or Alert automation is introduced by this hardening phase.
 
-The current applied schema is migration 0019 / schema version 19 (see
+The current applied schema is migration 0020 / schema version 20 (see
 `newsroom/migrations.py`). Migration 0015 added the Phase 18 content artifact
 substrate; migration 0016 added the Phase 19 processing-ownership column
 (`jobs.document_version_id`), the durable result column (`jobs.result_json`),

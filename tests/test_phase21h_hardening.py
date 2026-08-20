@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import socket
 import sqlite3
@@ -13,9 +14,15 @@ import pytest
 from newsroom import storage
 from newsroom.acquisition import AcquisitionBlocked, AcquisitionPolicy, UrllibHttpTransport
 from newsroom.ai import AIProviderError, AIDisabled, ArticleAnalysisRequest
-from newsroom.article_analysis import AnalysisProviderConfig, ArticleAnalysisService
+from newsroom.article_analysis import (
+    AnalysisProviderConfig,
+    ArticleAnalysisService,
+    analysis_identity_hash,
+    build_analysis_input,
+    canonical_feed_analysis_view,
+)
 from newsroom.content_artifacts import ContentArtifactService, normalized_text_hash
-from newsroom.domain import CoreService
+from newsroom.domain import CoreService, DomainValidation
 from newsroom.document_processing import DocumentProcessingExecutionService, enqueue_document_version_processing_tx
 from newsroom.integrity import check_database
 from newsroom.jobs import BudgetService, JobService
@@ -72,6 +79,16 @@ def _get(db: Path, sql: str, params: tuple[Any, ...] = ()) -> storage.sqlite3.Ro
         return conn.execute(sql, params).fetchone()
     finally:
         conn.close()
+
+
+def _disable_relevance_immutability_for_corruption_test(db: Path) -> None:
+    """Allow legacy validator tests to manufacture impossible restored state."""
+    raw = sqlite3.connect(str(db))
+    try:
+        raw.execute("DROP TRIGGER document_version_relevance_immutable_update")
+        raw.commit()
+    finally:
+        raw.close()
 
 
 def _setup_analysis(db: Path, *, suffix: str = "") -> dict[str, Any]:
@@ -243,6 +260,7 @@ def _attach_automatic_processing_job(db: Path, fixture: dict[str, Any], *, key: 
         document_version_id=fixture["version_id"],
         idempotency_key=key,
     )
+    _disable_relevance_immutability_for_corruption_test(db)
     conn = storage.connect(db)
     try:
         with storage.write_tx(conn):
@@ -286,17 +304,19 @@ def _insert_version_for_future_processing(db: Path, fixture: dict[str, Any], ide
 
 
 def test_phase21h_migration_is_additive_and_idempotent(tmp_db):
-    assert apply_migrations(tmp_db).current_version == 19
+    assert apply_migrations(tmp_db).current_version == 20
     assert apply_migrations(tmp_db).applied_versions == ()
-    assert migration_status(tmp_db)[-1] == 19
+    assert migration_status(tmp_db)[-1] == 20
     conn = storage.connect(tmp_db)
     try:
         tables = {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
         columns = {row[1] for row in conn.execute("PRAGMA table_info(provider_usage)")}
+        analysis_columns = {row[1] for row in conn.execute("PRAGMA table_info(article_analyses)")}
     finally:
         conn.close()
     assert "analysis_invocations" in tables
     assert "invocation_id" in columns
+    assert {"input_view_version", "input_content_hash", "analyzed_content_hash", "invocation_id"} <= analysis_columns
 
 
 def test_paid_reservation_exists_before_call_and_limit_blocks_next_analysis(tmp_db):
@@ -427,6 +447,7 @@ def test_retryable_paid_reauthorization_rechecks_job_limit(tmp_db):
         document_version_id=fixture["version_id"],
         idempotency_key="phase21h1-job-budget",
     )
+    _disable_relevance_immutability_for_corruption_test(tmp_db)
     conn = storage.connect(tmp_db)
     try:
         with storage.write_tx(conn):
@@ -545,6 +566,7 @@ def test_provenance_validator_rejects_cross_reference_corruption(tmp_db):
     assert bundle["analysis"]["id"] == analysis["id"]
 
     other = _setup_analysis(tmp_db, suffix="b")
+    _disable_relevance_immutability_for_corruption_test(tmp_db)
     conn = storage.connect(tmp_db)
     try:
         with storage.write_tx(conn):
@@ -710,6 +732,7 @@ def test_automatic_analysis_wrong_document_version_is_rejected(tmp_db):
     fixture = _setup_analysis(tmp_db)
     other = _setup_analysis(tmp_db, suffix="b")
     analysis = _analyze(ArticleAnalysisService(tmp_db, config=AnalysisProviderConfig(provider="local")), fixture)
+    _disable_relevance_immutability_for_corruption_test(tmp_db)
     conn = storage.connect(tmp_db)
     try:
         with storage.write_tx(conn):
@@ -742,6 +765,7 @@ def test_automatic_analysis_wrong_monitor_is_rejected(tmp_db):
     fixture = _setup_analysis(tmp_db)
     other = _setup_analysis(tmp_db, suffix="b")
     analysis = _analyze(ArticleAnalysisService(tmp_db, config=AnalysisProviderConfig(provider="local")), fixture)
+    _disable_relevance_immutability_for_corruption_test(tmp_db)
     conn = storage.connect(tmp_db)
     try:
         with storage.write_tx(conn):
@@ -759,6 +783,7 @@ def test_automatic_analysis_wrong_monitor_is_rejected(tmp_db):
 def test_automatic_analysis_wrong_scope_version_is_rejected(tmp_db):
     fixture = _setup_analysis(tmp_db)
     analysis = _analyze(ArticleAnalysisService(tmp_db, config=AnalysisProviderConfig(provider="local")), fixture)
+    _disable_relevance_immutability_for_corruption_test(tmp_db)
     conn = storage.connect(tmp_db)
     try:
         with storage.write_tx(conn):
@@ -776,6 +801,7 @@ def test_automatic_analysis_wrong_scope_version_is_rejected(tmp_db):
 def test_automatic_analysis_scope_snapshot_mismatch_is_rejected(tmp_db):
     fixture = _setup_analysis(tmp_db)
     analysis = _analyze(ArticleAnalysisService(tmp_db, config=AnalysisProviderConfig(provider="local")), fixture)
+    _disable_relevance_immutability_for_corruption_test(tmp_db)
     conn = storage.connect(tmp_db)
     try:
         with storage.write_tx(conn):
@@ -885,3 +911,355 @@ def test_automatic_analysis_eligibility_survives_need_deletion(tmp_db):
     # Eligibility is judged on the historical chain, not the current need.
     assert bundle["provenance_class"] == "automatic"
     assert bundle["eligible_for_automatic_promotion"] is True
+
+
+# ---------------------------------------------------------------------------
+# Phase 21H.2 — exact input identity and immutable pre-evidence provenance
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("title", "summary", "expected"),
+    (
+        ("Title", "Summary", "Title\nSummary"),
+        ("Title", "", "Title\n"),
+        ("", "Summary", "\nSummary"),
+        ("", "", "\n"),
+        ("  Café 🛰️  ", " summary  text ", "  Café 🛰️  \n summary  text "),
+        ("Line one\nLine two", "Summary\ncontinued", "Line one\nLine two\nSummary\ncontinued"),
+    ),
+)
+def test_feed_analysis_view_is_exact_title_newline_summary(title, summary, expected):
+    metadata = {"title": title, "summary": summary, "url": "https://example.test"}
+    assert canonical_feed_analysis_view(metadata) == expected
+    if title or summary:
+        raw = json.dumps(metadata, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+        contract = build_analysis_input(
+            {"content_kind": "feed_metadata", "normalized_text": raw},
+            10_000,
+        )
+        assert contract.text == expected
+        assert contract.analyzed_text == expected
+        assert contract.view_version == "feed_entry_projection_v1"
+        assert contract.input_content_hash == hashlib.sha256(expected.encode("utf-8")).hexdigest()
+
+
+def test_empty_feed_projection_fails_closed():
+    assert canonical_feed_analysis_view({"title": "", "summary": ""}) == "\n"
+    with pytest.raises(DomainValidation, match="artifact text is empty"):
+        build_analysis_input(
+            {"content_kind": "feed_metadata", "normalized_text": '{"title":"","summary":"","url":"https://example.test"}'},
+            10_000,
+        )
+
+
+def test_feed_artifact_and_analysis_view_hashes_are_independent(tmp_db):
+    fixture = _setup_analysis(tmp_db)
+    metadata = {
+        "published_at": "2026-08-20T12:00:00Z",
+        "summary": "Line one\nLine two",
+        "title": "  UAP report ☄  ",
+        "url": "https://example.test/uap-feed",
+    }
+    persisted_json = json.dumps(metadata, sort_keys=True, separators=(",", ":"))
+    artifact = ContentArtifactService(tmp_db).create(
+        normalized_text=persisted_json,
+        content_kind="feed_metadata",
+    )
+    version_id = "dv_phase21h_feed_hash_domains"
+    conn = storage.connect(tmp_db)
+    try:
+        with storage.write_tx(conn):
+            conn.execute(
+                """
+                INSERT INTO document_versions
+                    (id, document_id, retrieved_at, content_hash, content_kind,
+                     artifact_id, normalized_json, created_at)
+                VALUES (?, ?, ?, ?, 'metadata', ?, ?, ?)
+                """,
+                (
+                    version_id,
+                    fixture["document"]["id"],
+                    T0,
+                    artifact["normalized_content_hash"],
+                    artifact["id"],
+                    persisted_json,
+                    T0,
+                ),
+            )
+    finally:
+        conn.close()
+    fixture["version_id"] = version_id
+    fixture["artifact"] = artifact
+    fixture["relevance"] = DocumentVersionRelevanceService(tmp_db).persist_decision(
+        job_id=None,
+        document_version_id=version_id,
+        monitor_id=fixture["monitor"]["id"],
+        scope_version=1,
+        scope=MonitorService(tmp_db).scope_at_version(fixture["monitor"]["id"], 1),
+        result=RelevanceResult(True, "exact", 1.0, ("UAP",), "match"),
+        observed_at=T0,
+    )
+    job = _attach_automatic_processing_job(tmp_db, fixture, key="feed-hash-domains")
+    analysis = _analyze(
+        ArticleAnalysisService(tmp_db, config=AnalysisProviderConfig(provider="local")),
+        fixture,
+        job_id=job["id"],
+    )
+
+    persisted_artifact = ContentArtifactService(tmp_db).verify(artifact["id"])
+    view = canonical_feed_analysis_view(json.loads(persisted_artifact["normalized_text"]))
+    artifact_hash = normalized_text_hash(persisted_artifact["normalized_text"])
+    view_hash = normalized_text_hash(view)
+
+    assert artifact_hash == persisted_artifact["normalized_content_hash"]
+    assert view == "  UAP report ☄  \nLine one\nLine two"
+    assert view_hash == analysis["input_content_hash"]
+    assert persisted_artifact["normalized_text"] != view
+    assert artifact_hash != view_hash
+    bundle = validate_analysis_provenance(tmp_db, analysis["id"])
+    assert bundle["eligible_for_automatic_promotion"] is True
+    assert bundle["artifact"]["normalized_content_hash"] == artifact_hash
+    assert bundle["analysis"]["input_content_hash"] == view_hash
+
+
+def test_analysis_identity_changes_with_analyzed_slice():
+    common = {
+        "document_version_id": "dv",
+        "relevance_id": "rel",
+        "scope_version": 1,
+        "schema_version": "schema",
+        "prompt_version": "prompt",
+        "provider": "local",
+        "model": "local",
+        "artifact_id": "art",
+        "normalized_content_hash": "artifact-hash",
+        "input_view_version": "artifact_norm_v1",
+        "input_content_hash": "full-input-hash",
+    }
+    assert analysis_identity_hash(**common, analyzed_content_hash="slice-a") != analysis_identity_hash(
+        **common, analyzed_content_hash="slice-b"
+    )
+
+
+def test_analysis_identity_reuses_same_slice_across_different_limits(tmp_db):
+    fixture = _setup_analysis(tmp_db)
+    first = _analyze(
+        ArticleAnalysisService(tmp_db, config=AnalysisProviderConfig(provider="local", max_input_chars=100)),
+        fixture,
+    )
+    second = _analyze(
+        ArticleAnalysisService(tmp_db, config=AnalysisProviderConfig(provider="local", max_input_chars=200)),
+        fixture,
+    )
+    assert first["analyzed_content_hash"] == second["analyzed_content_hash"]
+    assert first["identity_hash"] == second["identity_hash"]
+    assert first["id"] == second["id"]
+    assert _get(tmp_db, "SELECT COUNT(*) FROM article_analyses")[0] == 1
+
+
+def test_analysis_identity_changes_when_different_limits_change_the_slice(tmp_db):
+    fixture = _setup_analysis(tmp_db)
+    first = _analyze(
+        ArticleAnalysisService(tmp_db, config=AnalysisProviderConfig(provider="local", max_input_chars=10)),
+        fixture,
+    )
+    second = _analyze(
+        ArticleAnalysisService(tmp_db, config=AnalysisProviderConfig(provider="local", max_input_chars=20)),
+        fixture,
+    )
+    assert first["analyzed_content_hash"] != second["analyzed_content_hash"]
+    assert first["identity_hash"] != second["identity_hash"]
+    assert first["id"] != second["id"]
+    assert _get(tmp_db, "SELECT COUNT(*) FROM article_analyses")[0] == 2
+
+
+def test_relevance_rows_are_database_immutable(tmp_db):
+    fixture = _setup_analysis(tmp_db)
+    conn = storage.connect(tmp_db)
+    try:
+        with pytest.raises(sqlite3.IntegrityError, match="relevance is immutable"):
+            with storage.write_tx(conn):
+                conn.execute(
+                    "UPDATE document_version_relevance SET reason = 'tampered' WHERE id = ?",
+                    (fixture["relevance"]["id"],),
+                )
+        with pytest.raises(sqlite3.IntegrityError, match="relevance is immutable"):
+            with storage.write_tx(conn):
+                conn.execute(
+                    "DELETE FROM document_version_relevance WHERE id = ?",
+                    (fixture["relevance"]["id"],),
+                )
+    finally:
+        conn.close()
+
+
+@pytest.mark.parametrize(
+    ("assignment", "expected_issue"),
+    (
+        ("input_content_hash = 'tampered'", "analysis_input_hash_mismatch"),
+        ("input_char_count = input_char_count + 1", "analysis_input_length_mismatch"),
+        ("analyzed_char_count = analyzed_char_count - 1", "analysis_slice_hash_mismatch"),
+        ("analyzed_char_count = input_char_count + 1", "analysis_input_bounds_invalid"),
+        ("truncated = 1", "analysis_truncation_mismatch"),
+        (
+            "analyzed_char_count = analyzed_char_count - 1, truncated = 0",
+            "analysis_truncation_mismatch",
+        ),
+        ("analyzed_content_hash = 'tampered'", "analysis_slice_hash_mismatch"),
+    ),
+)
+def test_provenance_rejects_tampered_analysis_input_contract(
+    tmp_db, assignment, expected_issue
+):
+    fixture = _setup_analysis(tmp_db)
+    analysis = _analyze(
+        ArticleAnalysisService(tmp_db, config=AnalysisProviderConfig(provider="local")),
+        fixture,
+    )
+    raw = sqlite3.connect(str(tmp_db))
+    try:
+        raw.execute("DROP TRIGGER article_analyses_immutable_update")
+        raw.execute(
+            f"UPDATE article_analyses SET {assignment} WHERE id = ?",
+            (analysis["id"],),
+        )
+        raw.commit()
+    finally:
+        raw.close()
+    with pytest.raises(ProvenanceValidationError) as excinfo:
+        validate_analysis_provenance(tmp_db, analysis["id"])
+    assert any(issue.startswith(expected_issue) for issue in excinfo.value.issues)
+    assert _get(tmp_db, "SELECT COUNT(*) FROM evidence_spans")[0] == 0
+    assert _get(tmp_db, "SELECT COUNT(*) FROM claims")[0] == 0
+
+
+@pytest.mark.parametrize("state", ("running", "uncertain", "failed_terminal"))
+def test_paid_analysis_rejects_non_succeeded_invocation_states(tmp_db, state):
+    fixture = _setup_analysis(tmp_db)
+    BudgetService(tmp_db).set_paid_enabled(True)
+    analysis = _analyze(_service(tmp_db, CountingProvider()), fixture)
+    conn = storage.connect(tmp_db)
+    try:
+        with storage.write_tx(conn):
+            conn.execute(
+                "UPDATE analysis_invocations SET state = ? WHERE id = ?",
+                (state, analysis["invocation_id"]),
+            )
+    finally:
+        conn.close()
+    with pytest.raises(ProvenanceValidationError) as excinfo:
+        validate_analysis_provenance(tmp_db, analysis["id"])
+    assert any(issue.startswith("analysis_invocation_not_succeeded") for issue in excinfo.value.issues)
+
+
+@pytest.mark.parametrize(
+    ("assignment", "params"),
+    (
+        ("invocation_id = NULL", ()),
+        ("invocation_id = ?", ("inv_missing",)),
+    ),
+)
+def test_paid_analysis_rejects_missing_invocation_linkage(tmp_db, assignment, params):
+    fixture = _setup_analysis(tmp_db)
+    BudgetService(tmp_db).set_paid_enabled(True)
+    analysis = _analyze(_service(tmp_db, CountingProvider()), fixture)
+    raw = sqlite3.connect(str(tmp_db))
+    try:
+        raw.execute("DROP TRIGGER article_analyses_immutable_update")
+        raw.execute(
+            f"UPDATE article_analyses SET {assignment} WHERE id = ?",
+            (*params, analysis["id"]),
+        )
+        raw.commit()
+    finally:
+        raw.close()
+    with pytest.raises(ProvenanceValidationError) as excinfo:
+        validate_analysis_provenance(tmp_db, analysis["id"])
+    assert any(issue.startswith("missing_analysis_invocation") for issue in excinfo.value.issues)
+
+
+@pytest.mark.parametrize(
+    "assignment",
+    (
+        "identity_hash = 'wrong-identity'",
+        "document_version_id = 'wrong-version'",
+        "relevance_id = 'wrong-relevance'",
+        "monitor_id = 'wrong-monitor'",
+        "job_id = 'wrong-job'",
+    ),
+)
+def test_paid_analysis_rejects_mismatched_invocation_provenance(tmp_db, assignment):
+    fixture = _setup_analysis(tmp_db)
+    job = _attach_automatic_processing_job(tmp_db, fixture, key=f"paid-mismatch-{assignment}")
+    BudgetService(tmp_db).set_paid_enabled(True)
+    analysis = _analyze(_service(tmp_db, CountingProvider()), fixture, job_id=job["id"])
+    raw = sqlite3.connect(str(tmp_db))
+    try:
+        raw.execute(
+            f"UPDATE analysis_invocations SET {assignment} WHERE id = ?",
+            (analysis["invocation_id"],),
+        )
+        raw.commit()
+    finally:
+        raw.close()
+    with pytest.raises(ProvenanceValidationError) as excinfo:
+        validate_analysis_provenance(tmp_db, analysis["id"])
+    assert any(issue.startswith("analysis_invocation_mismatch") for issue in excinfo.value.issues)
+
+
+def test_paid_succeeded_matching_invocation_is_automatically_eligible(tmp_db):
+    fixture = _setup_analysis(tmp_db)
+    job = _attach_automatic_processing_job(tmp_db, fixture, key="paid-valid-v2")
+    BudgetService(tmp_db).set_paid_enabled(True)
+    analysis = _analyze(_service(tmp_db, CountingProvider()), fixture, job_id=job["id"])
+    bundle = validate_analysis_provenance(tmp_db, analysis["id"])
+    usage = _get(
+        tmp_db,
+        "SELECT * FROM provider_usage WHERE invocation_id = ?",
+        (analysis["invocation_id"],),
+    )
+    assert bundle["eligible_for_automatic_promotion"] is True
+    assert bundle["invocation"]["state"] == "succeeded"
+    assert usage is not None
+    assert usage["request_type"] == "ai:paid"
+    assert json.loads(usage["outcome"])["route"] == "paid"
+
+
+def test_legacy_analysis_remains_readable_but_is_not_automatically_eligible(tmp_db):
+    fixture = _setup_analysis(tmp_db)
+    job = _attach_automatic_processing_job(tmp_db, fixture, key="legacy-v1-analysis")
+    analysis = _analyze(
+        ArticleAnalysisService(tmp_db, config=AnalysisProviderConfig(provider="local")),
+        fixture,
+        job_id=job["id"],
+    )
+    legacy_identity = analysis_identity_hash(
+        document_version_id=analysis["document_version_id"],
+        relevance_id=analysis["relevance_id"],
+        scope_version=analysis["scope_version"],
+        schema_version=analysis["schema_version"],
+        prompt_version=analysis["prompt_version"],
+        provider=analysis["provider"],
+        model=analysis["model"],
+    )
+    raw = sqlite3.connect(str(tmp_db))
+    try:
+        raw.execute("DROP TRIGGER article_analyses_immutable_update")
+        raw.execute(
+            """
+            UPDATE article_analyses
+            SET input_view_version = NULL, input_content_hash = NULL,
+                analyzed_content_hash = NULL, identity_hash = ?
+            WHERE id = ?
+            """,
+            (legacy_identity, analysis["id"]),
+        )
+        raw.commit()
+    finally:
+        raw.close()
+    readable = ArticleAnalysisService(tmp_db).get(analysis["id"])
+    bundle = validate_analysis_provenance(tmp_db, analysis["id"])
+    assert readable["id"] == analysis["id"]
+    assert bundle["input_contract_complete"] is False
+    assert bundle["eligible_for_automatic_promotion"] is False
