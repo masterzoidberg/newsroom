@@ -72,8 +72,14 @@ manual harness is `scripts/live_test_b.py` (never part of CI, no secrets, tiny
 bounded budget). Model input always comes from the verified Phase 18
 artifact; candidate Claims/Excerpts remain proposals — Phase 21 never creates
 accepted Evidence/Claims, Stories, Reports, or Alerts (Phase 22 is the
-verification boundary). The current applied schema is migration 0020 / schema
-version 20; Phase 22 remains blocked pending Phase 21H re-review. Only `source`
+verification boundary). Phase 22 now validates the complete Phase 21H.2
+provenance chain, reconstructs the exact analyzed slice, verifies candidate
+excerpts by unique exact code-point match, and atomically persists immutable
+verified EvidenceSpans, pending Claims, and ClaimEvidence links. Ambiguous,
+fabricated, and out-of-slice candidates fail closed; model offsets are never
+trusted, and legacy/manual spans remain distinct. The current applied schema
+is migration 0021 / schema version 21. Story, Report, and Alert automation
+remain Phase 23. Only `source`
 Monitor targets perform real acquisition today;
 `topic`, `subject`, `story`, and `research_question` are accepted by the
 schema/API but explicitly unsupported at runtime

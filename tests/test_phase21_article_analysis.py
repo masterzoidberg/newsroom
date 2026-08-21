@@ -620,7 +620,7 @@ def test_malformed_provider_output_fails_validation(tmp_db):
 # ---------------------------------------------------------------------------
 
 
-def test_candidate_claims_and_excerpts_stored_only_inside_analysis_result(tmp_db):
+def test_candidate_claims_and_excerpts_are_promoted_but_stop_before_stories(tmp_db):
     apply_migrations(tmp_db)
     version_id, _monitor_id, _transport = _setup_relevant(tmp_db)
     finished = _processing_worker(tmp_db).run_once(now=T1)
@@ -632,10 +632,11 @@ def test_candidate_claims_and_excerpts_stored_only_inside_analysis_result(tmp_db
     assert record["result"]["candidate_evidence_excerpts"]
     # The job outcome carries only bounded metadata (no full result blob).
     assert "result" not in finished["result"]["analysis"]
-    # Candidate output never reaches canonical tables.
-    assert _count(tmp_db, "evidence_spans") == 0
-    assert _count(tmp_db, "claims") == 0
-    assert _count(tmp_db, "claim_evidence") == 0
+    # Phase 22 locally verifies candidates into canonical evidence and pending
+    # claims while still stopping before every Story/report/alert path.
+    assert _count(tmp_db, "evidence_spans") > 0
+    assert _count(tmp_db, "claims") > 0
+    assert _count(tmp_db, "claim_evidence") > 0
     assert _count(tmp_db, "stories") == 0
     assert _count(tmp_db, "story_revisions") == 0
     assert _count(tmp_db, "living_reports") == 0
@@ -667,7 +668,9 @@ def test_prompt_injection_cannot_alter_schema_or_provider_configuration(tmp_db):
         paid_provider_factory=lambda cfg: OpenAICompatibleArticleAnalysisProvider(cfg, client_factory=lambda c: client),
     )
     finished = _processing_worker(tmp_db, analysis_service=service).run_once(now=T1)
-    assert finished["status"] == "succeeded"
+    # Analysis remains schema-safe, but Phase 22 correctly fails the Job
+    # because this scripted output fabricates excerpts not present verbatim.
+    assert finished["status"] == "failed"
     messages = captured["kwargs"]["messages"]
     assert messages[0]["role"] == "system"
     assert messages[0]["content"] == SYSTEM_PROMPT
@@ -1273,9 +1276,11 @@ def test_production_composition_relevant_and_irrelevant(tmp_db):
     assert analysis["provider"] == "local"
     assert analysis["paid"] is False
 
-    # No accepted evidence automation anywhere.
-    for table in ("evidence_spans", "claims", "claim_evidence", "stories", "story_revisions",
-                  "story_evolution_events", "living_reports", "alerts", "briefings"):
+    assert _count(tmp_db, "evidence_spans") > 0
+    assert _count(tmp_db, "claims") > 0
+    assert _count(tmp_db, "claim_evidence") > 0
+    # Phase 22 stops before downstream intelligence automation.
+    for table in ("stories", "story_revisions", "story_evolution_events", "living_reports", "alerts", "briefings"):
         assert _count(tmp_db, table) == 0, table
     conn = storage.connect(tmp_db)
     try:
@@ -1399,7 +1404,9 @@ def test_truncation_is_deterministic_and_recorded(tmp_db):
         config=AnalysisProviderConfig(provider="local", max_input_chars=2000),
     )
     finished = _processing_worker(tmp_db, analysis_service=service).run_once(now=T1)
-    assert finished["status"] == "succeeded"
+    # The repeated exact sentence is ambiguous evidence, so Phase 22 fails
+    # closed after the durable truncation-aware analysis is recorded.
+    assert finished["status"] == "failed"
     record = _analysis_records(tmp_db)[0]
     assert record["input_char_count"] == artifact["text_length"]
     assert record["analyzed_char_count"] <= 2000
@@ -1459,10 +1466,10 @@ def test_uap_fixture_structured_analysis_demonstrates_all_fields(tmp_db):
 
 
 def test_migration_0018_fresh_upgrade_and_rerun(tmp_db):
-    # Fresh DB migrates 1..20 with schema_version 20.
+    # Fresh DB migrates through the current schema.
     apply_migrations(tmp_db)
-    assert migration_status(tmp_db) == tuple(range(1, 21))
-    assert _get(tmp_db, "SELECT value FROM app_meta WHERE key = 'schema_version'")[0] == "20"
+    assert migration_status(tmp_db) == tuple(range(1, 22))
+    assert _get(tmp_db, "SELECT value FROM app_meta WHERE key = 'schema_version'")[0] == "21"
     assert _count(tmp_db, "article_analyses") == 0
 
     # Upgrade: a schema-17 DB upgrades safely with data preserved.
@@ -1510,17 +1517,17 @@ def test_migration_0018_fresh_upgrade_and_rerun(tmp_db):
         conn.close()
 
     result = apply_migrations(db2)
-    assert result.applied_versions == (18, 19, 20)
-    assert result.current_version == 20
-    assert migration_status(db2) == tuple(range(1, 21))
-    assert _get(db2, "SELECT value FROM app_meta WHERE key = 'schema_version'")[0] == "20"
+    assert result.applied_versions == (18, 19, 20, 21)
+    assert result.current_version == 21
+    assert migration_status(db2) == tuple(range(1, 22))
+    assert _get(db2, "SELECT value FROM app_meta WHERE key = 'schema_version'")[0] == "21"
     assert _get(db2, "SELECT name FROM sources WHERE id = 'src-old21'")[0] == "Old"
     assert _count(db2, "article_analyses") == 0
 
     # Rerun is a no-op.
     result = apply_migrations(db2)
     assert result.applied_versions == ()
-    assert result.current_version == 20
+    assert result.current_version == 21
     assert check_database(db2).ok is True
 
 

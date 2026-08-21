@@ -205,9 +205,9 @@ class DocumentProcessingExecutionService:
     Phase 21 (article analysis): when the persisted decision is
     ``relevant=true``, the handler additionally runs the structured
     article-analysis stage against the exact verified artifact and persists a
-    durable ArticleAnalysis before completing. That stage is provider-neutral
-    and remains a proposal only: candidate Claims/Excerpts never enter the
-    canonical Evidence/Claims tables here. Non-relevant, not-applicable, and
+    durable ArticleAnalysis before completing. Phase 22 then validates the
+    full analysis provenance and promotes only uniquely matched excerpts into
+    canonical Evidence/Claims tables. Non-relevant, not-applicable, and
     relevance-failure outcomes complete without any analysis provider call.
 
     Outcome semantics are explicit:
@@ -230,10 +230,12 @@ class DocumentProcessingExecutionService:
         *,
         artifacts: ContentArtifactService | None = None,
         analysis_service: Any | None = None,
+        promotion_service: Any | None = None,
     ):
         self.db_path = Path(db_path)
         self.artifacts = artifacts or ContentArtifactService(db_path)
         self.analysis_service = analysis_service
+        self.promotion_service = promotion_service
 
     def _analysis(self) -> Any:
         if self.analysis_service is None:
@@ -241,6 +243,13 @@ class DocumentProcessingExecutionService:
 
             self.analysis_service = ArticleAnalysisService(self.db_path)
         return self.analysis_service
+
+    def _promotion(self) -> Any:
+        if self.promotion_service is None:
+            from .evidence_promotion import ArticleAnalysisPromotionService  # noqa: PLC0415
+
+            self.promotion_service = ArticleAnalysisPromotionService(self.db_path)
+        return self.promotion_service
 
     def handlers(self) -> dict[str, Any]:
         return {DOCUMENT_VERSION_PROCESS_JOB_TYPE: self.handle}
@@ -313,6 +322,11 @@ class DocumentProcessingExecutionService:
         analysis = None
         if relevance.get("status") == "evaluated" and relevance.get("relevant") is True:
             analysis = self._run_article_analysis(job, row, content, relevance)
+            promotion = self._promotion().promote(analysis["id"])
+            if promotion["outcomes"] and not any(
+                item["code"] == "verified" for item in promotion["outcomes"]
+            ):
+                raise DomainValidation("article analysis promotion produced no verified evidence")
         result: dict[str, Any] = {
             "document_version_id": version_id,
             "document_id": row["document_id"],
@@ -328,6 +342,17 @@ class DocumentProcessingExecutionService:
         }
         if analysis is not None:
             result["analysis"] = analysis
+            result["promotion"] = {
+                "article_analysis_id": promotion["article_analysis_id"],
+                "outcomes": [
+                    {
+                        "code": item["code"],
+                        "claim_id": item["claim_id"],
+                        "evidence_span_ids": item["evidence_span_ids"],
+                    }
+                    for item in promotion["outcomes"]
+                ],
+            }
         return result
 
     def _run_article_analysis(
@@ -344,7 +369,7 @@ class DocumentProcessingExecutionService:
         transaction is held while the analysis provider is called. The durable
         ArticleAnalysis (with its telemetry) is persisted before the handler
         returns; a provider failure therefore never falsely records processing
-        success. No candidate evidence is promoted to EvidenceSpans/Claims.
+        success. Phase 22 promotion runs immediately afterward.
         The job outcome carries bounded analysis metadata; the full validated
         structured result lives only in ``article_analyses.result_json``.
         """

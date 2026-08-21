@@ -1714,6 +1714,133 @@ MIGRATION_0020_CHECKSUM = hashlib.sha256(
     "\n".join(MIGRATION_0020_STATEMENTS).encode("utf-8")
 ).hexdigest()
 
+# Phase 22 — locally verified evidence and canonical unassigned Claims.
+# SQLite cannot remove the historical claims.story_id NOT NULL constraint in
+# place. legacy_alter_table keeps existing child FKs pointed at the canonical
+# table name while the rows are copied losslessly into the widened table.
+MIGRATION_0021_STATEMENTS: tuple[str, ...] = (
+    "ALTER TABLE evidence_spans ADD COLUMN article_analysis_id TEXT REFERENCES article_analyses(id)",
+    "ALTER TABLE evidence_spans ADD COLUMN artifact_id TEXT REFERENCES content_artifacts(id)",
+    "ALTER TABLE evidence_spans ADD COLUMN artifact_content_hash TEXT",
+    "ALTER TABLE evidence_spans ADD COLUMN view_content_hash TEXT",
+    "ALTER TABLE evidence_spans ADD COLUMN view_kind TEXT CHECK (view_kind IN ('artifact', 'feed'))",
+    "ALTER TABLE evidence_spans ADD COLUMN view_version TEXT",
+    "ALTER TABLE evidence_spans ADD COLUMN field_path TEXT",
+    "ALTER TABLE evidence_spans ADD COLUMN start_offset INTEGER",
+    "ALTER TABLE evidence_spans ADD COLUMN end_offset INTEGER",
+    "ALTER TABLE evidence_spans ADD COLUMN verification_method TEXT",
+    "ALTER TABLE evidence_spans ADD COLUMN provenance_json TEXT",
+    "CREATE INDEX evidence_spans_analysis_idx ON evidence_spans(article_analysis_id)",
+    "DROP TRIGGER claims_accepted_text_immutable",
+    "DROP TRIGGER claims_acceptance_immutable",
+    "DROP TRIGGER claims_immutable_delete",
+    "PRAGMA legacy_alter_table = ON",
+    "ALTER TABLE claims RENAME TO claims_legacy_0021",
+    """
+    CREATE TABLE claims (
+        id TEXT PRIMARY KEY,
+        story_id TEXT REFERENCES stories(id) ON DELETE CASCADE,
+        proposition TEXT NOT NULL,
+        proposition_hash TEXT NOT NULL,
+        importance TEXT NOT NULL DEFAULT 'relevant' CHECK (importance IN ('major', 'relevant', 'peripheral')),
+        state TEXT NOT NULL DEFAULT 'pending' CHECK (state IN ('pending', 'supported', 'partially_supported', 'disputed', 'unsubstantiated', 'superseded')),
+        supersedes_claim_id TEXT REFERENCES claims(id),
+        article_analysis_id TEXT REFERENCES article_analyses(id),
+        candidate_claim_index INTEGER,
+        created_at TEXT NOT NULL,
+        accepted_at TEXT,
+        CHECK ((article_analysis_id IS NULL AND candidate_claim_index IS NULL AND story_id IS NOT NULL)
+            OR (article_analysis_id IS NOT NULL AND candidate_claim_index IS NOT NULL AND candidate_claim_index >= 0)),
+        UNIQUE (article_analysis_id, candidate_claim_index)
+    )
+    """,
+    """
+    INSERT INTO claims
+        (id, story_id, proposition, proposition_hash, importance, state,
+         supersedes_claim_id, created_at, accepted_at)
+    SELECT id, story_id, proposition, proposition_hash, importance, state,
+           supersedes_claim_id, created_at, accepted_at
+    FROM claims_legacy_0021
+    """,
+    "DROP TABLE claims_legacy_0021",
+    "PRAGMA legacy_alter_table = OFF",
+    """
+    CREATE TRIGGER claims_accepted_text_immutable
+    BEFORE UPDATE OF proposition, proposition_hash ON claims
+    WHEN OLD.accepted_at IS NOT NULL
+         AND (NEW.proposition IS NOT OLD.proposition OR NEW.proposition_hash IS NOT OLD.proposition_hash)
+    BEGIN
+        SELECT RAISE(ABORT, 'accepted claim text is immutable');
+    END
+    """,
+    """
+    CREATE TRIGGER claims_automatic_provenance_immutable
+    BEFORE UPDATE OF story_id, proposition, proposition_hash, article_analysis_id, candidate_claim_index ON claims
+    WHEN OLD.article_analysis_id IS NOT NULL
+    BEGIN
+        SELECT RAISE(ABORT, 'automatic claim provenance is immutable');
+    END
+    """,
+    """
+    CREATE TRIGGER claims_acceptance_immutable
+    BEFORE UPDATE OF accepted_at ON claims
+    WHEN OLD.accepted_at IS NOT NULL
+         AND NEW.accepted_at IS NOT OLD.accepted_at
+    BEGIN
+        SELECT RAISE(ABORT, 'claim acceptance is immutable');
+    END
+    """,
+    """
+    CREATE TRIGGER claims_immutable_delete
+    BEFORE DELETE ON claims
+    BEGIN
+        SELECT RAISE(ABORT, 'claims are append-only');
+    END
+    """,
+    """
+    CREATE TABLE article_analysis_promotions (
+        id TEXT PRIMARY KEY,
+        promotion_identity TEXT NOT NULL UNIQUE,
+        article_analysis_id TEXT NOT NULL REFERENCES article_analyses(id),
+        candidate_claim_index INTEGER NOT NULL CHECK (candidate_claim_index >= 0),
+        outcome_code TEXT NOT NULL,
+        claim_id TEXT REFERENCES claims(id),
+        evidence_span_ids_json TEXT NOT NULL DEFAULT '[]',
+        created_at TEXT NOT NULL,
+        UNIQUE (article_analysis_id, candidate_claim_index)
+    )
+    """,
+    "CREATE INDEX article_analysis_promotions_analysis_idx ON article_analysis_promotions(article_analysis_id)",
+    """
+    CREATE TRIGGER evidence_spans_verified_contract_insert
+    BEFORE INSERT ON evidence_spans
+    WHEN NEW.verification_method IS NOT NULL
+    BEGIN
+        SELECT CASE WHEN NEW.article_analysis_id IS NULL OR NEW.artifact_id IS NULL
+                          OR NEW.artifact_content_hash IS NULL OR NEW.view_content_hash IS NULL
+                          OR NEW.view_kind IS NULL OR NEW.view_version IS NULL
+                          OR NEW.start_offset IS NULL OR NEW.end_offset IS NULL
+                          OR NEW.start_offset < 0 OR NEW.end_offset <= NEW.start_offset
+                          OR NEW.provenance_json IS NULL
+                    THEN RAISE(ABORT, 'invalid verified evidence contract') END;
+    END
+    """,
+    """
+    CREATE TRIGGER article_analysis_promotions_immutable_update
+    BEFORE UPDATE ON article_analysis_promotions
+    BEGIN SELECT RAISE(ABORT, 'analysis promotions are immutable'); END
+    """,
+    """
+    CREATE TRIGGER article_analysis_promotions_immutable_delete
+    BEFORE DELETE ON article_analysis_promotions
+    BEGIN SELECT RAISE(ABORT, 'analysis promotions are immutable'); END
+    """,
+)
+
+MIGRATION_0021_CHECKSUM = hashlib.sha256(
+    "\n".join(MIGRATION_0021_STATEMENTS).encode("utf-8")
+).hexdigest()
+
 
 @dataclass(frozen=True)
 class MigrationResult:
@@ -1750,6 +1877,11 @@ def apply_migrations(db_path: Optional[str | Path] = None) -> MigrationResult:
     conn = storage.connect(db_path)
     applied: list[int] = []
     try:
+        # Migration 0021 performs SQLite's documented table-rebuild pattern
+        # for widening claims.story_id. Foreign-key enforcement must be off
+        # before BEGIN so child definitions remain bound to the replacement
+        # canonical table name; integrity is checked before returning.
+        conn.execute("PRAGMA foreign_keys = OFF")
         with storage.write_tx(conn):
             _ensure_ledger(conn)
             existing = {
@@ -1777,6 +1909,7 @@ def apply_migrations(db_path: Optional[str | Path] = None) -> MigrationResult:
                 18: MIGRATION_0018_STATEMENTS,
                 19: MIGRATION_0019_STATEMENTS,
                 20: MIGRATION_0020_STATEMENTS,
+                21: MIGRATION_0021_STATEMENTS,
             }
             for version, statements in migrations.items():
                 if version in existing:
@@ -1802,6 +1935,10 @@ def apply_migrations(db_path: Optional[str | Path] = None) -> MigrationResult:
                         (str(version),),
                     )
                 applied.append(version)
+            violations = conn.execute("PRAGMA foreign_key_check").fetchall()
+            if violations:
+                raise sqlite3.IntegrityError("migration produced foreign-key violations")
+        conn.execute("PRAGMA foreign_keys = ON")
         current = max((*existing, *applied), default=0)
         return MigrationResult(tuple(applied), current)
     finally:

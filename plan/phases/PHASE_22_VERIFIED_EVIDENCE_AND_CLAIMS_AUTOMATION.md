@@ -1,5 +1,18 @@
 # Phase 22 — Verified Evidence and Claims Automation
 
+## Status — implemented (2026-08-20)
+
+Automatic processing invokes `ArticleAnalysisPromotionService` after a
+relevant V2 `ArticleAnalysis`. The service treats every candidate as untrusted,
+runs the canonical Phase 21H.2 provenance validator, reconstructs only the
+exact analyzed slice, and requires a unique verbatim match before persisting an
+immutable verified EvidenceSpan, pending canonical Claim, and ClaimEvidence in
+one transaction. Model offsets are ignored; ambiguous matches fail closed.
+Manual/legacy EvidenceSpans retain NULL automatic provenance and are never
+reinterpreted as verified. Migration 0021 supplies the minimum provenance,
+identity, outcome, uniqueness, and immutability schema. Automatic processing
+stops after Claim/Evidence; Story, Report, and Alert automation remain Phase 23.
+
 ## Objective
 
 Make automatically generated EvidenceSpans verifiably anchored to immutable
