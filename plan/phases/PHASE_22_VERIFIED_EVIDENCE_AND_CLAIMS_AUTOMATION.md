@@ -15,7 +15,7 @@ stops after Claim/Evidence; Story, Report, and Alert automation remain Phase 23.
 
 ## Phase 22.1 correction record
 
-Migration 0022 hardens the Phase 22 trust boundary without changing its
+Migrations 0022–0023 harden the Phase 22 trust boundary without changing its
 promotion architecture. Manual/legacy EvidenceSpans and automatically
 verified EvidenceSpans are distinct provenance assertions, even when their
 DocumentVersion, coordinates, and excerpt hash match. Automatic reuse now

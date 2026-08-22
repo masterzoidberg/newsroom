@@ -2067,6 +2067,138 @@ MIGRATION_0022_CHECKSUM = hashlib.sha256(
     "\n".join(MIGRATION_0022_STATEMENTS).encode("utf-8")
 ).hexdigest()
 
+# Phase 22.1 follow-up — harden the insert contracts introduced by migration
+# 0022 for databases that have already reached schema 22. This is additive:
+# no canonical rows or historical provenance are rewritten.
+MIGRATION_0023_STATEMENTS: tuple[str, ...] = (
+    "DROP TRIGGER evidence_spans_verified_contract_insert",
+    """
+    CREATE TRIGGER evidence_spans_verified_contract_insert
+    BEFORE INSERT ON evidence_spans
+    WHEN NEW.verification_method IS NOT NULL
+         OR NEW.article_analysis_id IS NOT NULL
+         OR NEW.artifact_id IS NOT NULL
+         OR NEW.artifact_content_hash IS NOT NULL
+         OR NEW.view_content_hash IS NOT NULL
+         OR NEW.view_kind IS NOT NULL
+         OR NEW.view_version IS NOT NULL
+         OR NEW.field_path IS NOT NULL
+         OR NEW.start_offset IS NOT NULL
+         OR NEW.end_offset IS NOT NULL
+         OR NEW.provenance_json IS NOT NULL
+    BEGIN
+        SELECT CASE WHEN NEW.verification_method IS NULL
+                          OR NEW.verification_method != 'exact_analyzed_slice_v1'
+                          OR NEW.article_analysis_id IS NULL
+                          OR NEW.artifact_id IS NULL
+                          OR NEW.artifact_content_hash IS NULL
+                          OR NEW.view_content_hash IS NULL
+                          OR NEW.view_kind IS NULL
+                          OR NEW.view_version IS NULL
+                          OR NEW.start_offset IS NULL
+                          OR NEW.end_offset IS NULL
+                          OR NEW.start_offset < 0
+                          OR NEW.end_offset <= NEW.start_offset
+                          OR NEW.provenance_json IS NULL
+                          OR json_valid(NEW.provenance_json) != 1
+                          OR json_extract(NEW.provenance_json, '$.analysis_id') IS NOT NEW.article_analysis_id
+                          OR json_type(NEW.provenance_json, '$.candidate_claim_index') != 'integer'
+                          OR json_type(NEW.provenance_json, '$.candidate_excerpt_index') != 'integer'
+                    THEN RAISE(ABORT, 'invalid verified evidence contract') END;
+        SELECT CASE WHEN NOT EXISTS (
+            SELECT 1
+            FROM article_analyses a
+            JOIN content_artifacts ca ON ca.id = a.artifact_id
+            WHERE a.id = NEW.article_analysis_id
+              AND a.document_version_id = NEW.document_version_id
+              AND a.artifact_id = NEW.artifact_id
+              AND a.normalized_content_hash = NEW.artifact_content_hash
+              AND ca.normalized_content_hash = NEW.artifact_content_hash
+              AND a.input_view_version IS NEW.view_version
+              AND a.input_content_hash IS NEW.view_content_hash
+              AND ((NEW.view_kind = 'artifact' AND NEW.field_path IS NULL)
+                   OR (NEW.view_kind = 'feed' AND NEW.field_path IS 'title;summary'))
+              AND NEW.end_offset <= a.analyzed_char_count
+        ) THEN RAISE(ABORT, 'verified evidence provenance does not match analysis') END;
+    END
+    """,
+    "DROP TRIGGER claims_automatic_insert_pending",
+    """
+    CREATE TRIGGER claims_automatic_insert_pending
+    BEFORE INSERT ON claims
+    WHEN NEW.article_analysis_id IS NOT NULL
+         AND (NEW.story_id IS NOT NULL OR NEW.state IS NOT 'pending' OR NEW.accepted_at IS NOT NULL)
+    BEGIN
+        SELECT RAISE(ABORT, 'automatic Claims must begin pending and without a Story');
+    END
+    """,
+    """
+    CREATE TRIGGER claim_evidence_automatic_contract_insert
+    BEFORE INSERT ON claim_evidence
+    WHEN EXISTS (
+        SELECT 1 FROM claims c
+        WHERE c.id = NEW.claim_id AND c.article_analysis_id IS NOT NULL
+    )
+    BEGIN
+        SELECT CASE WHEN NOT EXISTS (
+            SELECT 1
+            FROM claims c
+            JOIN evidence_spans es ON es.id = NEW.evidence_span_id
+            JOIN article_analyses a ON a.id = c.article_analysis_id
+            WHERE c.id = NEW.claim_id
+              AND es.article_analysis_id IS c.article_analysis_id
+              AND es.verification_method IS 'exact_analyzed_slice_v1'
+              AND json_extract(es.provenance_json, '$.candidate_claim_index') IS c.candidate_claim_index
+              AND es.artifact_id IS NOT NULL
+              AND es.artifact_content_hash IS NOT NULL
+              AND es.view_content_hash IS NOT NULL
+              AND es.view_kind IS NOT NULL
+              AND es.view_version IS NOT NULL
+              AND es.start_offset IS NOT NULL
+              AND es.end_offset IS NOT NULL
+              AND a.input_view_version IS es.view_version
+              AND a.input_content_hash IS es.view_content_hash
+        ) THEN RAISE(ABORT, 'automatic Claims require verified evidence') END;
+    END
+    """,
+    "DROP TRIGGER article_analysis_promotions_verified_contract_insert",
+    """
+    CREATE TRIGGER article_analysis_promotions_verified_contract_insert
+    BEFORE INSERT ON article_analysis_promotions
+    WHEN NEW.outcome_code = 'verified'
+    BEGIN
+        SELECT CASE WHEN NEW.claim_id IS NULL
+                          OR json_valid(NEW.evidence_span_ids_json) != 1
+                          OR json_type(NEW.evidence_span_ids_json) != 'array'
+                          OR json_array_length(NEW.evidence_span_ids_json) < 1
+                    THEN RAISE(ABORT, 'invalid verified promotion outcome') END;
+        SELECT CASE WHEN NOT EXISTS (
+            SELECT 1 FROM claims c
+            WHERE c.id = NEW.claim_id
+              AND c.article_analysis_id = NEW.article_analysis_id
+              AND c.candidate_claim_index = NEW.candidate_claim_index
+              AND c.story_id IS NULL
+        ) THEN RAISE(ABORT, 'verified promotion Claim does not match analysis') END;
+        SELECT CASE WHEN EXISTS (
+            SELECT 1
+            FROM json_each(NEW.evidence_span_ids_json) ids
+            LEFT JOIN evidence_spans es ON es.id = ids.value
+            LEFT JOIN claim_evidence ce
+              ON ce.claim_id = NEW.claim_id AND ce.evidence_span_id = ids.value
+            WHERE es.id IS NULL
+               OR es.article_analysis_id IS NOT NEW.article_analysis_id
+               OR es.verification_method IS NOT 'exact_analyzed_slice_v1'
+               OR json_extract(es.provenance_json, '$.candidate_claim_index') IS NOT NEW.candidate_claim_index
+               OR ce.id IS NULL
+        ) THEN RAISE(ABORT, 'verified promotion evidence does not match analysis') END;
+    END
+    """,
+)
+
+MIGRATION_0023_CHECKSUM = hashlib.sha256(
+    "\n".join(MIGRATION_0023_STATEMENTS).encode("utf-8")
+).hexdigest()
+
 
 @dataclass(frozen=True)
 class MigrationResult:
@@ -2137,6 +2269,7 @@ def apply_migrations(db_path: Optional[str | Path] = None) -> MigrationResult:
                 20: MIGRATION_0020_STATEMENTS,
                 21: MIGRATION_0021_STATEMENTS,
                 22: MIGRATION_0022_STATEMENTS,
+                23: MIGRATION_0023_STATEMENTS,
             }
             for version, statements in migrations.items():
                 if version in existing:

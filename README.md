@@ -78,7 +78,7 @@ excerpts by unique exact code-point match, and atomically persists immutable
 verified EvidenceSpans, pending Claims, and ClaimEvidence links. Ambiguous,
 fabricated, and out-of-slice candidates fail closed; model offsets are never
 trusted, and legacy/manual spans remain distinct. The current applied schema
-is migration 0022 / schema version 22. Story, Report, and Alert automation
+is migration 0023 / schema version 23. Story, Report, and Alert automation
 remain Phase 23. Only `source`
 Monitor targets perform real acquisition today;
 `topic`, `subject`, `story`, and `research_question` are accepted by the

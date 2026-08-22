@@ -785,7 +785,9 @@ class EvidenceService:
         locator_value = data.get("locator_value")
         span_hash = evidence_span_hash(excerpt, locator_type, locator_value)
         existing = conn.execute(
-            "SELECT id FROM evidence_spans WHERE document_version_id = ? AND span_hash = ?",
+            """SELECT id FROM evidence_spans
+               WHERE document_version_id = ? AND span_hash = ?
+                 AND verification_method IS NULL""",
             (document_version_id, span_hash),
         ).fetchone()
         if existing is not None:

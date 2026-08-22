@@ -645,7 +645,7 @@ manual evidence; automatic Claims begin story-less and may only receive a
 controlled, audited initial Story association. No Story matching, Story
 creation, Story evolution, Report, or Alert automation is introduced here.
 
-The current applied schema is migration 0022 / schema version 22 (see
+The current applied schema is migration 0023 / schema version 23 (see
 `newsroom/migrations.py`). Migration 0015 added the Phase 18 content artifact
 substrate; migration 0016 added the Phase 19 processing-ownership column
 (`jobs.document_version_id`), the durable result column (`jobs.result_json`),
@@ -656,9 +656,10 @@ the durable `article_analyses` table with canonical identity and
 provider/model/prompt/schema provenance; migration 0019 (Phase 21H) added the
 durable paid analysis invocation ledger and provider-usage invocation link; the
 post-audit reconciliation (Phase 17) added no migration; migration 0021 added
-the original verified Evidence/Claim substrate and migration 0022 separated
-manual/automatic EvidenceSpan identity, added controlled Claim Story history,
-and hardened promotion outcome integrity.
+the original verified Evidence/Claim substrate, migration 0022 separated
+manual/automatic EvidenceSpan identity and added controlled Claim Story
+history, and migration 0023 hardened the remaining promotion/evidence insert
+contracts without starting Story automation.
 
 Due Research Questions use a separate bounded scheduler path: each tick can
 enqueue at most one durable `research_question` Job per due Question, and the

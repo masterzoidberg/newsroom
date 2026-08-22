@@ -112,6 +112,34 @@ def test_automatic_promotion_does_not_reuse_manual_evidence_as_verified(tmp_db):
     assert verified["verification_method"] == "exact_analyzed_slice_v1"
 
 
+def test_manual_evidence_path_does_not_reuse_automatic_span(tmp_db):
+    analysis = _analysis(
+        tmp_db,
+        text="The agency released a UAP report.",
+        excerpt="released a UAP report",
+    )
+    promoted = ArticleAnalysisPromotionService(tmp_db).promote(analysis["id"])
+    automatic_id = promoted["outcomes"][0]["evidence_span_ids"][0]
+    conn = storage.connect(tmp_db)
+    try:
+        with storage.write_tx(conn):
+            manual_id = EvidenceService(tmp_db)._create_span_tx(
+                conn,
+                analysis["document_version_id"],
+                {
+                    "excerpt": "released a UAP report",
+                    "locator_type": "codepoint_offset",
+                    "locator_value": "11;32",
+                },
+            )
+            row = conn.execute("SELECT verification_method FROM evidence_spans WHERE id = ?", (manual_id,)).fetchone()
+    finally:
+        conn.close()
+
+    assert manual_id != automatic_id
+    assert row["verification_method"] is None
+
+
 def test_comparison_safely_represents_storyless_and_story_linked_claims(tmp_db):
     analysis = _analysis(
         tmp_db,
@@ -351,6 +379,8 @@ def test_logical_export_contains_phase22_trusted_lineage(tmp_db, tmp_path):
     assert by_table["claims"][0]["story_id"] is None
     assert by_table["claims"][0]["article_analysis_id"] == analysis["id"]
     assert by_table["article_analyses"][0]["input_content_hash"]
+    assert by_table["claim_state_history"][0]["from_state"] is None
+    assert by_table["claim_state_history"][0]["to_state"] == "pending"
 
 
 def test_schema22_preserves_schema21_manual_evidence_and_child_links(tmp_db):
@@ -413,7 +443,7 @@ def test_schema22_preserves_schema21_manual_evidence_and_child_links(tmp_db):
 
     result = apply_migrations(tmp_db)
 
-    assert result.applied_versions == (22,)
+    assert result.applied_versions == (22, 23)
     conn = storage.connect(tmp_db)
     try:
         span = conn.execute("SELECT * FROM evidence_spans WHERE id = 'span-preserve'").fetchone()
@@ -509,6 +539,92 @@ def test_database_rejects_automatic_evidence_without_verification_method(tmp_db)
         conn.close()
 
 
+def test_database_rejects_automatic_evidence_with_mismatched_view_provenance(tmp_db):
+    analysis = _analysis(
+        tmp_db,
+        text="The agency released a UAP report.",
+        excerpt="released a UAP report",
+    )
+    conn = storage.connect(tmp_db)
+    try:
+        with storage.write_tx(conn), pytest.raises(storage.sqlite3.IntegrityError, match="provenance"):
+            conn.execute(
+                """INSERT INTO evidence_spans
+                   (id, document_version_id, excerpt, locator_type, locator_value, span_hash, created_at,
+                    article_analysis_id, artifact_id, artifact_content_hash, view_content_hash,
+                    view_kind, view_version, start_offset, end_offset,
+                    verification_method, provenance_json)
+                   VALUES (?, ?, ?, 'codepoint_offset', '11;32', ?, ?, ?, ?, ?, ?, 'artifact', ?, 11, 32, ?, ?)""",
+                (
+                    "span-mismatched-view",
+                    analysis["document_version_id"],
+                    "released a UAP report",
+                    "mismatched-view-span-hash",
+                    "2026-08-20T12:00:00Z",
+                    analysis["id"],
+                    analysis["artifact_id"],
+                    analysis["normalized_content_hash"],
+                    "wrong-view-content-hash",
+                    "wrong_view_v1",
+                    "exact_analyzed_slice_v1",
+                    json.dumps(
+                        {
+                            "analysis_id": analysis["id"],
+                            "candidate_claim_index": 0,
+                            "candidate_excerpt_index": 0,
+                        },
+                    ),
+                ),
+            )
+    finally:
+        conn.close()
+
+
+def test_database_rejects_non_pending_automatic_claim_insert(tmp_db):
+    analysis = _analysis(
+        tmp_db,
+        text="The agency released a UAP report.",
+        excerpt="released a UAP report",
+    )
+    conn = storage.connect(tmp_db)
+    try:
+        with storage.write_tx(conn), pytest.raises(storage.sqlite3.IntegrityError, match="pending"):
+            conn.execute(
+                """INSERT INTO claims
+                   (id, story_id, proposition, proposition_hash, importance, state,
+                    article_analysis_id, candidate_claim_index, created_at)
+                   VALUES ('claim-non-pending', NULL, 'The agency released a UAP report.', 'claim-hash',
+                           'relevant', 'supported', ?, 0, ?)""",
+                (analysis["id"], "2026-08-20T12:00:00Z"),
+            )
+    finally:
+        conn.close()
+
+
+def test_automatic_claim_cannot_link_manual_evidence(tmp_db):
+    analysis = _analysis(
+        tmp_db,
+        text="The agency released a UAP report.",
+        excerpt="released a UAP report",
+    )
+    claim_id = ArticleAnalysisPromotionService(tmp_db).promote(analysis["id"])["outcomes"][0]["claim_id"]
+    manual = EvidenceService(tmp_db).create_evidence_span(
+        analysis["document_version_id"],
+        {"excerpt": "released a UAP report", "locator_type": "paragraph", "locator_value": "1"},
+    )
+    conn = storage.connect(tmp_db)
+    try:
+        with storage.write_tx(conn), pytest.raises(storage.sqlite3.IntegrityError, match="verified evidence"):
+            conn.execute(
+                """INSERT INTO claim_evidence
+                   (id, claim_id, evidence_span_id, relationship, created_at)
+                   VALUES ('ce-manual-on-auto', ?, ?, 'supports', ?)""",
+                (claim_id, manual["id"], "2026-08-20T12:00:00Z"),
+            )
+    finally:
+        conn.close()
+
+
 def test_database_rejects_verified_promotion_without_trusted_graph(tmp_db):
     analysis = _analysis(
         tmp_db,
@@ -524,6 +640,38 @@ def test_database_rejects_verified_promotion_without_trusted_graph(tmp_db):
                     outcome_code, claim_id, evidence_span_ids_json, created_at)
                    VALUES ('promo-malformed', 'identity-malformed', ?, 0, 'verified', NULL, '[]', ?)""",
                 (analysis["id"], "2026-08-20T12:00:00Z"),
+            )
+    finally:
+        conn.close()
+
+
+def test_database_rejects_verified_promotion_without_claim_evidence_link(tmp_db):
+    analysis = _analysis(
+        tmp_db,
+        text="The agency released a UAP report.",
+        excerpt="released a UAP report",
+    )
+    promotion = ArticleAnalysisPromotionService(tmp_db).promote(analysis["id"])
+    outcome = promotion["outcomes"][0]
+    conn = storage.connect(tmp_db)
+    try:
+        with storage.write_tx(conn):
+            conn.execute("DROP TRIGGER article_analysis_promotions_immutable_delete")
+            conn.execute("DROP TRIGGER claim_evidence_immutable_delete")
+            conn.execute("DELETE FROM article_analysis_promotions WHERE id = ?", (promotion["outcomes"][0]["id"],))
+            conn.execute("DELETE FROM claim_evidence WHERE claim_id = ?", (outcome["claim_id"],))
+        with storage.write_tx(conn), pytest.raises(storage.sqlite3.IntegrityError, match="promotion"):
+            conn.execute(
+                """INSERT INTO article_analysis_promotions
+                   (id, promotion_identity, article_analysis_id, candidate_claim_index,
+                    outcome_code, claim_id, evidence_span_ids_json, created_at)
+                   VALUES ('promo-no-link', 'identity-no-link', ?, 0, 'verified', ?, ?, ?)""",
+                (
+                    analysis["id"],
+                    outcome["claim_id"],
+                    json.dumps(outcome["evidence_span_ids"]),
+                    "2026-08-20T12:00:00Z",
+                ),
             )
     finally:
         conn.close()

@@ -47,7 +47,7 @@ _EXPORT_COLUMNS: dict[str, tuple[str, ...]] = {
     "story_topics": ("story_id", "topic_id", "created_at"),
     "story_subjects": ("story_id", "subject_id", "created_at"),
     "claims": ("id", "story_id", "proposition", "proposition_hash", "importance", "state", "accepted_at", "article_analysis_id", "candidate_claim_index", "created_at"),
-    "claim_state_history": ("id", "claim_id", "state", "reason", "created_at"),
+    "claim_state_history": ("id", "claim_id", "from_state", "to_state", "reason", "created_at"),
     "claim_story_assignment_history": ("id", "claim_id", "from_story_id", "to_story_id", "reason", "created_at"),
     "evidence_spans": ("id", "document_version_id", "locator_type", "locator_value", "span_hash", "article_analysis_id", "artifact_id", "artifact_content_hash", "view_content_hash", "view_kind", "view_version", "field_path", "start_offset", "end_offset", "verification_method", "provenance_json", "created_at"),
     "claim_evidence": ("id", "claim_id", "evidence_span_id", "relationship", "created_at"),
