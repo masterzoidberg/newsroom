@@ -217,7 +217,9 @@ class EvidenceService:
                     )
                 except DomainConflict:
                     existing = conn.execute(
-                        "SELECT id FROM evidence_spans WHERE document_version_id = ? AND span_hash = ?",
+                        """SELECT id FROM evidence_spans
+                           WHERE document_version_id = ? AND span_hash = ?
+                             AND verification_method IS NULL""",
                         (document_version_id, span_hash),
                     ).fetchone()
                     if existing is None:
@@ -333,6 +335,13 @@ class EvidenceService:
                 (result["id"],),
             ).fetchall()
         ]
+        result["story_assignment_history"] = [
+            _as_dict(item)
+            for item in conn.execute(
+                "SELECT * FROM claim_story_assignment_history WHERE claim_id = ? ORDER BY created_at, id",
+                (result["id"],),
+            ).fetchall()
+        ]
         result["evidence"] = self._claim_evidence(conn, result["id"])
         return result
 
@@ -341,6 +350,27 @@ class EvidenceService:
         try:
             row = _require(conn, "claims", identifier, "claim")
             return self._claim_result(conn, row)
+        finally:
+            conn.close()
+
+    def assign_claim_to_story(self, claim_id: str, story_id: str | None) -> dict[str, Any]:
+        """Perform the one supported initial Story association for a Claim."""
+        if not str(story_id or "").strip():
+            raise DomainValidation("story_id must not be empty")
+        conn = storage.connect(self.db_path)
+        try:
+            with storage.write_tx(conn):
+                claim = _require(conn, "claims", claim_id, "claim")
+                _require(conn, "stories", story_id, "story", live=True)
+                if claim["story_id"] == story_id:
+                    return self._claim_result(conn, claim)
+                if claim["story_id"] is not None:
+                    raise DomainConflict("Claim Story association cannot be reassigned")
+                conn.execute("UPDATE claims SET story_id = ? WHERE id = ?", (story_id, claim_id))
+                return self._claim_result(
+                    conn,
+                    _require(conn, "claims", claim_id, "claim"),
+                )
         finally:
             conn.close()
 

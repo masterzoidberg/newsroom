@@ -32,6 +32,7 @@ EXPECTED_TABLES = {
     "story_subjects",
     "claims",
     "claim_state_history",
+    "claim_story_assignment_history",
     "evidence_spans",
     "claim_evidence",
     "research_questions",
@@ -60,6 +61,7 @@ EXPECTED_TABLES = {
     "content_artifacts",
     "document_version_relevance",
     "article_analyses",
+    "article_analysis_promotions",
 }
 
 
@@ -67,9 +69,9 @@ def test_fresh_migration_creates_the_proposed_schema_and_rerun_is_idempotent(tmp
     first = apply_migrations(tmp_db)
     second = apply_migrations(tmp_db)
 
-    assert first.applied_versions == tuple(range(1, 22))
+    assert first.applied_versions == tuple(range(1, 23))
     assert second.applied_versions == ()
-    assert migration_status(tmp_db) == tuple(range(1, 22))
+    assert migration_status(tmp_db) == tuple(range(1, 23))
 
     conn = storage.connect(tmp_db)
     try:
@@ -82,7 +84,7 @@ def test_fresh_migration_creates_the_proposed_schema_and_rerun_is_idempotent(tmp
         assert EXPECTED_TABLES <= tables
         assert conn.execute("PRAGMA foreign_keys").fetchone()[0] == 1
         assert conn.execute("PRAGMA journal_mode").fetchone()[0].lower() == "wal"
-        assert conn.execute("SELECT value FROM app_meta WHERE key = 'schema_version'").fetchone()[0] == "21"
+        assert conn.execute("SELECT value FROM app_meta WHERE key = 'schema_version'").fetchone()[0] == "22"
     finally:
         conn.close()
 
@@ -103,8 +105,8 @@ def test_existing_phase02_database_migrates_forward_without_replaying_0001(tmp_d
         conn.close()
 
     result = apply_migrations(tmp_db)
-    assert result.applied_versions == tuple(range(2, 22))
-    assert migration_status(tmp_db) == tuple(range(1, 22))
+    assert result.applied_versions == tuple(range(2, 23))
+    assert migration_status(tmp_db) == tuple(range(1, 23))
 
 
 def test_evidence_span_hash_includes_excerpt_and_locator():

@@ -1,6 +1,6 @@
 # Phase 22 — Verified Evidence and Claims Automation
 
-## Status — implemented (2026-08-20)
+## Status — Phase 22 implemented; Phase 22.1 correction applied (2026-08-21)
 
 Automatic processing invokes `ArticleAnalysisPromotionService` after a
 relevant V2 `ArticleAnalysis`. The service treats every candidate as untrusted,
@@ -12,6 +12,28 @@ Manual/legacy EvidenceSpans retain NULL automatic provenance and are never
 reinterpreted as verified. Migration 0021 supplies the minimum provenance,
 identity, outcome, uniqueness, and immutability schema. Automatic processing
 stops after Claim/Evidence; Story, Report, and Alert automation remain Phase 23.
+
+## Phase 22.1 correction record
+
+Migration 0022 hardens the Phase 22 trust boundary without changing its
+promotion architecture. Manual/legacy EvidenceSpans and automatically
+verified EvidenceSpans are distinct provenance assertions, even when their
+DocumentVersion, coordinates, and excerpt hash match. Automatic reuse now
+requires the exact automatic analysis, artifact, view, offset, and candidate
+provenance identity; a manual row can never satisfy that obligation.
+
+Automatic Phase 22 Claims begin with `story_id = NULL`. This is a supported
+transitional state: current comparison, search, Ask, serialization, and
+Story-scoped consumers tolerate it, and future association is available only
+through the controlled Claim Story assignment service. The first
+`NULL → existing Story` transition is audited; Story reassignment, unlinking,
+and automatic provenance mutation remain rejected. No Story matching, Story
+creation, Story evolution, Report, or Alert automation is included.
+
+The logical export includes the promotion outcome, automatic EvidenceSpan
+provenance, Claim provenance and nullable Story linkage, and Claim Story
+assignment history while continuing to omit article bodies and provider
+payloads.
 
 ## Objective
 
@@ -316,8 +338,9 @@ always recomputed locally from the canonical view.
   chain (run/no entity, missing Story lineage, no relevant canonical Claim) is
   still not acceptable evidence.
 
-Phase 22 has not started and no evidence-promotion runtime is authorized by
-this note.
+The original Phase 22 design note above records the pre-runtime contract. The
+Phase 22 runtime is now implemented and the Phase 22.1 correction record above
+is the current contract.
 
 ## Exit criteria
 

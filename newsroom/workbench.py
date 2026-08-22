@@ -199,7 +199,7 @@ class SearchService:
             """
             SELECT c.*, s.headline, d.id AS document_id, d.title AS document_title
             FROM claims c
-            JOIN stories st ON st.id = c.story_id AND st.deleted_at IS NULL
+            LEFT JOIN stories st ON st.id = c.story_id AND st.deleted_at IS NULL
             LEFT JOIN story_revisions s ON s.id = (
                 SELECT s2.id FROM story_revisions s2 WHERE s2.story_id = st.id ORDER BY s2.revision_number DESC, s2.id DESC LIMIT 1
             )
@@ -402,6 +402,7 @@ class ComparisonService:
                 return {
                     "claim_id": claim_id,
                     "claim_ids": [claim_id],
+                    "story_id": first["story_id"],
                     "proposition": first["proposition"],
                     "importance": first["importance"],
                     "state": first["state"],
@@ -423,11 +424,13 @@ class ComparisonService:
             shared_claims = [claim_item(identifier, claim_rows[identifier]) for identifier in sorted(claim_rows) if len(claim_docs[identifier]) > 1]
             unique_claims = [claim_item(identifier, claim_rows[identifier]) for identifier in sorted(claim_rows) if len(claim_docs[identifier]) == 1]
 
-            claims_by_story: dict[str, list[str]] = defaultdict(list)
+            claims_by_story: dict[str | None, list[str]] = defaultdict(list)
             for identifier, rows_for_claim in claim_rows.items():
                 claims_by_story[rows_for_claim[0]["story_id"]].append(identifier)
             contradictions: list[dict[str, Any]] = []
-            for group_story_id, claim_ids in sorted(claims_by_story.items()):
+            for group_story_id, claim_ids in sorted(
+                claims_by_story.items(), key=lambda item: (item[0] is not None, item[0] or "")
+            ):
                 group_rows = [row for identifier in claim_ids for row in claim_rows[identifier]]
                 explicit = any(row["relationship"] == "contradicts" for row in group_rows)
                 signatures = {_value_key(row["proposition"]) for row in group_rows}

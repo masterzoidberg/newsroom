@@ -639,10 +639,13 @@ resolved public address, connects directly to that address, verifies the peer,
 and preserves the hostname for Host/SNI. This closes validation-to-connect DNS
 rebinding without changing the persisted canonical URL contract.
 
-Phase 22 remains blocked until 21H re-review. No EvidenceSpan, Claim, Story,
-Report, or Alert automation is introduced by this hardening phase.
+Phase 22.1 is the bounded correction gate for the Phase 22 trusted
+Evidence/Claim boundary. Automatic EvidenceSpan provenance is distinct from
+manual evidence; automatic Claims begin story-less and may only receive a
+controlled, audited initial Story association. No Story matching, Story
+creation, Story evolution, Report, or Alert automation is introduced here.
 
-The current applied schema is migration 0020 / schema version 20 (see
+The current applied schema is migration 0022 / schema version 22 (see
 `newsroom/migrations.py`). Migration 0015 added the Phase 18 content artifact
 substrate; migration 0016 added the Phase 19 processing-ownership column
 (`jobs.document_version_id`), the durable result column (`jobs.result_json`),
@@ -652,7 +655,10 @@ information-need association (`monitors.need_type` / `need_id`) and the
 the durable `article_analyses` table with canonical identity and
 provider/model/prompt/schema provenance; migration 0019 (Phase 21H) added the
 durable paid analysis invocation ledger and provider-usage invocation link; the
-post-audit reconciliation (Phase 17) added no migration.
+post-audit reconciliation (Phase 17) added no migration; migration 0021 added
+the original verified Evidence/Claim substrate and migration 0022 separated
+manual/automatic EvidenceSpan identity, added controlled Claim Story history,
+and hardened promotion outcome integrity.
 
 Due Research Questions use a separate bounded scheduler path: each tick can
 enqueue at most one durable `research_question` Job per due Question, and the

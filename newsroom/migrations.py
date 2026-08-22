@@ -1841,6 +1841,232 @@ MIGRATION_0021_CHECKSUM = hashlib.sha256(
     "\n".join(MIGRATION_0021_STATEMENTS).encode("utf-8")
 ).hexdigest()
 
+# Phase 22.1 — keep manual evidence distinct from automatically verified
+# evidence, separate the Claim Story lifecycle from immutable automatic
+# provenance, and make promotion outcomes describe a coherent trusted graph.
+# SQLite cannot drop the historical EvidenceSpan table-level uniqueness in
+# place, so the table is rebuilt while preserving every row ID and child FK.
+MIGRATION_0022_STATEMENTS: tuple[str, ...] = (
+    "DROP TRIGGER evidence_spans_immutable_update",
+    "DROP TRIGGER evidence_spans_immutable_delete",
+    "DROP TRIGGER evidence_spans_verified_contract_insert",
+    "PRAGMA legacy_alter_table = ON",
+    "ALTER TABLE evidence_spans RENAME TO evidence_spans_legacy_0022",
+    """
+    CREATE TABLE evidence_spans (
+        id TEXT PRIMARY KEY,
+        document_version_id TEXT NOT NULL REFERENCES document_versions(id) ON DELETE CASCADE,
+        excerpt TEXT NOT NULL,
+        locator_type TEXT,
+        locator_value TEXT,
+        span_hash TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        article_analysis_id TEXT REFERENCES article_analyses(id),
+        artifact_id TEXT REFERENCES content_artifacts(id),
+        artifact_content_hash TEXT,
+        view_content_hash TEXT,
+        view_kind TEXT CHECK (view_kind IN ('artifact', 'feed')),
+        view_version TEXT,
+        field_path TEXT,
+        start_offset INTEGER,
+        end_offset INTEGER,
+        verification_method TEXT,
+        provenance_json TEXT
+    )
+    """,
+    """
+    INSERT INTO evidence_spans
+        (id, document_version_id, excerpt, locator_type, locator_value, span_hash, created_at,
+         article_analysis_id, artifact_id, artifact_content_hash, view_content_hash,
+         view_kind, view_version, field_path, start_offset, end_offset,
+         verification_method, provenance_json)
+    SELECT id, document_version_id, excerpt, locator_type, locator_value, span_hash, created_at,
+           article_analysis_id, artifact_id, artifact_content_hash, view_content_hash,
+           view_kind, view_version, field_path, start_offset, end_offset,
+           verification_method, provenance_json
+    FROM evidence_spans_legacy_0022
+    """,
+    "DROP TABLE evidence_spans_legacy_0022",
+    "PRAGMA legacy_alter_table = OFF",
+    "CREATE INDEX evidence_spans_analysis_idx ON evidence_spans(article_analysis_id)",
+    "CREATE UNIQUE INDEX evidence_spans_manual_identity_idx ON evidence_spans(document_version_id, span_hash) WHERE verification_method IS NULL",
+    """
+    CREATE UNIQUE INDEX evidence_spans_verified_identity_idx
+    ON evidence_spans(
+        document_version_id, span_hash, verification_method, article_analysis_id,
+        artifact_id, artifact_content_hash, view_content_hash, view_kind,
+        view_version, COALESCE(field_path, ''), start_offset, end_offset,
+        provenance_json
+    ) WHERE verification_method IS NOT NULL
+    """,
+    """
+    CREATE TRIGGER evidence_spans_immutable_update
+    BEFORE UPDATE ON evidence_spans
+    BEGIN
+        SELECT RAISE(ABORT, 'evidence spans are immutable');
+    END
+    """,
+    """
+    CREATE TRIGGER evidence_spans_immutable_delete
+    BEFORE DELETE ON evidence_spans
+    BEGIN
+        SELECT RAISE(ABORT, 'evidence spans are immutable');
+    END
+    """,
+    """
+    CREATE TRIGGER evidence_spans_verified_contract_insert
+    BEFORE INSERT ON evidence_spans
+    WHEN NEW.verification_method IS NOT NULL
+         OR NEW.article_analysis_id IS NOT NULL
+         OR NEW.artifact_id IS NOT NULL
+         OR NEW.artifact_content_hash IS NOT NULL
+         OR NEW.view_content_hash IS NOT NULL
+         OR NEW.view_kind IS NOT NULL
+         OR NEW.view_version IS NOT NULL
+         OR NEW.field_path IS NOT NULL
+         OR NEW.start_offset IS NOT NULL
+         OR NEW.end_offset IS NOT NULL
+         OR NEW.provenance_json IS NOT NULL
+    BEGIN
+        SELECT CASE WHEN NEW.verification_method IS NULL
+                          OR NEW.verification_method != 'exact_analyzed_slice_v1'
+                          OR NEW.article_analysis_id IS NULL
+                          OR NEW.artifact_id IS NULL
+                          OR NEW.artifact_content_hash IS NULL
+                          OR NEW.view_content_hash IS NULL
+                          OR NEW.view_kind IS NULL
+                          OR NEW.view_version IS NULL
+                          OR NEW.start_offset IS NULL
+                          OR NEW.end_offset IS NULL
+                          OR NEW.start_offset < 0
+                          OR NEW.end_offset <= NEW.start_offset
+                          OR NEW.provenance_json IS NULL
+                          OR json_valid(NEW.provenance_json) != 1
+                          OR json_extract(NEW.provenance_json, '$.analysis_id') IS NOT NEW.article_analysis_id
+                          OR json_type(NEW.provenance_json, '$.candidate_claim_index') != 'integer'
+                          OR json_type(NEW.provenance_json, '$.candidate_excerpt_index') != 'integer'
+                    THEN RAISE(ABORT, 'invalid verified evidence contract') END;
+        SELECT CASE WHEN NOT EXISTS (
+            SELECT 1
+            FROM article_analyses a
+            JOIN content_artifacts ca ON ca.id = a.artifact_id
+            WHERE a.id = NEW.article_analysis_id
+              AND a.document_version_id = NEW.document_version_id
+              AND a.artifact_id = NEW.artifact_id
+              AND a.normalized_content_hash = NEW.artifact_content_hash
+              AND ca.normalized_content_hash = NEW.artifact_content_hash
+              AND NEW.end_offset <= a.analyzed_char_count
+        ) THEN RAISE(ABORT, 'verified evidence provenance does not match analysis') END;
+    END
+    """,
+    "DROP TRIGGER claims_automatic_provenance_immutable",
+    """
+    CREATE TRIGGER claims_automatic_provenance_immutable
+    BEFORE UPDATE OF proposition, proposition_hash, article_analysis_id, candidate_claim_index ON claims
+    WHEN OLD.article_analysis_id IS NOT NULL
+    BEGIN
+        SELECT RAISE(ABORT, 'automatic claim provenance is immutable');
+    END
+    """,
+    """
+    CREATE TRIGGER claims_story_association_immutable
+    BEFORE UPDATE OF story_id ON claims
+    WHEN OLD.story_id IS NOT NULL
+         AND NEW.story_id IS NOT OLD.story_id
+    BEGIN
+        SELECT RAISE(ABORT, 'claim Story association is immutable');
+    END
+    """,
+    """
+    CREATE TABLE claim_story_assignment_history (
+        id TEXT PRIMARY KEY,
+        claim_id TEXT NOT NULL UNIQUE REFERENCES claims(id) ON DELETE CASCADE,
+        from_story_id TEXT REFERENCES stories(id) ON DELETE SET NULL,
+        to_story_id TEXT NOT NULL REFERENCES stories(id) ON DELETE RESTRICT,
+        reason TEXT NOT NULL DEFAULT 'controlled Story assignment',
+        created_at TEXT NOT NULL
+    )
+    """,
+    "CREATE INDEX claim_story_assignment_history_story_idx ON claim_story_assignment_history(to_story_id, created_at, id)",
+    """
+    CREATE TRIGGER claim_story_assignment_history_insert
+    AFTER UPDATE OF story_id ON claims
+    WHEN OLD.story_id IS NULL AND NEW.story_id IS NOT NULL
+    BEGIN
+        INSERT INTO claim_story_assignment_history
+            (id, claim_id, from_story_id, to_story_id, reason, created_at)
+        VALUES
+            ('csa_' || lower(hex(randomblob(16))), NEW.id, OLD.story_id, NEW.story_id,
+             'controlled Story assignment', strftime('%Y-%m-%dT%H:%M:%SZ', 'now'));
+    END
+    """,
+    """
+    CREATE TRIGGER claim_story_assignment_history_immutable_update
+    BEFORE UPDATE ON claim_story_assignment_history
+    BEGIN
+        SELECT RAISE(ABORT, 'Claim Story assignment history is append-only');
+    END
+    """,
+    """
+    CREATE TRIGGER claim_story_assignment_history_immutable_delete
+    BEFORE DELETE ON claim_story_assignment_history
+    BEGIN
+        SELECT RAISE(ABORT, 'Claim Story assignment history is append-only');
+    END
+    """,
+    """
+    CREATE TRIGGER claims_automatic_insert_pending
+    BEFORE INSERT ON claims
+    WHEN NEW.article_analysis_id IS NOT NULL AND NEW.story_id IS NOT NULL
+    BEGIN
+        SELECT RAISE(ABORT, 'automatic Claims must begin without a Story');
+    END
+    """,
+    """
+    CREATE TRIGGER article_analysis_promotions_verified_contract_insert
+    BEFORE INSERT ON article_analysis_promotions
+    WHEN NEW.outcome_code = 'verified'
+    BEGIN
+        SELECT CASE WHEN NEW.claim_id IS NULL
+                          OR json_valid(NEW.evidence_span_ids_json) != 1
+                          OR json_type(NEW.evidence_span_ids_json) != 'array'
+                          OR json_array_length(NEW.evidence_span_ids_json) < 1
+                    THEN RAISE(ABORT, 'invalid verified promotion outcome') END;
+        SELECT CASE WHEN NOT EXISTS (
+            SELECT 1 FROM claims c
+            WHERE c.id = NEW.claim_id
+              AND c.article_analysis_id = NEW.article_analysis_id
+              AND c.candidate_claim_index = NEW.candidate_claim_index
+              AND c.story_id IS NULL
+        ) THEN RAISE(ABORT, 'verified promotion Claim does not match analysis') END;
+        SELECT CASE WHEN EXISTS (
+            SELECT 1
+            FROM json_each(NEW.evidence_span_ids_json) ids
+            LEFT JOIN evidence_spans es ON es.id = ids.value
+            WHERE es.id IS NULL
+               OR es.article_analysis_id IS NOT NEW.article_analysis_id
+               OR es.verification_method IS NOT 'exact_analyzed_slice_v1'
+        ) THEN RAISE(ABORT, 'verified promotion evidence does not match analysis') END;
+    END
+    """,
+    """
+    CREATE TRIGGER article_analysis_promotions_failed_contract_insert
+    BEFORE INSERT ON article_analysis_promotions
+    WHEN NEW.outcome_code != 'verified'
+    BEGIN
+        SELECT CASE WHEN NEW.claim_id IS NOT NULL
+                          OR json_valid(NEW.evidence_span_ids_json) != 1
+                          OR json_type(NEW.evidence_span_ids_json) != 'array'
+                          OR json_array_length(NEW.evidence_span_ids_json) != 0
+                    THEN RAISE(ABORT, 'invalid failed promotion outcome') END;
+    END
+    """,
+)
+
+MIGRATION_0022_CHECKSUM = hashlib.sha256(
+    "\n".join(MIGRATION_0022_STATEMENTS).encode("utf-8")
+).hexdigest()
+
 
 @dataclass(frozen=True)
 class MigrationResult:
@@ -1877,10 +2103,10 @@ def apply_migrations(db_path: Optional[str | Path] = None) -> MigrationResult:
     conn = storage.connect(db_path)
     applied: list[int] = []
     try:
-        # Migration 0021 performs SQLite's documented table-rebuild pattern
-        # for widening claims.story_id. Foreign-key enforcement must be off
-        # before BEGIN so child definitions remain bound to the replacement
-        # canonical table name; integrity is checked before returning.
+        # Migrations 0021 and 0022 perform SQLite's documented table-rebuild
+        # pattern. Foreign-key enforcement must be off before BEGIN so child
+        # definitions remain bound to replacement canonical table names;
+        # integrity is checked before returning.
         conn.execute("PRAGMA foreign_keys = OFF")
         with storage.write_tx(conn):
             _ensure_ledger(conn)
@@ -1910,6 +2136,7 @@ def apply_migrations(db_path: Optional[str | Path] = None) -> MigrationResult:
                 19: MIGRATION_0019_STATEMENTS,
                 20: MIGRATION_0020_STATEMENTS,
                 21: MIGRATION_0021_STATEMENTS,
+                22: MIGRATION_0022_STATEMENTS,
             }
             for version, statements in migrations.items():
                 if version in existing:

@@ -176,15 +176,39 @@ class ArticleAnalysisPromotionService:
     def _insert_span_tx(self, conn, bundle, content, claim_index: int, item: dict[str, Any]) -> str:
         locator_value = f"{item['start']};{item['end']}"
         span_hash = evidence_span_hash(item["excerpt"], "codepoint_offset", locator_value)
+        is_feed = content["content_kind"] == "feed_metadata"
+        full_view = analysis_input_text(content)[1]
+        view_content_hash = hashlib.sha256(full_view.encode()).hexdigest()
+        view_kind = "feed" if is_feed else "artifact"
+        view_version = FEED_INPUT_VIEW_VERSION if is_feed else ARTIFACT_INPUT_VIEW_VERSION
+        field_path = "title;summary" if is_feed else None
+        provenance_json = json.dumps(
+            {
+                "analysis_id": bundle["analysis"]["id"],
+                "candidate_claim_index": claim_index,
+                "candidate_excerpt_index": item["excerpt_index"],
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+        )
         existing = conn.execute(
-            "SELECT id FROM evidence_spans WHERE document_version_id = ? AND span_hash = ?",
-            (bundle["analysis"]["document_version_id"], span_hash),
+            """SELECT id FROM evidence_spans
+               WHERE document_version_id = ? AND span_hash = ?
+                 AND verification_method = ? AND article_analysis_id = ?
+                 AND artifact_id = ? AND artifact_content_hash = ?
+                 AND view_content_hash = ? AND view_kind = ? AND view_version = ?
+                 AND field_path IS ? AND start_offset = ? AND end_offset = ?
+                 AND provenance_json = ?""",
+            (
+                bundle["analysis"]["document_version_id"], span_hash, VERIFICATION_METHOD,
+                bundle["analysis"]["id"], content["artifact_id"],
+                content["normalized_content_hash"], view_content_hash, view_kind,
+                view_version, field_path, item["start"], item["end"], provenance_json,
+            ),
         ).fetchone()
         if existing is not None:
             return existing[0]
         identifier = new_id("span")
-        is_feed = content["content_kind"] == "feed_metadata"
-        full_view = analysis_input_text(content)[1]
         conn.execute(
             """INSERT INTO evidence_spans
                (id, document_version_id, excerpt, locator_type, locator_value, span_hash, created_at,
@@ -195,12 +219,9 @@ class ArticleAnalysisPromotionService:
             (
                 identifier, bundle["analysis"]["document_version_id"], item["excerpt"], locator_value,
                 span_hash, utc_now(), bundle["analysis"]["id"], content["artifact_id"],
-                content["normalized_content_hash"], hashlib.sha256(full_view.encode()).hexdigest(),
-                "feed" if is_feed else "artifact",
-                FEED_INPUT_VIEW_VERSION if is_feed else ARTIFACT_INPUT_VIEW_VERSION,
-                "title;summary" if is_feed else None, item["start"], item["end"], VERIFICATION_METHOD,
-                json.dumps({"analysis_id": bundle["analysis"]["id"], "candidate_claim_index": claim_index,
-                            "candidate_excerpt_index": item["excerpt_index"]}, sort_keys=True, separators=(",", ":")),
+                content["normalized_content_hash"], view_content_hash, view_kind,
+                view_version, field_path, item["start"], item["end"], VERIFICATION_METHOD,
+                provenance_json,
             ),
         )
         return identifier

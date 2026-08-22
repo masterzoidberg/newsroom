@@ -17,8 +17,8 @@ Phases 17–28 are the audit-driven integration and completion roadmap. They
 supersede conflicting or insufficient acceptance assumptions from Phases 01–16
 without rewriting those historical records.
 
-**Current active phase: Phase 21H — Pre-Evidence Hardening. Phase 22 is
-blocked pending re-review.**
+**Current active gate: Phase 22.1 — Verified Evidence identity and pre-Story
+Claim linkage hardening. Phase 23 remains blocked.**
 Phases 17 (runtime reconciliation and green baseline), Live Test A, Phase 18
 (durable normalized content artifact), Phase 19 (changed DocumentVersion
 processing Jobs), Phase 20 (semantic scope and automatic relevance), and
@@ -27,11 +27,14 @@ those gates passed. **Live Test B PASSED** on 2026-08-18 against the Phase 21
 checkpoint (real NASA UAP page → relevance=true → real gpt-4o-mini
 ArticleAnalysis → durable record, zero Evidence/Claims); evidence in the
 Phase 21 file's Live Test B Completion Addendum. The post-audit is complete;
-Phase 21H is the bounded remediation gate before Phase 22 may begin.
+Phase 21H was the bounded remediation gate before Phase 22 began.
 **Phase 21H.1 (historical provenance, automatic processing-Job provenance,
 and the Phase 22 evidence-coordinate specification) is implemented and
-verified** — see the Phase 21H file's 21H.1 record. The remaining gate is the
-final independent re-review before Phase 22 may start.
+verified** — see the Phase 21H file's 21H.1 record. Phase 22 is implemented at
+the trusted Evidence/Claim boundary; Phase 22.1 corrects provenance identity,
+nullable Story consumers, controlled Story assignment, retry evidence, and
+audit export completeness before independent re-review. Phase 23 must not
+begin until that gate passes.
 
 ## How to assign work to Luna
 

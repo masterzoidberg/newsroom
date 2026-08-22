@@ -46,9 +46,10 @@ _EXPORT_COLUMNS: dict[str, tuple[str, ...]] = {
     "story_revisions": ("id", "story_id", "revision_number", "headline", "material_change", "created_at"),
     "story_topics": ("story_id", "topic_id", "created_at"),
     "story_subjects": ("story_id", "subject_id", "created_at"),
-    "claims": ("id", "story_id", "proposition", "importance", "state", "accepted_at", "created_at"),
+    "claims": ("id", "story_id", "proposition", "proposition_hash", "importance", "state", "accepted_at", "article_analysis_id", "candidate_claim_index", "created_at"),
     "claim_state_history": ("id", "claim_id", "state", "reason", "created_at"),
-    "evidence_spans": ("id", "document_version_id", "locator_type", "locator_value", "excerpt_hash", "created_at"),
+    "claim_story_assignment_history": ("id", "claim_id", "from_story_id", "to_story_id", "reason", "created_at"),
+    "evidence_spans": ("id", "document_version_id", "locator_type", "locator_value", "span_hash", "article_analysis_id", "artifact_id", "artifact_content_hash", "view_content_hash", "view_kind", "view_version", "field_path", "start_offset", "end_offset", "verification_method", "provenance_json", "created_at"),
     "claim_evidence": ("id", "claim_id", "evidence_span_id", "relationship", "created_at"),
     "research_questions": ("id", "question", "origin_type", "origin_id", "status", "priority", "created_at", "updated_at", "deleted_at"),
     "monitoring_policies": ("id", "name", "priority", "base_cadence_seconds", "min_cadence_seconds", "max_cadence_seconds", "created_at", "updated_at"),
@@ -70,7 +71,8 @@ _EXPORT_COLUMNS: dict[str, tuple[str, ...]] = {
     "search_index_meta": ("id", "dirty", "updated_at"),
     "ask_conversations": ("id", "scope_type", "scope_id", "created_at", "updated_at"),
     "ask_runs": ("id", "conversation_id", "turn_number", "status", "refusal_code", "context_units", "provider_route", "estimated_cost_usd", "created_at", "completed_at"),
-    "article_analyses": ("id", "document_version_id", "relevance_id", "monitor_id", "scope_version", "schema_version", "prompt_version", "provider", "model", "paid", "confidence", "input_char_count", "analyzed_char_count", "truncated", "input_view_version", "input_content_hash", "analyzed_content_hash", "invocation_id", "created_at"),
+    "article_analyses": ("id", "document_version_id", "relevance_id", "monitor_id", "job_id", "scope_version", "artifact_id", "normalized_content_hash", "schema_version", "prompt_version", "provider", "model", "paid", "confidence", "input_char_count", "analyzed_char_count", "truncated", "input_view_version", "input_content_hash", "analyzed_content_hash", "invocation_id", "created_at"),
+    "article_analysis_promotions": ("id", "promotion_identity", "article_analysis_id", "candidate_claim_index", "outcome_code", "claim_id", "evidence_span_ids_json", "created_at"),
 }
 
 

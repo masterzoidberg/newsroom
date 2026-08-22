@@ -395,7 +395,7 @@ class AskService:
         elif scope_type == "claim":
             empty["claims"].add(scope_id)
             row = conn.execute("SELECT story_id FROM claims WHERE id = ?", (scope_id,)).fetchone()
-            if row:
+            if row and row[0] is not None:
                 empty["stories"].add(row[0])
         elif scope_type == "evidence":
             empty["evidence"].add(scope_id)
@@ -603,7 +603,8 @@ class AskService:
         stale_count = 0
         story_ids: set[str] = set()
         for claim in retrieved.get("claims", {}).values():
-            story_ids.add(claim["story_id"])
+            if claim.get("story_id") is not None:
+                story_ids.add(claim["story_id"])
             claim_citation = cite("claim", claim["id"], claim["proposition"], kind="claim", state=claim["state"])
             evidence_citations: list[str] = []
             support = []
