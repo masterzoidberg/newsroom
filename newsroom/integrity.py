@@ -7,6 +7,10 @@ from dataclasses import dataclass
 from typing import Optional
 
 from . import storage
+from .evidence_promotion import (
+    AutomaticPromotionIntegrityError,
+    verify_automatic_promotion,
+)
 from .provenance import ProvenanceValidationError, validate_analysis_provenance
 
 
@@ -302,6 +306,33 @@ def check_database(db_path: Optional[str] = None) -> IntegrityReport:
                         issues.append(IntegrityIssue(code or "invalid_analysis_provenance", f"analysis={row[0]} {message.strip()}"))
                 except Exception as exc:
                     issues.append(IntegrityIssue("invalid_analysis_provenance", f"analysis={row[0]} {exc}"))
+
+        # Phase 22.3 — verified promotions must be independently reconstructable
+        # from the canonical artifact and the persisted ArticleAnalysis result.
+        # Database triggers can enforce relationship shape, but cannot prove
+        # that an excerpt is present at its claimed coordinates in the source
+        # text. The shared read-only verifier closes that boundary.
+        if _table_exists(conn, "article_analysis_promotions"):
+            for row in conn.execute(
+                "SELECT id FROM article_analysis_promotions WHERE outcome_code = 'verified' ORDER BY id"
+            ):
+                try:
+                    verify_automatic_promotion(db_path, row[0])
+                except AutomaticPromotionIntegrityError as exc:
+                    for detail in exc.issues:
+                        issues.append(
+                            IntegrityIssue(
+                                "invalid_verified_promotion",
+                                f"promotion={row[0]} {detail}",
+                            )
+                        )
+                except Exception as exc:
+                    issues.append(
+                        IntegrityIssue(
+                            "invalid_verified_promotion",
+                            f"promotion={row[0]} verification failed ({type(exc).__name__})",
+                        )
+                    )
         return IntegrityReport(not issues, tuple(issues))
     finally:
         conn.close()
