@@ -53,6 +53,7 @@ from newsroom.document_processing import DocumentProcessingExecutionService
 from newsroom.domain import CoreService
 from newsroom.integrity import check_database
 from newsroom.jobs import (
+    AUTOMATIC_STORY_STAGE_JOB_TYPE,
     DOCUMENT_VERSION_PROCESS_JOB_TYPE,
     BudgetService,
     MONITOR_CHECK_JOB_TYPE,
@@ -735,6 +736,17 @@ def test_rerun_preserves_audit_history(tmp_db):
 
     # Explicit rerun with an unchanged provider/model reuses the canonical
     # analysis: one durable record, no overwrite, no duplicate.
+    story_worker = WorkerProcess(
+        tmp_db,
+        build_worker_handlers(tmp_db),
+        worker_id="worker-p21-story-before-rerun",
+        queue=build_worker_queue(tmp_db),
+    )
+    prior_story_stage = story_worker.run_once(now=T1)
+    while prior_story_stage is not None:
+        assert prior_story_stage["job_type"] == AUTOMATIC_STORY_STAGE_JOB_TYPE
+        assert prior_story_stage["status"] == "succeeded"
+        prior_story_stage = story_worker.run_once(now=T1)
     rerun = build_worker_queue(tmp_db).rerun(first["id"])
     assert rerun["status"] == "queued"
     second = worker.run_once(now=T2)
@@ -1253,11 +1265,25 @@ def test_production_composition_relevant_and_irrelevant(tmp_db):
     assert _count(tmp_db, "document_versions") == 2
 
     del monitor_worker, queue, handlers, acquisition, transport
-    proc_worker = _processing_worker(tmp_db, worker_id="p21-composition-2")
+    proc_worker = WorkerProcess(
+        tmp_db,
+        build_worker_handlers(tmp_db),
+        worker_id="p21-composition-2",
+        queue=build_worker_queue(tmp_db),
+    )
     first = proc_worker.run_once(now=T1)
     second = proc_worker.run_once(now=T2)
     assert first["status"] == "succeeded"
     assert second["status"] == "succeeded"
+    story_stages = []
+    while True:
+        story_stage = proc_worker.run_once(now=T2)
+        if story_stage is None:
+            break
+        story_stages.append(story_stage)
+    assert story_stages
+    assert all(item["job_type"] == AUTOMATIC_STORY_STAGE_JOB_TYPE for item in story_stages)
+    assert all(item["status"] == "succeeded" for item in story_stages)
     assert proc_worker.run_once(now=T2) is None
 
     assert _count(tmp_db, "document_version_relevance") == 2
@@ -1279,8 +1305,12 @@ def test_production_composition_relevant_and_irrelevant(tmp_db):
     assert _count(tmp_db, "evidence_spans") > 0
     assert _count(tmp_db, "claims") > 0
     assert _count(tmp_db, "claim_evidence") > 0
-    # Phase 22 stops before downstream intelligence automation.
-    for table in ("stories", "story_revisions", "story_evolution_events", "living_reports", "alerts", "briefings"):
+    # Phase 23B may consume the verified promotions, but it still stops
+    # before Reports, Alerts, and Briefings.
+    assert _count(tmp_db, "stories") > 0
+    assert _count(tmp_db, "story_revisions") > 0
+    assert _count(tmp_db, "story_evolution_events") > 0
+    for table in ("living_reports", "alerts", "briefings"):
         assert _count(tmp_db, table) == 0, table
     conn = storage.connect(tmp_db)
     try:

@@ -358,10 +358,12 @@ def test_feed_entries_through_the_same_pipeline(tmp_db):
     assert _count(tmp_db, "document_versions") == 2
 
     worker = _processing_worker(tmp_db)
-    first = worker.run_once(now=T1)
-    second = worker.run_once(now=T2)
-    assert first["status"] == "succeeded"
-    assert second["status"] == "succeeded"
+    finished = []
+    while len(_relevance_records(tmp_db)) < 2:
+        result = worker.run_once(now=T1 if not finished else T2)
+        assert result is not None
+        assert result["status"] == "succeeded"
+        finished.append(result)
 
     records = _relevance_records(tmp_db)
     assert len(records) == 2
@@ -708,7 +710,15 @@ def test_explicit_rerun_preserves_idempotency_and_auditability(tmp_db):
 
     rerun = build_worker_queue(tmp_db).rerun(first["id"])
     assert rerun["status"] == "queued"
-    second = worker.run_once(now=T2)
+    second = None
+    for _ in range(10):
+        finished = worker.run_once(now=T2)
+        if finished is None:
+            break
+        if finished["id"] == rerun["id"]:
+            second = finished
+            break
+    assert second is not None
     assert second["status"] == "succeeded"
     assert _count(tmp_db, "document_version_relevance") == 1
     assert second["result"]["relevance"]["relevance_id"] == canonical_id
@@ -800,8 +810,15 @@ def test_scope_pin_survives_later_scope_mutation(tmp_db):
     # A second version acquired after the scope edit pins the current
     # snapshot and is evaluated against the widened approved scope.
     _acquire_again(tmp_db, transport, monitor["id"])
-    second = worker.run_once(now=T2)
-    assert second["status"] == "succeeded"
+    second = None
+    for _ in range(10):
+        result = worker.run_once(now=T2)
+        assert result is not None
+        assert result["status"] == "succeeded"
+        if len(_relevance_records(tmp_db)) == 2:
+            second = result
+            break
+    assert second is not None
     records = _relevance_records(tmp_db)
     assert len(records) == 2
     newer = records[1]
@@ -983,6 +1000,14 @@ def test_production_composition_relevant_and_not_relevant(tmp_db):
     second = proc_worker.run_once(now=T2)
     assert first["status"] == "succeeded"
     assert second["status"] == "succeeded"
+    remaining = []
+    while True:
+        finished = proc_worker.run_once(now=T2)
+        if finished is None:
+            break
+        remaining.append(finished)
+    assert remaining
+    assert all(item["status"] == "succeeded" for item in remaining)
     assert proc_worker.run_once(now=T2) is None
 
     records = _relevance_records(tmp_db)

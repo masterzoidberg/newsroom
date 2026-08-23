@@ -360,19 +360,26 @@ class EvidenceService:
         conn = storage.connect(self.db_path)
         try:
             with storage.write_tx(conn):
-                claim = _require(conn, "claims", claim_id, "claim")
-                _require(conn, "stories", story_id, "story", live=True)
-                if claim["story_id"] == story_id:
-                    return self._claim_result(conn, claim)
-                if claim["story_id"] is not None:
-                    raise DomainConflict("Claim Story association cannot be reassigned")
-                conn.execute("UPDATE claims SET story_id = ? WHERE id = ?", (story_id, claim_id))
+                self._assign_claim_to_story_tx(conn, claim_id, story_id)
                 return self._claim_result(
                     conn,
                     _require(conn, "claims", claim_id, "claim"),
                 )
         finally:
             conn.close()
+
+    @staticmethod
+    def _assign_claim_to_story_tx(conn, claim_id: str, story_id: str) -> sqlite3.Row:
+        """Assign a Claim inside a caller-owned mutation transaction."""
+
+        claim = _require(conn, "claims", claim_id, "claim")
+        _require(conn, "stories", story_id, "story", live=True)
+        if claim["story_id"] == story_id:
+            return claim
+        if claim["story_id"] is not None:
+            raise DomainConflict("Claim Story association cannot be reassigned")
+        conn.execute("UPDATE claims SET story_id = ? WHERE id = ?", (story_id, claim_id))
+        return _require(conn, "claims", claim_id, "claim")
 
     def list_claims(self, story_id: str, *, page=1, page_size=100) -> dict[str, Any]:
         if page < 1 or page_size < 1 or page_size > 100:
@@ -529,6 +536,8 @@ class EvidenceService:
         story_id: str,
         claim_ids: list[str],
         propositions: list[Mapping[str, Any]],
+        *,
+        require_accepted: bool = True,
     ) -> str:
         if not claim_ids or len(set(claim_ids)) != len(claim_ids):
             raise DomainValidation("synthesis audit failed: revision requires a unique Claim set")
@@ -543,8 +552,11 @@ class EvidenceService:
         ineligible = [
             identifier
             for identifier in claim_ids
-            if found[identifier]["accepted_at"] is None
-            or found[identifier]["state"] not in ACCEPTED_STATES
+            if require_accepted
+            and (
+                found[identifier]["accepted_at"] is None
+                or found[identifier]["state"] not in ACCEPTED_STATES
+            )
         ]
         if ineligible:
             raise DomainValidation("synthesis audit failed: revision requires accepted Claims")
@@ -557,11 +569,24 @@ class EvidenceService:
                 raise DomainValidation("synthesis audit failed: unsupported proposition citation")
         return claim_set_hash(claim_ids)
 
-    def _create_revision_tx(self, conn, story_id: str, data: Mapping[str, Any]) -> tuple[str, str]:
+    def _create_revision_tx(
+        self,
+        conn,
+        story_id: str,
+        data: Mapping[str, Any],
+        *,
+        require_accepted: bool = True,
+    ) -> tuple[str, str]:
         _require(conn, "stories", story_id, "story", live=True)
         claim_ids = list(data.get("claim_ids") or [])
         propositions = list(data.get("propositions") or [])
-        computed_hash = self._audit_revision_tx(conn, story_id, claim_ids, propositions)
+        computed_hash = self._audit_revision_tx(
+            conn,
+            story_id,
+            claim_ids,
+            propositions,
+            require_accepted=require_accepted,
+        )
         next_number = conn.execute(
             "SELECT COALESCE(MAX(revision_number), 0) + 1 FROM story_revisions WHERE story_id = ?",
             (story_id,),
@@ -615,6 +640,68 @@ class EvidenceService:
         )
         conn.execute("UPDATE stories SET updated_at = ? WHERE id = ?", (now, story_id))
         return revision_id, computed_hash
+
+    def _create_automatic_revision_tx(
+        self,
+        conn,
+        story_id: str,
+        data: Mapping[str, Any],
+        *,
+        verified_evidence: tuple[tuple[str, str], ...] | None = None,
+    ) -> tuple[str, str]:
+        """Create an evidence-bound revision for one qualified auto Claim."""
+
+        claim_ids = list(data.get("claim_ids") or [])
+        if len(claim_ids) != 1:
+            raise DomainValidation("automatic Story revision requires exactly one Claim")
+        claim = _require(conn, "claims", claim_ids[0], "claim")
+        if (
+            claim["story_id"] != story_id
+            or claim["article_analysis_id"] is None
+            or claim["state"] != "pending"
+            or claim["accepted_at"] is not None
+        ):
+            raise DomainConflict("automatic Story revision requires a pending automatic Claim")
+        evidence = conn.execute(
+            """
+            SELECT ce.evidence_span_id, ce.relationship, es.document_version_id
+            FROM claim_evidence ce
+            JOIN evidence_spans es ON es.id = ce.evidence_span_id
+            WHERE ce.claim_id = ?
+            ORDER BY ce.created_at, ce.id
+            """,
+            (claim["id"],),
+        ).fetchall()
+        if not evidence or not any(row["relationship"] == "supports" for row in evidence):
+            raise DomainValidation("automatic Story revision requires supporting evidence")
+        if any(row["relationship"] == "contradicts" for row in evidence):
+            raise DomainConflict("automatic Story revision cannot cite contradictory evidence")
+        if verified_evidence is not None:
+            actual_evidence = tuple(
+                sorted((str(row["evidence_span_id"]), str(row["relationship"])) for row in evidence)
+            )
+            if actual_evidence != tuple(sorted(verified_evidence)):
+                raise DomainConflict("automatic Story revision evidence changed after verification")
+        if not conn.execute(
+            """
+            SELECT 1
+            FROM claim_evidence ce
+            JOIN evidence_spans es ON es.id = ce.evidence_span_id
+            JOIN document_versions dv ON dv.id = es.document_version_id
+            JOIN documents d ON d.id = dv.document_id
+            JOIN sources s ON s.id = d.source_id AND s.deleted_at IS NULL
+            WHERE ce.claim_id = ?
+            LIMIT 1
+            """,
+            (claim["id"],),
+        ).fetchone():
+            raise DomainValidation("automatic Story revision requires document provenance")
+        return self._create_revision_tx(
+            conn,
+            story_id,
+            data,
+            require_accepted=False,
+        )
 
     def _revision_result(self, conn, row: sqlite3.Row) -> dict[str, Any]:
         result = _as_dict(row)

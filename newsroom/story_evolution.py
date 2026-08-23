@@ -532,6 +532,112 @@ class StoryEvolutionService:
             conn.close()
         return self._event(event_id)
 
+    def record_automatic_observation_tx(
+        self,
+        conn: sqlite3.Connection,
+        story_id: str,
+        document_id: str,
+        claim_id: str,
+        promotion_id: str,
+        job_id: str,
+        update_class: str,
+        *,
+        candidate: StoryCandidate | Mapping[str, Any] | None = None,
+        decision: Mapping[str, Any] | None = None,
+        revision_id: str | None = None,
+        material_change: bool = False,
+    ) -> str:
+        """Record one automatic event inside the Story mutation transaction.
+
+        The existing public observation method remains the manual/API path.
+        Automatic work supplies its durable Job identity in the decision
+        context so retries can recognize the same logical event without a
+        second Story-matching or mutation algorithm.
+        """
+
+        update_class = self._validate_update_class(update_class)
+        self._require(conn, "stories", story_id, "story")
+        self._require(conn, "documents", document_id, "document")
+        claim = self._require(conn, "claims", claim_id, "claim")
+        if claim["story_id"] != story_id:
+            raise DomainValidation("automatic event Claim must belong to the Story")
+        promotion = self._require(conn, "article_analysis_promotions", promotion_id, "promotion")
+        if promotion["claim_id"] != claim_id or promotion["outcome_code"] != "verified":
+            raise DomainValidation("automatic event promotion does not match the Claim")
+        self._require(conn, "jobs", job_id, "Story-stage Job")
+        if revision_id is not None:
+            revision = self._require(conn, "story_revisions", revision_id, "story revision")
+            if revision["story_id"] != story_id:
+                raise DomainValidation("automatic event revision must belong to the Story")
+
+        existing = conn.execute(
+            """
+            SELECT id FROM story_evolution_events
+            WHERE json_extract(decision_json, '$.automatic_story_stage.job_id') = ?
+            """,
+            (job_id,),
+        ).fetchone()
+        if existing is not None:
+            return existing[0]
+
+        candidate_values = {"id": document_id, "headline": ""}
+        if candidate:
+            candidate_values.update(candidate if isinstance(candidate, Mapping) else {})
+        candidate_obj = candidate if isinstance(candidate, StoryCandidate) else StoryCandidate.from_mapping(candidate_values)
+        now = utc_now()
+        if conn.execute(
+            "SELECT 1 FROM story_documents WHERE story_id = ? AND document_id = ?",
+            (story_id, document_id),
+        ).fetchone() is None:
+            conn.execute(
+                """
+                INSERT INTO story_documents
+                    (story_id, document_id, event_key, entities_json, locations_json, linked_at)
+                VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    story_id,
+                    document_id,
+                    candidate_obj.event_key,
+                    _json_value(sorted(candidate_obj.entities)),
+                    _json_value(sorted(candidate_obj.locations)),
+                    now,
+                ),
+            )
+        event_decision = dict(decision or {})
+        event_decision["automatic_story_stage"] = {
+            "job_id": job_id,
+            "promotion_id": promotion_id,
+            "claim_id": claim_id,
+        }
+        event_id = new_id("evo")
+        conn.execute(
+            """
+            INSERT INTO story_evolution_events
+                (id, story_id, document_id, update_class, material_change, decision_json, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                event_id,
+                story_id,
+                document_id,
+                update_class,
+                int(material_change),
+                _json_value(event_decision),
+                now,
+            ),
+        )
+        if revision_id is not None:
+            conn.execute(
+                """
+                INSERT OR IGNORE INTO story_revision_documents
+                    (revision_id, document_id, role, created_at)
+                VALUES (?, ?, 'trigger', ?)
+                """,
+                (revision_id, document_id, now),
+            )
+        return event_id
+
     def link_lineage(
         self,
         document_id: str,

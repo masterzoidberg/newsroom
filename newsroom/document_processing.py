@@ -347,6 +347,7 @@ class DocumentProcessingExecutionService:
                 "outcomes": [
                     {
                         "code": item["code"],
+                        "promotion_id": item["id"],
                         "claim_id": item["claim_id"],
                         "evidence_span_ids": item["evidence_span_ids"],
                     }

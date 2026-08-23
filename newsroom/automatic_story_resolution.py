@@ -346,6 +346,23 @@ class AutomaticStoryResolutionService:
                 story_resolution_reason_code="promotion_missing",
             )
 
+        return self.resolve_verified_graph(promotion_id, graph)
+
+    def resolve_verified_graph(
+        self,
+        promotion_id: str,
+        graph: Mapping[str, Any],
+        *,
+        conn=None,
+    ) -> AutomaticStoryResolutionResult:
+        """Resolve a graph already returned by ``verify_automatic_promotion``.
+
+        The worker uses this entry point after acquiring its write transaction
+        so candidate retrieval observes the current Story state without
+        opening a second database transaction. Callers must not provide an
+        unchecked graph.
+        """
+
         claim_id = graph["claim"]["id"]
         qualification_reason = _claim_qualification_reason(graph)
         if qualification_reason != "verified_pending_automatic_claim":
@@ -359,7 +376,7 @@ class AutomaticStoryResolutionService:
             )
 
         incoming = self._incoming_candidate(graph)
-        retrieval = self._retrieve_candidates(incoming)
+        retrieval = self._retrieve_candidates(incoming, conn=conn)
         if retrieval.terms_truncated:
             return self._deferred_result(
                 promotion_id,
@@ -468,7 +485,7 @@ class AutomaticStoryResolutionService:
         escaped = value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
         return f"%{escaped.casefold()}%"
 
-    def _retrieve_candidates(self, incoming: StoryCandidate) -> _CandidateRetrieval:
+    def _retrieve_candidates(self, incoming: StoryCandidate, *, conn=None) -> _CandidateRetrieval:
         terms, terms_truncated = self._retrieval_terms(incoming)
         if terms_truncated:
             return _CandidateRetrieval((), terms_truncated=True)
@@ -704,11 +721,13 @@ class AutomaticStoryResolutionService:
             ORDER BY id
         """
         params.append(self.max_candidates + 1)
-        conn = storage.connect(self.db_path)
+        owns_connection = conn is None
+        conn = conn or storage.connect(self.db_path)
         try:
             rows = conn.execute(query, params).fetchall()
         finally:
-            conn.close()
+            if owns_connection:
+                conn.close()
 
         saturated = len(rows) > self.max_candidates
         candidates: list[StoryCandidate] = []

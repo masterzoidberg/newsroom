@@ -27,6 +27,11 @@ from .research_questions import (
     research_job_recovery_hook,
 )
 from .scheduler import SchedulerProcess
+from .story_automation import (
+    AutomaticStoryStageExecutionService,
+    automatic_story_stage_completion_hook,
+    automatic_story_stage_rerun_factory,
+)
 from .worker import WorkerProcess, merge_handlers
 
 
@@ -112,6 +117,7 @@ def build_worker_handlers(db_path: str | Path) -> dict[str, Any]:
         MonitorExecutionService(db_path).handlers(),
         ResearchQuestionExecutionService(db_path).handlers(),
         DocumentProcessingExecutionService(db_path).handlers(),
+        AutomaticStoryStageExecutionService(db_path).handlers(),
     )
 
 
@@ -130,10 +136,12 @@ def build_worker_queue(db_path: str | Path) -> JobService:
         completion_hook=compose_completion_hooks(
             research_job_completion_hook,
             monitor_job_completion_hook,
+            automatic_story_stage_completion_hook(db_path),
         ),
         rerun_factory=compose_rerun_factories(
             research_job_rerun_factory,
             document_version_processing_rerun_factory,
+            automatic_story_stage_rerun_factory,
         ),
     )
 
