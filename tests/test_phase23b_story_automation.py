@@ -206,6 +206,15 @@ def _variant_promotion(db, suffix: str, *, proposition: str) -> tuple[str, str]:
 
 def _story_with_claim(db, proposition: str, *, lifecycle: str = "developing"):
     story = CoreService(db).create_story({"headline": proposition, "lifecycle": lifecycle})
+    conn = storage.connect(db)
+    try:
+        with storage.write_tx(conn):
+            conn.execute(
+                "UPDATE stories SET created_at = ?, updated_at = ? WHERE id = ?",
+                (T0, T0, story["id"]),
+            )
+    finally:
+        conn.close()
     claim = EvidenceService(db).create_claim(story["id"], {"proposition": proposition})
     return story, claim
 

@@ -8,6 +8,7 @@ from newsroom import storage
 from newsroom.domain import CoreService, DomainConflict, DomainNotFound
 from newsroom.evidence import EvidenceService
 from newsroom.jobs import (
+    AUTOMATIC_REPORT_STAGE_JOB_TYPE,
     AUTOMATIC_STORY_STAGE_JOB_TYPE,
     DOCUMENT_VERSION_PROCESS_JOB_TYPE,
     BudgetService,
@@ -94,6 +95,7 @@ def test_production_handler_coverage(tmp_db):
         ResearchQuestionService.job_type,
         DOCUMENT_VERSION_PROCESS_JOB_TYPE,
         AUTOMATIC_STORY_STAGE_JOB_TYPE,
+        AUTOMATIC_REPORT_STAGE_JOB_TYPE,
     }
     missing = produced - set(handlers)
     assert not missing, f"enqueue producers without a production handler: {sorted(missing)}"

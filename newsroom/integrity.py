@@ -333,6 +333,204 @@ def check_database(db_path: Optional[str] = None) -> IntegrityReport:
                             f"promotion={row[0]} verification failed ({type(exc).__name__})",
                         )
                     )
+
+        # Phase 23C — report pointers, closed-world propositions, and exact
+        # polymorphic causes must remain reconstructable from canonical rows.
+        if _table_exists(conn, "living_reports") and _table_exists(conn, "report_revisions"):
+            for row in conn.execute(
+                """
+                SELECT lr.id, lr.current_revision_id
+                FROM living_reports lr
+                LEFT JOIN report_revisions rr
+                  ON rr.id = lr.current_revision_id AND rr.report_id = lr.id
+                WHERE lr.current_revision_id IS NOT NULL AND rr.id IS NULL
+                ORDER BY lr.id
+                """
+            ):
+                issues.append(
+                    IntegrityIssue(
+                        "report_current_revision_mismatch",
+                        f"report={row[0]} revision={row[1]}",
+                    )
+                )
+            for revision in conn.execute(
+                "SELECT id, propositions_json, what_changed FROM report_revisions ORDER BY id"
+            ):
+                claim_ids = {
+                    item[0]
+                    for item in conn.execute(
+                        "SELECT claim_id FROM report_revision_claims WHERE revision_id = ?",
+                        (revision["id"],),
+                    )
+                }
+                cause_ids = {
+                    item[0]
+                    for item in conn.execute(
+                        "SELECT id FROM report_revision_causes WHERE revision_id = ?",
+                        (revision["id"],),
+                    )
+                }
+                try:
+                    propositions = json.loads(revision["propositions_json"])
+                    changes = json.loads(revision["what_changed"] or "[]")
+                except (TypeError, ValueError, json.JSONDecodeError):
+                    issues.append(
+                        IntegrityIssue(
+                            "invalid_report_closed_world",
+                            f"revision={revision['id']} malformed JSON",
+                        )
+                    )
+                    continue
+                if not isinstance(propositions, list) or any(
+                    not isinstance(item, dict)
+                    or not item.get("claim_ids")
+                    or not set(item["claim_ids"]) <= claim_ids
+                    for item in propositions
+                ):
+                    issues.append(
+                        IntegrityIssue(
+                            "invalid_report_closed_world",
+                            f"revision={revision['id']} proposition cites outside Claim set",
+                        )
+                    )
+                if not isinstance(changes, list) or any(
+                    not isinstance(item, dict)
+                    or not item.get("cause_ids")
+                    or not set(item["cause_ids"]) <= cause_ids
+                    for item in changes
+                ):
+                    issues.append(
+                        IntegrityIssue(
+                            "invalid_report_change_cause",
+                            f"revision={revision['id']} what_changed lacks exact causes",
+                        )
+                    )
+            for cause in conn.execute(
+                "SELECT * FROM report_revision_causes ORDER BY revision_id, id"
+            ):
+                chain = conn.execute(
+                    """
+                    SELECT c.story_id, dv.document_id
+                    FROM claims c
+                    JOIN report_revision_claims rrc
+                      ON rrc.claim_id = c.id AND rrc.revision_id = ?
+                    JOIN claim_evidence ce
+                      ON ce.claim_id = c.id AND ce.relationship = 'supports'
+                    JOIN evidence_spans es
+                      ON es.id = ce.evidence_span_id
+                    JOIN document_versions dv
+                      ON dv.id = es.document_version_id
+                    JOIN documents d ON d.id = dv.document_id
+                    JOIN sources s ON s.id = d.source_id
+                    WHERE c.id = ? AND es.id = ?
+                    """,
+                    (cause["revision_id"], cause["claim_id"], cause["evidence_span_id"]),
+                ).fetchone()
+                valid = bool(
+                    chain
+                    and chain["story_id"] == cause["story_id"]
+                    and chain["document_id"] == cause["document_id"]
+                )
+                if valid and cause["cause_id"] != cause["claim_id"]:
+                    event = conn.execute(
+                        "SELECT story_id, document_id FROM story_evolution_events WHERE id = ?",
+                        (cause["cause_id"],),
+                    ).fetchone()
+                    valid = bool(
+                        event
+                        and event["story_id"] == cause["story_id"]
+                        and event["document_id"] == cause["document_id"]
+                    )
+                if not valid:
+                    issues.append(
+                        IntegrityIssue(
+                            "invalid_report_cause_chain",
+                            f"revision={cause['revision_id']} cause={cause['id']}",
+                        )
+                    )
+        if _table_exists(conn, "claims") and _table_exists(conn, "claim_state_history"):
+            for claim in conn.execute(
+                """
+                SELECT c.id, c.state, c.accepted_at, h.id AS history_id,
+                       h.from_state, h.to_state, h.reason
+                FROM claim_state_history h
+                JOIN claims c ON c.id = h.claim_id
+                WHERE h.reason LIKE 'automatic_report_acceptance:%'
+                ORDER BY c.id, h.rowid
+                """
+            ):
+                duplicates = conn.execute(
+                    """
+                    SELECT COUNT(*) FROM claim_state_history
+                    WHERE claim_id = ? AND reason = ?
+                    """,
+                    (claim["id"], claim["reason"]),
+                ).fetchone()[0]
+                if (
+                    claim["from_state"] != "pending"
+                    or claim["to_state"] != "supported"
+                    or claim["state"] != "supported"
+                    or claim["accepted_at"] is None
+                    or duplicates != 1
+                ):
+                    issues.append(
+                        IntegrityIssue(
+                            "invalid_automatic_claim_acceptance",
+                            f"claim={claim['id']} history={claim['history_id']}",
+                        )
+                    )
+        if _table_exists(conn, "jobs"):
+            for job in conn.execute(
+                """
+                SELECT id, payload_json, result_json
+                FROM jobs
+                WHERE job_type = 'automatic_report_stage'
+                  AND status IN ('succeeded', 'partial')
+                ORDER BY id
+                """
+            ):
+                try:
+                    payload = json.loads(job["payload_json"])
+                    result = json.loads(job["result_json"])
+                except (TypeError, ValueError, json.JSONDecodeError):
+                    payload = result = None
+                valid = bool(
+                    isinstance(payload, dict)
+                    and isinstance(result, dict)
+                    and result.get("stage_status")
+                    in {"completed", "no_change", "deferred", "terminal"}
+                )
+                if valid and result.get("stage_status") in {"completed", "no_change"}:
+                    revision = conn.execute(
+                        """
+                        SELECT rr.report_id, lr.target_id
+                        FROM report_revisions rr
+                        JOIN living_reports lr
+                          ON lr.id = rr.report_id AND lr.target_type = 'story'
+                        JOIN report_revision_claims rrc
+                          ON rrc.revision_id = rr.id AND rrc.claim_id = ?
+                        WHERE rr.id = ? AND rr.report_id = ? AND lr.target_id = ?
+                        """,
+                        (
+                            result.get("claim_id"),
+                            result.get("revision_id"),
+                            result.get("report_id"),
+                            result.get("story_id"),
+                        ),
+                    ).fetchone()
+                    valid = bool(
+                        revision
+                        and result.get("claim_id") == payload.get("claim_id")
+                        and result.get("story_id") == payload.get("story_id")
+                        and result.get("promotion_id") == payload.get("promotion_id")
+                    )
+                if not valid:
+                    issues.append(
+                        IntegrityIssue(
+                            "invalid_automatic_report_checkpoint",
+                            f"job={job['id']}",
+                        )
+                    )
         return IntegrityReport(not issues, tuple(issues))
     finally:
         conn.close()

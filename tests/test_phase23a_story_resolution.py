@@ -21,7 +21,7 @@ from newsroom.evidence import EvidenceService
 from newsroom.evidence_promotion import ArticleAnalysisPromotionService
 from newsroom.story_evolution import StoryCandidate
 
-from test_phase22_evidence_promotion import _analysis
+from test_phase22_evidence_promotion import T0, _analysis
 
 
 def _promotion(db, *, proposition: str = "The agency released a UAP report.") -> tuple[str, str]:
@@ -45,6 +45,15 @@ def _story_with_claim(
     story = CoreService(db).create_story(
         {"headline": headline or proposition, "lifecycle": lifecycle}
     )
+    conn = storage.connect(db)
+    try:
+        with storage.write_tx(conn):
+            conn.execute(
+                "UPDATE stories SET created_at = ?, updated_at = ? WHERE id = ?",
+                (T0, T0, story["id"]),
+            )
+    finally:
+        conn.close()
     claim = EvidenceService(db).create_claim(
         story["id"], {"proposition": proposition}
     )

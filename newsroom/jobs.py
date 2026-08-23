@@ -65,6 +65,7 @@ MONITOR_CHECK_JOB_TYPE = "monitor_check"
 RESEARCH_QUESTION_JOB_TYPE = "research_question"
 DOCUMENT_VERSION_PROCESS_JOB_TYPE = "document_version_process"
 AUTOMATIC_STORY_STAGE_JOB_TYPE = "automatic_story_stage"
+AUTOMATIC_REPORT_STAGE_JOB_TYPE = "automatic_report_stage"
 
 RecoveryHook = Callable[[sqlite3.Connection, sqlite3.Row, str], None]
 CompletionHook = Callable[[sqlite3.Connection, sqlite3.Row, str, Mapping[str, Any] | None], None]
@@ -1789,6 +1790,7 @@ __all__ = [
     "BudgetService",
     "CompletionHook",
     "AUTOMATIC_STORY_STAGE_JOB_TYPE",
+    "AUTOMATIC_REPORT_STAGE_JOB_TYPE",
     "DOCUMENT_VERSION_PROCESS_JOB_TYPE",
     "JobConflict",
     "JobError",

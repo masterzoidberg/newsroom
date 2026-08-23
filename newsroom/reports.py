@@ -95,6 +95,17 @@ def _cause_event_type(update_class: str) -> str:
     }.get(update_class, "material_update")
 
 
+def _report_input_identity(sections: Mapping[str, Any], propositions: list[dict[str, Any]]) -> str:
+    """Hash exactly the deterministic persisted inputs rendered by a revision."""
+
+    material_sections = dict(sections)
+    material_sections["what_changed"] = []
+    encoded = _encode(
+        {"sections": material_sections, "propositions": propositions}
+    )
+    return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+
+
 class LivingReportService:
     """Create immutable, accepted-Claim-bound report revisions."""
 
@@ -248,7 +259,12 @@ class LivingReportService:
         }
         if target_type not in queries:
             return []
-        return [row[0] for row in conn.execute(f"{queries[target_type][0]} LIMIT 100", (queries[target_type][1],)).fetchall()]
+        return sorted(
+            row[0]
+            for row in conn.execute(
+                f"{queries[target_type][0]} LIMIT 100", (queries[target_type][1],)
+            ).fetchall()
+        )
 
     def _accepted_claims(self, conn: sqlite3.Connection, story_ids: list[str]) -> list[sqlite3.Row]:
         if not story_ids:
@@ -350,10 +366,10 @@ class LivingReportService:
             question_params.append(claim_id)
         unresolved = []
         if question_clauses:
-            unresolved = [dict(item) for item in conn.execute(f"SELECT rq.id, rq.question, rq.priority, rq.origin_type, rq.origin_id FROM research_questions rq WHERE rq.status = 'open' AND ({' OR '.join(question_clauses)}) ORDER BY CASE rq.priority WHEN 'urgent' THEN 3 WHEN 'high' THEN 2 WHEN 'normal' THEN 1 ELSE 0 END DESC, rq.created_at LIMIT 100", question_params).fetchall()]
+            unresolved = [dict(item) for item in conn.execute(f"SELECT rq.id, rq.question, rq.priority, rq.origin_type, rq.origin_id FROM research_questions rq WHERE rq.status = 'open' AND ({' OR '.join(question_clauses)}) ORDER BY CASE rq.priority WHEN 'urgent' THEN 3 WHEN 'high' THEN 2 WHEN 'normal' THEN 1 ELSE 0 END DESC, rq.created_at, rq.id LIMIT 100", question_params).fetchall()]
         suggestions = []
         if question_clauses:
-            suggestions = [dict(item) for item in conn.execute(f"SELECT rgs.id, rgs.suggestion, rgs.rationale, rgs.expected_information_value, rgs.suggestion_type, rgs.origin_type, rgs.origin_id FROM research_gap_suggestions rgs WHERE rgs.status = 'pending' AND ({' OR '.join('(' + clause.replace('rq.', 'rgs.') + ')' for clause in question_clauses)}) ORDER BY rgs.expected_information_value DESC, rgs.created_at LIMIT 100", question_params).fetchall()]
+            suggestions = [dict(item) for item in conn.execute(f"SELECT rgs.id, rgs.suggestion, rgs.rationale, rgs.expected_information_value, rgs.suggestion_type, rgs.origin_type, rgs.origin_id FROM research_gap_suggestions rgs WHERE rgs.status = 'pending' AND ({' OR '.join('(' + clause.replace('rq.', 'rgs.') + ')' for clause in question_clauses)}) ORDER BY rgs.expected_information_value DESC, rgs.created_at, rgs.id LIMIT 100", question_params).fetchall()]
         sections = {
             "current_status": f"{len(active_stories)} active Story record(s) with {len(claim_ids)} accepted Claim(s).",
             "what_changed": [],
@@ -365,105 +381,270 @@ class LivingReportService:
         }
         return sections, [{"text": claim["proposition"], "claim_ids": [claim["id"]]} for claim in claims if claim["id"] in claim_id_set]
 
-    def generate(self, identifier: str, *, generated_at: str | datetime | None = None) -> dict[str, Any]:
+    @staticmethod
+    def _stored_input_identity(row: sqlite3.Row) -> str:
+        audit = _decode(row["audit_json"], {})
+        identity = audit.get("input_identity") if isinstance(audit, dict) else None
+        if isinstance(identity, str) and identity:
+            return identity
+        return _report_input_identity(
+            _decode(row["sections_json"], {}),
+            _decode(row["propositions_json"], []),
+        )
+
+    @staticmethod
+    def _validate_cause_tx(
+        conn: sqlite3.Connection,
+        cause: Mapping[str, Any],
+        accepted_ids: set[str],
+    ) -> bool:
+        if cause.get("cause_type") not in CAUSE_TYPES or cause.get("claim_id") not in accepted_ids:
+            return False
+        chain = conn.execute(
+            """
+            SELECT c.story_id, dv.document_id
+            FROM claims c
+            JOIN claim_evidence ce ON ce.claim_id = c.id AND ce.relationship = 'supports'
+            JOIN evidence_spans es ON es.id = ce.evidence_span_id
+            JOIN document_versions dv ON dv.id = es.document_version_id
+            JOIN documents d ON d.id = dv.document_id
+            JOIN sources s ON s.id = d.source_id
+            WHERE c.id = ? AND es.id = ?
+            """,
+            (cause.get("claim_id"), cause.get("evidence_span_id")),
+        ).fetchone()
+        if chain is None:
+            return False
+        if chain["story_id"] != cause.get("story_id") or chain["document_id"] != cause.get("document_id"):
+            return False
+        if cause.get("cause_id") == cause.get("claim_id"):
+            return True
+        event = conn.execute(
+            "SELECT story_id, document_id FROM story_evolution_events WHERE id = ?",
+            (cause.get("cause_id"),),
+        ).fetchone()
+        return bool(
+            event
+            and event["story_id"] == cause.get("story_id")
+            and event["document_id"] == cause.get("document_id")
+        )
+
+    def generate_tx(
+        self,
+        conn: sqlite3.Connection,
+        identifier: str,
+        *,
+        generated_at: str | datetime | None = None,
+    ) -> dict[str, Any]:
+        """Generate once for the exact current input inside a caller mutation transaction."""
+
         generated = _timestamp(generated_at)
+        report = self._require(conn, identifier)
+        if report["status"] != "active":
+            raise DomainConflict("archived living reports cannot be generated")
+        story_ids = self._story_ids(conn, report)
+        claims = self._accepted_claims(conn, story_ids)
+        sections, propositions = self._collect_sections(conn, story_ids, claims)
+        current_claim_ids = [claim["id"] for claim in claims]
+        current_hash = claim_set_hash(current_claim_ids)
+        input_identity = _report_input_identity(sections, propositions)
+        previous_revision_id = report["current_revision_id"]
+        previous_revision = None
+        if previous_revision_id:
+            previous_revision = conn.execute(
+                "SELECT * FROM report_revisions WHERE id = ? AND report_id = ?",
+                (previous_revision_id, identifier),
+            ).fetchone()
+            if previous_revision is None:
+                raise DomainConflict("living report current revision does not belong to the report")
+
+        previous_claim_ids = self._previous_claim_ids(conn, identifier)
+        previous_cause_ids = self._previous_cause_ids(conn, identifier)
+        previous_evidence_ids = self._previous_evidence_ids(conn, identifier)
+        causes: list[dict[str, Any]] = []
+        for claim in claims:
+            for item in self._claim_evidence(conn, claim["id"]):
+                if item["relationship"] != "supports" or (
+                    claim["id"] in previous_claim_ids
+                    and item["evidence_span_id"] in previous_evidence_ids
+                ):
+                    continue
+                cause_type = (
+                    "new_primary_evidence"
+                    if item["default_quality"] == "primary" or item["source_kind"] == "official"
+                    else "material_update"
+                )
+                causes.append(
+                    {
+                        "id": new_id("cause"),
+                        "cause_type": cause_type,
+                        "cause_id": claim["id"],
+                        "story_id": claim["story_id"],
+                        "claim_id": claim["id"],
+                        "evidence_span_id": item["evidence_span_id"],
+                        "document_id": item["document_id"],
+                        "rationale": "Accepted Claim entered the report evidence set.",
+                    }
+                )
+        event_rows = []
+        if story_ids:
+            placeholders = ",".join("?" for _ in story_ids)
+            event_rows = conn.execute(
+                f"SELECT * FROM story_evolution_events WHERE story_id IN ({placeholders}) ORDER BY created_at, id LIMIT 200",
+                story_ids,
+            ).fetchall()
+        for event in event_rows:
+            if event["id"] in previous_cause_ids or not event["material_change"]:
+                continue
+            linked_evidence = [
+                (claim["id"], item)
+                for claim in claims
+                for item in self._claim_evidence(conn, claim["id"])
+                if item["document_id"] == event["document_id"]
+                and item["relationship"] == "supports"
+            ]
+            if linked_evidence:
+                claim_id, evidence = linked_evidence[0]
+                causes.append(
+                    {
+                        "id": new_id("cause"),
+                        "cause_type": _cause_event_type(event["update_class"]),
+                        "cause_id": event["id"],
+                        "story_id": event["story_id"],
+                        "claim_id": claim_id,
+                        "evidence_span_id": evidence["evidence_span_id"],
+                        "document_id": event["document_id"],
+                        "rationale": f"Story evolution recorded {event['update_class']} against accepted evidence.",
+                    }
+                )
+        unique_causes: list[dict[str, Any]] = []
+        seen_causes: set[tuple[str, str, str]] = set()
+        for cause in causes:
+            key = (cause["cause_type"], cause["cause_id"], cause["evidence_span_id"])
+            if key not in seen_causes:
+                seen_causes.add(key)
+                unique_causes.append(cause)
+        causes = unique_causes
+
+        if previous_revision is not None and not causes and self._stored_input_identity(previous_revision) == input_identity:
+            return {
+                "status": "no_change",
+                "report_id": identifier,
+                "revision_id": previous_revision["id"],
+                "input_identity": input_identity,
+            }
+        if previous_revision is not None and not causes:
+            raise DomainConflict("material report input changed without an exact persisted cause")
+
+        accepted_ids = {claim["id"] for claim in claims}
+        unsupported_propositions = []
+        for proposition in propositions:
+            proposition_claim_ids = set(proposition.get("claim_ids", []))
+            supported_claim_ids = {
+                claim_id
+                for claim_id in proposition_claim_ids & accepted_ids
+                if any(
+                    item["relationship"] == "supports"
+                    for item in self._claim_evidence(conn, claim_id)
+                )
+            }
+            if not proposition_claim_ids or supported_claim_ids != proposition_claim_ids:
+                unsupported_propositions.append(proposition.get("text", ""))
+        unsupported_changes = [
+            cause["rationale"]
+            for cause in causes
+            if not self._validate_cause_tx(conn, cause, accepted_ids)
+        ]
+        audit = {
+            "passed": not unsupported_propositions and not unsupported_changes,
+            "unsupported_propositions": unsupported_propositions,
+            "unsupported_changes": unsupported_changes,
+            "claim_set_hash": current_hash,
+            "input_identity": input_identity,
+        }
+        if not audit["passed"]:
+            raise DomainConflict("report generation produced unsupported closed-world content")
+        sections["what_changed"] = [
+            {
+                "text": cause["rationale"],
+                "cause_type": cause["cause_type"],
+                "cause_ids": [cause["id"]],
+                "claim_ids": [cause["claim_id"]],
+                "evidence_span_ids": [cause["evidence_span_id"]],
+            }
+            for cause in causes
+        ]
+        revision_number = conn.execute(
+            "SELECT COALESCE(MAX(revision_number), 0) + 1 FROM report_revisions WHERE report_id = ?",
+            (identifier,),
+        ).fetchone()[0]
+        revision_id = new_id("rptrev")
+        conn.execute(
+            """
+            INSERT INTO report_revisions
+                (id, report_id, revision_number, claim_set_hash, material_change,
+                 current_status, what_changed, sections_json, propositions_json,
+                 audit_json, generated_at, created_at)
+            VALUES (?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                revision_id,
+                identifier,
+                revision_number,
+                current_hash,
+                sections["current_status"],
+                _encode(sections["what_changed"]),
+                _encode(sections),
+                _encode(propositions),
+                _encode(audit),
+                generated,
+                generated,
+            ),
+        )
+        for position, claim_id in enumerate(current_claim_ids):
+            conn.execute(
+                "INSERT INTO report_revision_claims(revision_id, claim_id, position, created_at) VALUES (?, ?, ?, ?)",
+                (revision_id, claim_id, position, generated),
+            )
+        for cause in causes:
+            conn.execute(
+                "INSERT INTO report_revision_causes(id, revision_id, cause_type, cause_id, story_id, claim_id, evidence_span_id, document_id, rationale, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    cause["id"],
+                    revision_id,
+                    cause["cause_type"],
+                    cause["cause_id"],
+                    cause["story_id"],
+                    cause["claim_id"],
+                    cause["evidence_span_id"],
+                    cause["document_id"],
+                    cause["rationale"],
+                    generated,
+                ),
+            )
+        changed = conn.execute(
+            "UPDATE living_reports SET current_revision_id = ?, updated_at = ? WHERE id = ?",
+            (revision_id, generated, identifier),
+        )
+        if changed.rowcount != 1:
+            raise DomainNotFound("living report not found")
+        return {
+            "status": "material",
+            "report_id": identifier,
+            "revision_id": revision_id,
+            "input_identity": input_identity,
+        }
+
+    def generate(self, identifier: str, *, generated_at: str | datetime | None = None) -> dict[str, Any]:
         conn = storage.connect(self.db_path)
         try:
             with storage.write_tx(conn):
-                report = self._require(conn, identifier)
-                if report["status"] != "active":
-                    raise DomainConflict("archived living reports cannot be generated")
-                story_ids = self._story_ids(conn, report)
-                claims = self._accepted_claims(conn, story_ids)
-                sections, propositions = self._collect_sections(conn, story_ids, claims)
-                current_claim_ids = [claim["id"] for claim in claims]
-                current_hash = claim_set_hash(current_claim_ids)
-                previous_claim_ids = self._previous_claim_ids(conn, identifier)
-                previous_cause_ids = self._previous_cause_ids(conn, identifier)
-                previous_evidence_ids = self._previous_evidence_ids(conn, identifier)
-                new_claim_ids = set(current_claim_ids) - previous_claim_ids
-                causes: list[dict[str, Any]] = []
-                for claim in claims:
-                    evidence = self._claim_evidence(conn, claim["id"])
-                    for item in evidence:
-                        if item["relationship"] != "supports" or (claim["id"] in previous_claim_ids and item["evidence_span_id"] in previous_evidence_ids):
-                            continue
-                        cause_type = "new_primary_evidence" if item["default_quality"] == "primary" or item["source_kind"] == "official" else "material_update"
-                        causes.append({"cause_type": cause_type, "cause_id": claim["id"], "story_id": claim["story_id"], "claim_id": claim["id"], "evidence_span_id": item["evidence_span_id"], "document_id": item["document_id"], "rationale": "Accepted Claim entered the report evidence set."})
-                event_rows = []
-                if story_ids:
-                    placeholders = ",".join("?" for _ in story_ids)
-                    event_rows = conn.execute(f"SELECT * FROM story_evolution_events WHERE story_id IN ({placeholders}) ORDER BY created_at, id LIMIT 200", story_ids).fetchall()
-                for event in event_rows:
-                    if event["id"] in previous_cause_ids or not event["material_change"]:
-                        continue
-                    event_type = _cause_event_type(event["update_class"])
-                    linked_evidence = [
-                        (claim["id"], item)
-                        for claim in claims
-                        for item in self._claim_evidence(conn, claim["id"])
-                        if item["document_id"] == event["document_id"]
-                        and item["relationship"] == "supports"
-                    ]
-                    if not linked_evidence:
-                        continue
-                    claim_id, evidence = linked_evidence[0]
-                    causes.append({"cause_type": event_type, "cause_id": event["id"], "story_id": event["story_id"], "claim_id": claim_id, "evidence_span_id": evidence["evidence_span_id"], "document_id": event["document_id"], "rationale": f"Story evolution recorded {event['update_class']} against accepted evidence."})
-                unique_causes = []
-                seen_causes = set()
-                for cause in causes:
-                    key = (cause["cause_type"], cause["cause_id"], cause["evidence_span_id"])
-                    if key not in seen_causes:
-                        seen_causes.add(key)
-                        unique_causes.append(cause)
-                causes = unique_causes
-                sections["what_changed"] = [{"text": cause["rationale"], "cause_type": cause["cause_type"], "claim_ids": [cause["claim_id"]] if cause["claim_id"] else [], "evidence_span_ids": [cause["evidence_span_id"]] if cause["evidence_span_id"] else []} for cause in causes]
-                previous_revision = conn.execute("SELECT current_revision_id FROM living_reports WHERE id = ?", (identifier,)).fetchone()[0]
-                material_change = previous_revision is None or current_hash != (conn.execute("SELECT claim_set_hash FROM report_revisions WHERE id = ?", (previous_revision,)).fetchone()[0] if previous_revision else None) or bool(causes)
-                accepted_ids = {claim["id"] for claim in claims}
-                unsupported_propositions = []
-                for proposition in propositions:
-                    proposition_claim_ids = set(proposition.get("claim_ids", []))
-                    supported_claim_ids = {
-                        claim_id
-                        for claim_id in proposition_claim_ids & accepted_ids
-                        if any(item["relationship"] == "supports" for item in self._claim_evidence(conn, claim_id))
-                    }
-                    if not proposition_claim_ids or supported_claim_ids != proposition_claim_ids:
-                        unsupported_propositions.append(proposition.get("text", ""))
-                unsupported_changes = [
-                    cause["rationale"]
-                    for cause in causes
-                    if not cause.get("evidence_span_id") or not cause.get("claim_id")
-                ]
-                audit = {
-                    "passed": not unsupported_propositions and not unsupported_changes,
-                    "unsupported_propositions": unsupported_propositions,
-                    "unsupported_changes": unsupported_changes,
-                    "claim_set_hash": current_hash,
-                }
-                if not audit["passed"]:
-                    raise DomainConflict("report generation produced unsupported closed-world content")
-                revision_number = conn.execute("SELECT COALESCE(MAX(revision_number), 0) + 1 FROM report_revisions WHERE report_id = ?", (identifier,)).fetchone()[0]
-                revision_id = new_id("rptrev")
-                conn.execute(
-                    """
-                    INSERT INTO report_revisions
-                        (id, report_id, revision_number, claim_set_hash, material_change,
-                         current_status, what_changed, sections_json, propositions_json,
-                         audit_json, generated_at, created_at)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    """,
-                    (revision_id, identifier, revision_number, current_hash, int(material_change), sections["current_status"], _encode(sections["what_changed"]), _encode(sections), _encode(propositions), _encode(audit), generated, generated),
-                )
-                for position, claim_id in enumerate(current_claim_ids):
-                    conn.execute("INSERT INTO report_revision_claims(revision_id, claim_id, position, created_at) VALUES (?, ?, ?, ?)", (revision_id, claim_id, position, generated))
-                for cause in causes:
-                    conn.execute("INSERT INTO report_revision_causes(id, revision_id, cause_type, cause_id, story_id, claim_id, evidence_span_id, document_id, rationale, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", (new_id("cause"), revision_id, cause["cause_type"], cause["cause_id"], cause["story_id"], cause["claim_id"], cause["evidence_span_id"], cause["document_id"], cause["rationale"], generated))
-                conn.execute("UPDATE living_reports SET current_revision_id = ?, updated_at = ? WHERE id = ?", (revision_id, generated, identifier))
+                generation = self.generate_tx(conn, identifier, generated_at=generated_at)
         finally:
             conn.close()
-        return self.get(identifier)
+        result = self.get(identifier)
+        result["generation"] = generation
+        return result
 
 
 class BriefingService:

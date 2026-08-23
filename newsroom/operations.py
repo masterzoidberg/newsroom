@@ -62,6 +62,8 @@ _EXPORT_COLUMNS: dict[str, tuple[str, ...]] = {
     "source_profiles": ("source_id", "source_type", "updated_at"),
     "living_reports": ("id", "name", "target_type", "target_id", "status", "current_revision_id", "created_at", "updated_at"),
     "report_revisions": ("id", "report_id", "revision_number", "claim_set_hash", "material_change", "generated_at", "created_at"),
+    "report_revision_claims": ("revision_id", "claim_id", "position", "created_at"),
+    "report_revision_causes": ("id", "revision_id", "cause_type", "cause_id", "story_id", "claim_id", "evidence_span_id", "document_id", "rationale", "created_at"),
     "briefings": ("id", "period_type", "period_key", "timezone", "created_at"),
     "alert_rules": ("id", "target_type", "target_id", "event_type", "enabled", "created_at", "updated_at"),
     "alerts": ("id", "rule_id", "title", "status", "created_at", "acknowledged_at"),
