@@ -531,6 +531,157 @@ def check_database(db_path: Optional[str] = None) -> IntegrityReport:
                             f"job={job['id']}",
                         )
                     )
+        # Phase 23D — every persisted Alert cause must be an exact copy of a
+        # cause owned by its pinned ReportRevision, and completed automatic
+        # checkpoints must resolve to their durable in-app delivery rows.
+        if _table_exists(conn, "alerts") and _table_exists(conn, "report_revision_causes"):
+            cause_fields = (
+                "id",
+                "revision_id",
+                "cause_type",
+                "cause_id",
+                "story_id",
+                "claim_id",
+                "evidence_span_id",
+                "document_id",
+                "rationale",
+            )
+            for alert in conn.execute(
+                "SELECT id, report_revision_id, cause_json FROM alerts ORDER BY id"
+            ):
+                try:
+                    causes = json.loads(alert["cause_json"])
+                except (TypeError, ValueError, json.JSONDecodeError):
+                    causes = None
+                valid = bool(
+                    alert["report_revision_id"]
+                    and isinstance(causes, list)
+                    and causes
+                )
+                if valid:
+                    for cause in causes:
+                        if not isinstance(cause, dict):
+                            valid = False
+                            break
+                        persisted = conn.execute(
+                            "SELECT * FROM report_revision_causes WHERE id = ? AND revision_id = ?",
+                            (cause.get("id"), alert["report_revision_id"]),
+                        ).fetchone()
+                        if persisted is None or any(
+                            cause.get(field) != persisted[field]
+                            for field in cause_fields
+                        ):
+                            valid = False
+                            break
+                if not valid:
+                    issues.append(
+                        IntegrityIssue(
+                            "invalid_alert_cause_reference",
+                            f"alert={alert['id']} revision={alert['report_revision_id']}",
+                        )
+                    )
+        if _table_exists(conn, "jobs") and _table_exists(conn, "alert_deliveries"):
+            for job in conn.execute(
+                """
+                SELECT id, payload_json, result_json
+                FROM jobs
+                WHERE job_type = 'automatic_alert_stage'
+                  AND status IN ('succeeded', 'partial')
+                ORDER BY id
+                """
+            ):
+                try:
+                    payload = json.loads(job["payload_json"])
+                    result = json.loads(job["result_json"])
+                except (TypeError, ValueError, json.JSONDecodeError):
+                    payload = result = None
+                valid = bool(
+                    isinstance(payload, dict)
+                    and isinstance(result, dict)
+                    and result.get("stage_status")
+                    in {"completed", "no_alert", "deferred", "terminal"}
+                    and result.get("report_id") == payload.get("report_id")
+                    and result.get("report_revision_id")
+                    == payload.get("report_revision_id")
+                )
+                if valid:
+                    upstream = conn.execute(
+                        "SELECT status, result_json FROM jobs WHERE id = ? AND job_type = 'automatic_report_stage'",
+                        (payload.get("report_stage_job_id"),),
+                    ).fetchone()
+                    try:
+                        upstream_result = (
+                            json.loads(upstream["result_json"]) if upstream else None
+                        )
+                    except (TypeError, ValueError, json.JSONDecodeError):
+                        upstream_result = None
+                    valid = bool(
+                        upstream
+                        and upstream["status"] in {"succeeded", "partial"}
+                        and isinstance(upstream_result, dict)
+                        and upstream_result.get("stage_status") == "completed"
+                        and upstream_result.get("report_id") == payload.get("report_id")
+                        and upstream_result.get("revision_id")
+                        == payload.get("report_revision_id")
+                    )
+                if valid and result.get("stage_status") in {"completed", "no_alert"}:
+                    revision = conn.execute(
+                        "SELECT 1 FROM report_revisions WHERE id = ? AND report_id = ?",
+                        (result.get("report_revision_id"), result.get("report_id")),
+                    ).fetchone()
+                    alert_ids = result.get("alert_ids")
+                    delivery_ids = result.get("delivery_ids")
+                    valid = bool(
+                        revision
+                        and isinstance(alert_ids, list)
+                        and isinstance(delivery_ids, list)
+                        and (
+                            (
+                                result.get("stage_status") == "completed"
+                                and bool(alert_ids)
+                            )
+                            or (
+                                result.get("stage_status") == "no_alert"
+                                and not alert_ids
+                                and not delivery_ids
+                            )
+                        )
+                    )
+                    if valid:
+                        resolved_alerts = {
+                            row[0]
+                            for row in conn.execute(
+                                "SELECT id FROM alerts WHERE report_revision_id = ?",
+                                (result.get("report_revision_id"),),
+                            )
+                            if row[0] in alert_ids
+                        }
+                        resolved_deliveries = {
+                            row["id"]
+                            for row in conn.execute(
+                                """
+                                SELECT id, alert_id FROM alert_deliveries
+                                WHERE channel = 'in_app'
+                                  AND alert_id IN (
+                                      SELECT id FROM alerts WHERE report_revision_id = ?
+                                  )
+                                """,
+                                (result.get("report_revision_id"),),
+                            )
+                            if row["id"] in delivery_ids and row["alert_id"] in alert_ids
+                        }
+                        valid = (
+                            resolved_alerts == set(alert_ids)
+                            and resolved_deliveries == set(delivery_ids)
+                            and len(alert_ids) == len(delivery_ids)
+                        )
+                if not valid:
+                    issues.append(
+                        IntegrityIssue(
+                            "invalid_automatic_alert_checkpoint",
+                            f"job={job['id']}",
+                        )
+                    )
         return IntegrityReport(not issues, tuple(issues))
     finally:
         conn.close()

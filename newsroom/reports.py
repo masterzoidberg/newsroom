@@ -993,48 +993,139 @@ class AlertService:
             conn.close()
 
     @staticmethod
-    def _matches(rule: sqlite3.Row, report: sqlite3.Row, causes: list[dict[str, Any]]) -> bool:
+    def _matching_causes(
+        rule: sqlite3.Row,
+        report: sqlite3.Row,
+        causes: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
         if not rule["enabled"]:
-            return False
+            return []
+        configured_events = _decode(rule["event_types_json"], [])
+        matching = [
+            cause
+            for cause in causes
+            if not configured_events or cause["cause_type"] in configured_events
+        ]
         target_type = rule["target_type"]
         target_id = rule["target_id"]
         if target_type == "all":
-            return True
+            return matching
         if target_type == "report":
-            return target_id == report["id"]
+            return matching if target_id == report["id"] else []
         if target_type == "monitor":
-            return report["target_type"] == "monitor" and target_id == report["target_id"]
-        return report["target_type"] == "story" and target_id == report["target_id"] or any(cause.get("story_id") == target_id for cause in causes)
+            return (
+                matching
+                if report["target_type"] == "monitor" and target_id == report["target_id"]
+                else []
+            )
+        return [cause for cause in matching if cause.get("story_id") == target_id]
 
-    def emit_for_report_revision(self, report_id: str, revision_id: str | None = None) -> dict[str, Any]:
-        conn = storage.connect(self.db_path)
+    def emit_for_report_revision_tx(
+        self,
+        conn: sqlite3.Connection,
+        report_id: str,
+        revision_id: str | None = None,
+        *,
+        in_app_only: bool = False,
+        suppress_equivalent: bool = True,
+    ) -> dict[str, Any]:
+        """Persist exact-cause Alerts inside an existing write transaction."""
+
         created: list[str] = []
-        try:
-            with storage.write_tx(conn):
-                report = conn.execute("SELECT * FROM living_reports WHERE id = ?", (report_id,)).fetchone()
-                if report is None:
-                    raise DomainNotFound("living report not found")
-                revision_id = revision_id or report["current_revision_id"]
-                revision = conn.execute("SELECT * FROM report_revisions WHERE id = ? AND report_id = ?", (revision_id, report_id)).fetchone()
-                if revision is None:
-                    raise DomainNotFound("report revision not found")
-                causes = [dict(item) for item in conn.execute("SELECT * FROM report_revision_causes WHERE revision_id = ? ORDER BY created_at, id", (revision_id,)).fetchall()]
-                if not revision["material_change"] or not causes:
-                    return {"created_count": 0, "items": []}
-                event_type = max(causes, key=lambda cause: (CAUSE_WEIGHTS.get(cause["cause_type"], 0.0), cause["id"]))["cause_type"]
-                importance = min(1.0, max(CAUSE_WEIGHTS.get(cause["cause_type"], 0.0) for cause in causes) + max(0, len({cause["cause_type"] for cause in causes}) - 1) * 0.02)
-                prefs = conn.execute("SELECT * FROM notification_preferences WHERE id = 1").fetchone()
-                rules = conn.execute("SELECT * FROM alert_rules WHERE enabled = 1 ORDER BY created_at, id").fetchall()
-                for rule in rules:
-                    configured_events = _decode(rule["event_types_json"], [])
-                    matching_causes = [cause for cause in causes if not configured_events or cause["cause_type"] in configured_events]
-                    if not matching_causes:
-                        continue
-                    if importance < rule["min_importance"] or not self._matches(rule, report, causes):
-                        continue
-                    event_type = max(matching_causes, key=lambda cause: (CAUSE_WEIGHTS.get(cause["cause_type"], 0.0), cause["id"]))["cause_type"]
-                    matching_cause_keys = sorted((cause["id"], cause.get("evidence_span_id"), cause.get("claim_id")) for cause in matching_causes)
-                    semantic_cause_keys = sorted(
+        alert_ids: list[str] = []
+        delivery_ids: list[str] = []
+        report = conn.execute(
+            "SELECT * FROM living_reports WHERE id = ?", (report_id,)
+        ).fetchone()
+        if report is None:
+            raise DomainNotFound("living report not found")
+        revision_id = revision_id or report["current_revision_id"]
+        revision = conn.execute(
+            "SELECT * FROM report_revisions WHERE id = ? AND report_id = ?",
+            (revision_id, report_id),
+        ).fetchone()
+        if revision is None:
+            raise DomainNotFound("report revision not found")
+        causes = [
+            dict(item)
+            for item in conn.execute(
+                "SELECT * FROM report_revision_causes WHERE revision_id = ? ORDER BY id",
+                (revision_id,),
+            ).fetchall()
+        ]
+        rules = conn.execute(
+            "SELECT * FROM alert_rules WHERE enabled = 1 ORDER BY created_at, id"
+        ).fetchall()
+        evaluated_rule_ids = [rule["id"] for rule in rules]
+        if not revision["material_change"] or not causes:
+            return {
+                "created_count": 0,
+                "items": [],
+                "alert_ids": [],
+                "delivery_ids": [],
+                "evaluated_rule_ids": evaluated_rule_ids,
+            }
+        prefs = conn.execute(
+            "SELECT * FROM notification_preferences WHERE id = 1"
+        ).fetchone()
+        for rule in rules:
+            configured_events = _decode(rule["event_types_json"], [])
+            matching_causes = sorted(
+                self._matching_causes(rule, report, causes), key=lambda cause: cause["id"]
+            )
+            if not matching_causes:
+                continue
+            importance = min(
+                1.0,
+                max(
+                    CAUSE_WEIGHTS.get(cause["cause_type"], 0.0)
+                    for cause in matching_causes
+                )
+                + max(0, len({cause["cause_type"] for cause in matching_causes}) - 1)
+                * 0.02,
+            )
+            if importance < rule["min_importance"]:
+                continue
+            event_type = max(
+                matching_causes,
+                key=lambda cause: (
+                    CAUSE_WEIGHTS.get(cause["cause_type"], 0.0),
+                    cause["id"],
+                ),
+            )["cause_type"]
+            matching_cause_keys = sorted(
+                (cause["id"], cause.get("evidence_span_id"), cause.get("claim_id"))
+                for cause in matching_causes
+            )
+            semantic_cause_keys = sorted(
+                (
+                    cause["cause_type"],
+                    cause.get("story_id"),
+                    cause.get("claim_id"),
+                    cause.get("evidence_span_id"),
+                    cause.get("document_id"),
+                )
+                for cause in matching_causes
+            )
+            dedupe_window = int(rule["dedupe_window_seconds"])
+            if suppress_equivalent and dedupe_window > 0:
+                threshold = _timestamp(
+                    datetime.fromisoformat(utc_now().replace("Z", "+00:00"))
+                    - timedelta(seconds=dedupe_window)
+                )
+                recent = conn.execute(
+                    "SELECT cause_json FROM alerts WHERE rule_id = ? AND report_id = ? AND created_at >= ? ORDER BY created_at DESC LIMIT 1000",
+                    (rule["id"], report_id, threshold),
+                ).fetchall()
+                duplicate = False
+                for prior in recent:
+                    prior_causes = [
+                        cause
+                        for cause in _decode(prior["cause_json"], [])
+                        if not configured_events
+                        or cause["cause_type"] in configured_events
+                    ]
+                    prior_semantic_keys = sorted(
                         (
                             cause["cause_type"],
                             cause.get("story_id"),
@@ -1042,65 +1133,114 @@ class AlertService:
                             cause.get("evidence_span_id"),
                             cause.get("document_id"),
                         )
-                        for cause in matching_causes
+                        for cause in prior_causes
                     )
-                    dedupe_window = int(rule["dedupe_window_seconds"])
-                    if dedupe_window > 0:
-                        threshold = _timestamp(
-                            datetime.fromisoformat(utc_now().replace("Z", "+00:00"))
-                            - timedelta(seconds=dedupe_window)
-                        )
-                        recent = conn.execute(
-                            "SELECT cause_json FROM alerts WHERE rule_id = ? AND report_id = ? AND created_at >= ? ORDER BY created_at DESC LIMIT 1000",
-                            (rule["id"], report_id, threshold),
-                        ).fetchall()
-                        duplicate = False
-                        for prior in recent:
-                            prior_causes = [
-                                cause
-                                for cause in _decode(prior["cause_json"], [])
-                                if not configured_events or cause["cause_type"] in configured_events
-                            ]
-                            prior_semantic_keys = sorted(
-                                (
-                                    cause["cause_type"],
-                                    cause.get("story_id"),
-                                    cause.get("claim_id"),
-                                    cause.get("evidence_span_id"),
-                                    cause.get("document_id"),
-                                )
-                                for cause in prior_causes
-                            )
-                            if prior_semantic_keys == semantic_cause_keys:
-                                duplicate = True
-                                break
-                        if duplicate:
-                            continue
-                    dedupe_key = hashlib.sha256(_encode({"rule_id": rule["id"], "report_revision_id": revision_id, "causes": matching_cause_keys}).encode("utf-8")).hexdigest()
-                    if conn.execute("SELECT 1 FROM alerts WHERE dedupe_key = ?", (dedupe_key,)).fetchone() is not None:
-                        continue
-                    alert_id, now = new_id("alert"), utc_now()
-                    story_id = report["target_id"] if report["target_type"] == "story" else next((cause.get("story_id") for cause in causes if cause.get("story_id")), None)
-                    body = "; ".join(_unique([cause["rationale"] for cause in causes]))
-                    conn.execute(
-                        "INSERT INTO alerts(id, rule_id, report_id, report_revision_id, story_id, event_type, title, body, importance_score, dedupe_key, cause_json, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                        (alert_id, rule["id"], report_id, revision_id, story_id, event_type, f"{event_type.replace('_', ' ').capitalize()}: {report['name']}", body, importance, dedupe_key, _encode(causes), now),
+                    if prior_semantic_keys == semantic_cause_keys:
+                        duplicate = True
+                        break
+                if duplicate:
+                    continue
+            dedupe_key = hashlib.sha256(
+                _encode(
+                    {
+                        "rule_id": rule["id"],
+                        "report_revision_id": revision_id,
+                        "causes": matching_cause_keys,
+                    }
+                ).encode("utf-8")
+            ).hexdigest()
+            existing = conn.execute(
+                "SELECT id FROM alerts WHERE dedupe_key = ?", (dedupe_key,)
+            ).fetchone()
+            now = utc_now()
+            if existing is None:
+                alert_id = new_id("alert")
+                story_id = (
+                    report["target_id"]
+                    if report["target_type"] == "story"
+                    else next(
+                        (
+                            cause.get("story_id")
+                            for cause in matching_causes
+                            if cause.get("story_id")
+                        ),
+                        None,
                     )
-                    conn.execute("INSERT INTO alert_deliveries(id, alert_id, channel, status, attempt_count, delivered_at, created_at, updated_at) VALUES (?, ?, 'in_app', 'sent', 1, ?, ?, ?)", (new_id("delivery"), alert_id, now, now, now))
-                    if rule["browser_enabled"]:
-                        if not prefs["browser_enabled"]:
-                            browser_status, error = "skipped", "browser notifications disabled"
-                        elif prefs["permission_state"] == "denied":
-                            browser_status, error = "denied", "browser notification permission denied"
-                        elif not prefs["online"]:
-                            browser_status, error = "offline", "browser notification delivery deferred while offline"
-                        else:
-                            browser_status, error = "pending", None
-                        conn.execute("INSERT INTO alert_deliveries(id, alert_id, channel, status, attempt_count, error_detail, created_at, updated_at) VALUES (?, ?, 'browser', ?, 0, ?, ?, ?)", (new_id("delivery"), alert_id, browser_status, error, now, now))
-                    created.append(alert_id)
+                )
+                body = "; ".join(
+                    _unique([cause["rationale"] for cause in matching_causes])
+                )
+                conn.execute(
+                    "INSERT INTO alerts(id, rule_id, report_id, report_revision_id, story_id, event_type, title, body, importance_score, dedupe_key, cause_json, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    (
+                        alert_id,
+                        rule["id"],
+                        report_id,
+                        revision_id,
+                        story_id,
+                        event_type,
+                        f"{event_type.replace('_', ' ').capitalize()}: {report['name']}",
+                        body,
+                        importance,
+                        dedupe_key,
+                        _encode(matching_causes),
+                        now,
+                    ),
+                )
+                created.append(alert_id)
+            else:
+                alert_id = existing["id"]
+            conn.execute(
+                "INSERT OR IGNORE INTO alert_deliveries(id, alert_id, channel, status, attempt_count, delivered_at, created_at, updated_at) VALUES (?, ?, 'in_app', 'sent', 1, ?, ?, ?)",
+                (new_id("delivery"), alert_id, now, now, now),
+            )
+            delivery = conn.execute(
+                "SELECT id FROM alert_deliveries WHERE alert_id = ? AND channel = 'in_app'",
+                (alert_id,),
+            ).fetchone()
+            if delivery is None:
+                raise DomainConflict("in-app Alert delivery was not persisted")
+            if not in_app_only and rule["browser_enabled"]:
+                if not prefs["browser_enabled"]:
+                    browser_status, error = "skipped", "browser notifications disabled"
+                elif prefs["permission_state"] == "denied":
+                    browser_status, error = "denied", "browser notification permission denied"
+                elif not prefs["online"]:
+                    browser_status, error = (
+                        "offline",
+                        "browser notification delivery deferred while offline",
+                    )
+                else:
+                    browser_status, error = "pending", None
+                conn.execute(
+                    "INSERT OR IGNORE INTO alert_deliveries(id, alert_id, channel, status, attempt_count, error_detail, created_at, updated_at) VALUES (?, ?, 'browser', ?, 0, ?, ?, ?)",
+                    (new_id("delivery"), alert_id, browser_status, error, now, now),
+                )
+            alert_ids.append(alert_id)
+            delivery_ids.append(delivery["id"])
+        return {
+            "created_count": len(created),
+            "items": [
+                self._alert_result(
+                    conn,
+                    conn.execute("SELECT * FROM alerts WHERE id = ?", (identifier,)).fetchone(),
+                )
+                for identifier in created
+            ],
+            "alert_ids": alert_ids,
+            "delivery_ids": delivery_ids,
+            "evaluated_rule_ids": evaluated_rule_ids,
+        }
+
+    def emit_for_report_revision(
+        self, report_id: str, revision_id: str | None = None
+    ) -> dict[str, Any]:
+        conn = storage.connect(self.db_path)
+        try:
+            with storage.write_tx(conn):
+                return self.emit_for_report_revision_tx(conn, report_id, revision_id)
         finally:
             conn.close()
-        return {"created_count": len(created), "items": [self.get_alert(identifier) for identifier in created]}
 
     def acknowledge(self, identifier: str, acknowledged_by: str | None = None) -> dict[str, Any]:
         conn = storage.connect(self.db_path)

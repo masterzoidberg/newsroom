@@ -53,6 +53,7 @@ from newsroom.document_processing import DocumentProcessingExecutionService
 from newsroom.domain import CoreService
 from newsroom.integrity import check_database
 from newsroom.jobs import (
+    AUTOMATIC_ALERT_STAGE_JOB_TYPE,
     AUTOMATIC_REPORT_STAGE_JOB_TYPE,
     AUTOMATIC_STORY_STAGE_JOB_TYPE,
     DOCUMENT_VERSION_PROCESS_JOB_TYPE,
@@ -746,6 +747,7 @@ def test_rerun_preserves_audit_history(tmp_db):
     prior_automatic_stage = story_worker.run_once(now=T1)
     while prior_automatic_stage is not None:
         assert prior_automatic_stage["job_type"] in {
+            AUTOMATIC_ALERT_STAGE_JOB_TYPE,
             AUTOMATIC_STORY_STAGE_JOB_TYPE,
             AUTOMATIC_REPORT_STAGE_JOB_TYPE,
         }
@@ -1292,11 +1294,16 @@ def test_production_composition_relevant_and_irrelevant(tmp_db):
         item
         for item in drained
         if item["job_type"]
-        in {AUTOMATIC_STORY_STAGE_JOB_TYPE, AUTOMATIC_REPORT_STAGE_JOB_TYPE}
+        in {
+            AUTOMATIC_ALERT_STAGE_JOB_TYPE,
+            AUTOMATIC_STORY_STAGE_JOB_TYPE,
+            AUTOMATIC_REPORT_STAGE_JOB_TYPE,
+        }
     ]
     assert len(processing_stages) == 2
     assert automatic_stages
     assert {item["job_type"] for item in automatic_stages} == {
+        AUTOMATIC_ALERT_STAGE_JOB_TYPE,
         AUTOMATIC_STORY_STAGE_JOB_TYPE,
         AUTOMATIC_REPORT_STAGE_JOB_TYPE,
     }

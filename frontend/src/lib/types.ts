@@ -100,12 +100,27 @@ export type ReportRevision = {
 
 export type Alert = {
   id: string;
+  rule_id: string;
+  report_id: string | null;
+  report_revision_id: string | null;
+  story_id: string | null;
   title: string;
   body: string;
   event_type: string;
   importance_score: number;
   status: "unread" | "acknowledged";
   created_at: string;
+  cause: Array<{
+    id: string;
+    revision_id: string;
+    cause_type: string;
+    cause_id: string;
+    story_id: string | null;
+    claim_id: string | null;
+    evidence_span_id: string | null;
+    document_id: string | null;
+    rationale: string;
+  }>;
   deliveries: Array<{ id: string; channel: string; status: string; error_detail?: string | null }>;
 };
 

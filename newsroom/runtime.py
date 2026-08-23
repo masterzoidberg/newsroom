@@ -12,6 +12,11 @@ from typing import Any
 import uvicorn
 
 from .app import create_app
+from .alert_automation import (
+    AutomaticAlertStageExecutionService,
+    automatic_alert_stage_completion_hook,
+    automatic_alert_stage_rerun_factory,
+)
 from .config import RuntimeConfig
 from .document_processing import (
     DocumentProcessingExecutionService,
@@ -124,6 +129,7 @@ def build_worker_handlers(db_path: str | Path) -> dict[str, Any]:
         DocumentProcessingExecutionService(db_path).handlers(),
         AutomaticStoryStageExecutionService(db_path).handlers(),
         AutomaticReportStageExecutionService(db_path).handlers(),
+        AutomaticAlertStageExecutionService(db_path).handlers(),
     )
 
 
@@ -144,12 +150,14 @@ def build_worker_queue(db_path: str | Path) -> JobService:
             monitor_job_completion_hook,
             automatic_story_stage_completion_hook(db_path),
             automatic_report_stage_completion_hook(),
+            automatic_alert_stage_completion_hook(),
         ),
         rerun_factory=compose_rerun_factories(
             research_job_rerun_factory,
             document_version_processing_rerun_factory,
             automatic_story_stage_rerun_factory,
             automatic_report_stage_rerun_factory,
+            automatic_alert_stage_rerun_factory,
         ),
     )
 
