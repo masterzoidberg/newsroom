@@ -78,8 +78,12 @@ excerpts by unique exact code-point match, and atomically persists immutable
 verified EvidenceSpans, pending Claims, and ClaimEvidence links. Ambiguous,
 fabricated, and out-of-slice candidates fail closed; model offsets are never
 trusted, and legacy/manual spans remain distinct. The current applied schema
-is migration 0023 / schema version 23. Story, Report, and Alert automation
-remain Phase 23. Only `source`
+is migration 0023 / schema version 23. Phase 23A–E now connect verified
+automatic Claims to deterministic Story resolution, audited Claim acceptance,
+evidence-bound Living Reports, exact-cause Alerts, and durable in-app delivery.
+The complete chain has bounded compatibility/status APIs, logical-export
+reconstruction, full-chain integrity checking, and replay-safe recovery;
+controlled-fixture Live Test C passed on 2026-08-23. Only `source`
 Monitor targets perform real acquisition today;
 `topic`, `subject`, `story`, and `research_question` are accepted by the
 schema/API but explicitly unsupported at runtime

@@ -1197,13 +1197,20 @@ class JobService:
         reservation = conn.execute("SELECT * FROM budget_reservations WHERE job_id = ?", (job_id,)).fetchone()
         return _job_dict(row, attempts, reservation)
 
-    def list(self, *, status: str | None = None, page: int = 1, page_size: int = 25) -> dict[str, Any]:
+    def list(self, *, status: str | None = None, job_type: str | None = None, page: int = 1, page_size: int = 25) -> dict[str, Any]:
         if status is not None and status not in JOB_STATUSES:
             raise DomainValidation("invalid job status")
         if page < 1 or page_size < 1 or page_size > 200:
             raise DomainValidation("invalid job page")
-        where = "WHERE status = ?" if status else ""
-        params: list[Any] = [status] if status else []
+        clauses: list[str] = []
+        params: list[Any] = []
+        if status:
+            clauses.append("status = ?")
+            params.append(status)
+        if job_type:
+            clauses.append("job_type = ?")
+            params.append(job_type)
+        where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
         conn = storage.connect(self.db_path)
         try:
             total = conn.execute(f"SELECT COUNT(*) FROM jobs {where}", params).fetchone()[0]

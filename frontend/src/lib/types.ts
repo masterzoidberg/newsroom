@@ -27,13 +27,14 @@ export type ViewKey =
 
 export type ClaimEvidence = {
   id: string;
+  evidence_span_id: string;
   relationship: "supports" | "contradicts" | "contextualizes";
   excerpt: string;
   locator_type: string | null;
   locator_value: string | null;
   document_version: { id: string; retrieved_at: string; content_hash: string };
-  document: { id?: string; canonical_url: string; title: string };
-  source: { name: string; slug: string };
+  document: { id: string; canonical_url: string; title: string; source_id: string };
+  source: { id: string; name: string; slug: string };
 };
 
 export type Claim = {
@@ -43,7 +44,53 @@ export type Claim = {
   state: string;
   accepted: boolean;
   accepted_at?: string | null;
+  story_id: string | null;
+  article_analysis_id: string | null;
+  candidate_claim_index: number | null;
+  created_at: string;
+  provenance: {
+    origin: "manual" | "automatic";
+    promotion_id: string | null;
+    promotion_identity: string | null;
+    article_analysis_id: string | null;
+    candidate_claim_index: number | null;
+  };
   evidence: ClaimEvidence[];
+};
+
+export type StoryRevision = {
+  id: string;
+  story_id: string;
+  revision_number: number;
+  created_at: string;
+  claim_ids: string[];
+  document_ids: string[];
+  origin: "manual" | "automatic";
+  story_evolution_event_id: string | null;
+};
+
+export type OrchestrationJob = {
+  id: string;
+  job_type: "automatic_story_stage" | "automatic_report_stage" | "automatic_alert_stage";
+  status: string;
+  attempts: number;
+  max_attempts: number;
+  next_attempt_at: string | null;
+  lease_owner: string | null;
+  lease_expires_at: string | null;
+  failure_cause: string | null;
+  orchestration: {
+    outcome: string;
+    promotion_id?: string;
+    claim_id?: string;
+    story_id?: string;
+    report_id?: string;
+    revision_id?: string;
+    report_revision_id?: string;
+    alert_ids?: string[];
+    delivery_ids?: string[];
+    reason_code?: string;
+  };
 };
 
 export type Story = {

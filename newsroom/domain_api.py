@@ -702,6 +702,65 @@ def _patch_data(model: BaseModel) -> dict:
     return data
 
 
+_PHASE23_JOB_TYPES = {
+    "automatic_story_stage",
+    "automatic_report_stage",
+    "automatic_alert_stage",
+}
+_PHASE23_STATUS_KEYS = (
+    "promotion_id",
+    "story_stage_job_id",
+    "report_stage_job_id",
+    "claim_id",
+    "story_id",
+    "report_id",
+    "revision_id",
+    "report_revision_id",
+    "alert_ids",
+    "delivery_ids",
+    "reason_code",
+)
+
+
+def _job_api_result(job: dict[str, Any]) -> dict[str, Any]:
+    """Project Phase 23 Jobs without exposing their internal JSON blobs."""
+    if job.get("job_type") not in _PHASE23_JOB_TYPES:
+        return job
+    payload = job.get("payload") if isinstance(job.get("payload"), dict) else {}
+    result = job.get("result") if isinstance(job.get("result"), dict) else {}
+    outcome = result.get("stage_status")
+    if not outcome:
+        if job.get("status") == "running":
+            outcome = "running"
+        elif job.get("status") == "queued" and int(job.get("attempts") or 0) > 0:
+            outcome = "retrying"
+        else:
+            outcome = job.get("status")
+    orchestration = {"outcome": outcome}
+    for key in _PHASE23_STATUS_KEYS:
+        value = result.get(key, payload.get(key))
+        if value is not None:
+            orchestration[key] = value
+    allowed = {
+        "id",
+        "job_type",
+        "status",
+        "priority",
+        "attempts",
+        "max_attempts",
+        "next_attempt_at",
+        "lease_owner",
+        "lease_expires_at",
+        "failure_cause",
+        "created_at",
+        "updated_at",
+        "completed_at",
+    }
+    projected = {key: value for key, value in job.items() if key in allowed}
+    projected["orchestration"] = orchestration
+    return projected
+
+
 def create_domain_router(
     service: CoreService,
     require_user: Callable,
@@ -1492,6 +1551,24 @@ def create_domain_router(
         read_guard(request)
         return ledger.list_claims(story_id, page=page, page_size=page_size)
 
+    @router.get("/claims")
+    async def claims(
+        request: Request,
+        state: Optional[str] = None,
+        assignment: Optional[str] = None,
+        provenance: Optional[str] = None,
+        page: int = Query(1, ge=1),
+        page_size: int = Query(25, ge=1, le=100),
+    ):
+        read_guard(request)
+        return ledger.list_all_claims(
+            state=state,
+            assignment=assignment,
+            provenance=provenance,
+            page=page,
+            page_size=page_size,
+        )
+
     @router.post("/stories/{story_id}/claims", status_code=201)
     async def create_claim(request: Request, story_id: str, payload: ClaimCreate):
         write_guard(request)
@@ -1638,11 +1715,14 @@ def create_domain_router(
     async def list_jobs(
         request: Request,
         status: Optional[str] = None,
+        job_type: Optional[str] = None,
         page: int = Query(1, ge=1),
         page_size: int = Query(25, ge=1, le=200),
     ):
         read_guard(request)
-        return jobs.list(status=status, page=page, page_size=page_size)
+        result = jobs.list(status=status, job_type=job_type, page=page, page_size=page_size)
+        result["items"] = [_job_api_result(item) for item in result["items"]]
+        return result
 
     @router.post("/jobs", status_code=201)
     async def create_job(request: Request, payload: JobCreate):
@@ -1652,7 +1732,7 @@ def create_domain_router(
     @router.get("/jobs/{identifier}")
     async def get_job(request: Request, identifier: str):
         read_guard(request)
-        return jobs.get(identifier)
+        return _job_api_result(jobs.get(identifier))
 
     @router.post("/jobs/{identifier}/cancel")
     async def cancel_job(request: Request, identifier: str):

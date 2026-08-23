@@ -4,7 +4,7 @@ This directory is the authoritative execution sequence for completing Newsroom.
 The product contract remains `plan/STANDALONE_NEWSROOM_PRODUCT_SPEC.md`; the
 mature-product description and `plan/MASTER_PLAN.md` provide broader context.
 
-## Post-Audit Status — 2026-08-19
+## Post-Audit Status — 2026-08-23
 
 Phases 01–16 are the original implementation program and remain historical
 records. An independent post-remediation audit verified that the Source Monitor
@@ -17,8 +17,8 @@ Phases 17–28 are the audit-driven integration and completion roadmap. They
 supersede conflicting or insufficient acceptance assumptions from Phases 01–16
 without rewriting those historical records.
 
-**Current active gate: Phase 22.1 — Verified Evidence identity and pre-Story
-Claim linkage hardening. Phase 23 remains blocked.**
+**Current active gate: Phase 23 complete — Live Test C passed. Phase 24 is the
+next permitted phase.**
 Phases 17 (runtime reconciliation and green baseline), Live Test A, Phase 18
 (durable normalized content artifact), Phase 19 (changed DocumentVersion
 processing Jobs), Phase 20 (semantic scope and automatic relevance), and
@@ -27,14 +27,11 @@ those gates passed. **Live Test B PASSED** on 2026-08-18 against the Phase 21
 checkpoint (real NASA UAP page → relevance=true → real gpt-4o-mini
 ArticleAnalysis → durable record, zero Evidence/Claims); evidence in the
 Phase 21 file's Live Test B Completion Addendum. The post-audit is complete;
-Phase 21H was the bounded remediation gate before Phase 22 began.
-**Phase 21H.1 (historical provenance, automatic processing-Job provenance,
-and the Phase 22 evidence-coordinate specification) is implemented and
-verified** — see the Phase 21H file's 21H.1 record. Phase 22 is implemented at
-the trusted Evidence/Claim boundary; Phase 22.1 corrects provenance identity,
-nullable Story consumers, controlled Story assignment, retry evidence, and
-audit export completeness before independent re-review. Phase 23 must not
-begin until that gate passes.
+Phase 21H was the bounded remediation gate before Phase 22 began. Phase 22 and
+its hardening slices are complete. Phase 23A–E now provide the unattended
+verified Claim → Story → Living Report → exact-cause Alert → in-app delivery
+chain, bounded compatibility APIs, audit export, replay/recovery validation,
+and full-chain integrity checking.
 
 ## How to assign work to Luna
 
@@ -109,8 +106,8 @@ were required.
 | 20 | Semantic scope and automatic relevance | Relevance result |
 | 21 | Article analysis and real AI provider | Live Test B — complete |
 | 21H | Pre-Evidence Hardening | Re-review before Phase 22 |
-| 22 | Verified Evidence and Claims automation | Blocked pending 21H re-review |
-| 23 | Story, Living Report, and Alert automation | Live Test C |
+| 22 | Verified Evidence and Claims automation | Complete |
+| 23 | Story, Living Report, and Alert automation | Live Test C — complete |
 | 24 | Source discovery and semantic vocabulary | Discovery canary |
 | 25 | External Research Question pursuit | External evidence |
 | 26 | Smart tagging | Tag provenance |
@@ -143,9 +140,18 @@ isolated service or schema as an unattended product capability.
 - **Final Live Test — after Phase 28:** public-source production workflow,
   real browser delivery, and multi-day unattended execution.
 
-The historical review gates remain evidence for Phases 01–16. The post-audit
-is complete; Phase 21H is the active pre-evidence hardening gate and Phase 22
-cannot begin until its independent re-review passes.
+The historical review gates remain evidence for Phases 01–16. The post-audit,
+Phase 21H, Phase 22, and Phase 23 gates are complete.
+
+### Live Test C status — 2026-08-23
+
+**PASSED** against the Phase 23E implementation. The controlled fixture Source
+ran through Scheduler → acquisition Worker → DocumentVersion processing →
+local deterministic ArticleAnalysis → verified promotion → automatic Story,
+Report, and Alert Jobs → durable in-app delivery. The supported processing
+rerun produced no duplicate promotions, Claims, Stories, revisions, Alerts,
+or deliveries, and `check_database()` passed. No public-network, paid, or
+hosted-provider call occurred. Harness: `scripts/live_test_c.py`.
 
 ### Live Test A status — 2026-08-18
 

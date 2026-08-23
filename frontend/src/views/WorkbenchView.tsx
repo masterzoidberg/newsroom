@@ -1,6 +1,7 @@
 import { FormEvent, useEffect, useState } from "react";
 import { apiFetch, formatDate, jsonBody, shortId } from "../lib/api";
 import { Badge, EmptyState, ErrorState, LoadingState, PageHeader, SectionCard, Stat } from "../components/ViewPrimitives";
+import type { Claim, ListResponse } from "../lib/types";
 
 type SearchItem = {
   entity_type: string;
@@ -46,11 +47,16 @@ export function WorkbenchView() {
   const [loadingSubject, setLoadingSubject] = useState(false);
   const [health, setHealth] = useState<Health | null>(null);
   const [coverage, setCoverage] = useState<CoverageResponse | null>(null);
+  const [pendingClaims, setPendingClaims] = useState<ListResponse<Claim> | null>(null);
   const [error, setError] = useState<unknown>(null);
 
   useEffect(() => {
-    Promise.all([apiFetch<Health>("/diagnostics/health"), apiFetch<CoverageResponse>("/diagnostics/coverage")])
-      .then(([healthResult, coverageResult]) => { setHealth(healthResult); setCoverage(coverageResult); })
+    Promise.all([
+      apiFetch<Health>("/diagnostics/health"),
+      apiFetch<CoverageResponse>("/diagnostics/coverage"),
+      apiFetch<ListResponse<Claim>>("/claims?state=pending&assignment=unassigned&provenance=automatic&page_size=25"),
+    ])
+      .then(([healthResult, coverageResult, claimResult]) => { setHealth(healthResult); setCoverage(coverageResult); setPendingClaims(claimResult); })
       .catch(setError);
   }, []);
 
@@ -119,6 +125,10 @@ export function WorkbenchView() {
     </div>
 
     <div className="content-grid workbench-grid">
+      <SectionCard title="Pending automatic Claims" description="Verified Claims awaiting deterministic Story assignment, with exact evidence provenance.">
+        {pendingClaims ? pendingClaims.items.length ? <div className="workbench-result-list" aria-label="Pending automatic Claims">{pendingClaims.items.map((claim) => <article className="workbench-result" key={claim.id}><div><div className="workbench-result-meta"><Badge tone="amber">{claim.state}</Badge><code>{shortId(claim.id)}</code></div><h3>{claim.proposition}</h3><p>{claim.evidence.length} exact evidence span{claim.evidence.length === 1 ? "" : "s"} · analysis {shortId(claim.provenance.article_analysis_id)} · promotion {shortId(claim.provenance.promotion_id)}</p></div><span className="workbench-score">{formatDate(claim.created_at)}</span></article>)}</div> : <EmptyState title="No pending automatic Claims" description="Every verified automatic Claim is assigned or has moved beyond pending review." /> : <LoadingState label="Reading pending Claims" />}
+      </SectionCard>
+
       <SectionCard title="Compare documents" description="Paste two to twenty Document IDs. Claims, contradictions, dates, numbers, primary-source use, and lineage stay tied to evidence IDs.">
         <form className="stack-form" onSubmit={(event) => void runComparison(event)}>
           <label htmlFor="compare-document-ids">Document IDs</label>

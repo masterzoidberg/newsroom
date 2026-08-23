@@ -334,6 +334,75 @@ def check_database(db_path: Optional[str] = None) -> IntegrityReport:
                         )
                     )
 
+        # Phase 23B — a completed Story checkpoint must resolve to the exact
+        # Claim, Story revision, cited document, and evolution event created
+        # for its verified promotion.
+        if _table_exists(conn, "jobs") and _table_exists(conn, "story_evolution_events"):
+            for job in conn.execute(
+                """
+                SELECT id, payload_json, result_json
+                FROM jobs
+                WHERE job_type = 'automatic_story_stage'
+                  AND status IN ('succeeded', 'partial')
+                ORDER BY id
+                """
+            ):
+                try:
+                    payload = json.loads(job["payload_json"])
+                    result = json.loads(job["result_json"])
+                except (TypeError, ValueError, json.JSONDecodeError):
+                    payload = result = None
+                valid = bool(
+                    isinstance(payload, dict)
+                    and isinstance(result, dict)
+                    and result.get("stage_status")
+                    in {"completed", "deferred", "terminal"}
+                    and result.get("job_id") == job["id"]
+                    and result.get("promotion_id") == payload.get("promotion_id")
+                )
+                if valid and result.get("stage_status") == "completed":
+                    chain = conn.execute(
+                        """
+                        SELECT c.story_id, p.id AS promotion_id,
+                               src.revision_id, srd.document_id, e.id AS event_id
+                        FROM article_analysis_promotions p
+                        JOIN claims c ON c.id = p.claim_id
+                        JOIN story_revision_claims src ON src.claim_id = c.id
+                        JOIN story_revisions sr
+                          ON sr.id = src.revision_id AND sr.story_id = c.story_id
+                        JOIN story_revision_documents srd
+                          ON srd.revision_id = sr.id
+                        JOIN story_evolution_events e
+                          ON e.story_id = c.story_id
+                         AND e.document_id = srd.document_id
+                         AND json_extract(e.decision_json, '$.automatic_story_stage.job_id') = ?
+                         AND json_extract(e.decision_json, '$.automatic_story_stage.promotion_id') = p.id
+                         AND json_extract(e.decision_json, '$.automatic_story_stage.claim_id') = c.id
+                        WHERE p.id = ? AND c.id = ? AND sr.id = ? AND e.id = ?
+                        """,
+                        (
+                            job["id"],
+                            payload.get("promotion_id"),
+                            result.get("claim_id"),
+                            result.get("revision_id"),
+                            result.get("event_id"),
+                        ),
+                    ).fetchone()
+                    valid = bool(
+                        chain
+                        and chain["story_id"] == result.get("story_id")
+                        and chain["promotion_id"] == result.get("promotion_id")
+                        and chain["revision_id"] == result.get("revision_id")
+                        and chain["event_id"] == result.get("event_id")
+                    )
+                if not valid:
+                    issues.append(
+                        IntegrityIssue(
+                            "invalid_automatic_story_checkpoint",
+                            f"job={job['id']}",
+                        )
+                    )
+
         # Phase 23C — report pointers, closed-world propositions, and exact
         # polymorphic causes must remain reconstructable from canonical rows.
         if _table_exists(conn, "living_reports") and _table_exists(conn, "report_revisions"):

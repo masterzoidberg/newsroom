@@ -314,11 +314,13 @@ class EvidenceService:
                 "content_hash": item.pop("content_hash"),
             }
             item["document"] = {
+                "id": item["document_version"]["document_id"],
                 "canonical_url": item.pop("canonical_url"),
                 "title": item.pop("document_title"),
                 "source_id": item.pop("source_id"),
             }
             item["source"] = {
+                "id": item["document"]["source_id"],
                 "name": item.pop("source_name"),
                 "slug": item.pop("source_slug"),
             }
@@ -342,6 +344,22 @@ class EvidenceService:
                 (result["id"],),
             ).fetchall()
         ]
+        promotion = conn.execute(
+            """
+            SELECT id, promotion_identity
+            FROM article_analysis_promotions
+            WHERE claim_id = ? AND outcome_code = 'verified'
+            ORDER BY created_at, id LIMIT 1
+            """,
+            (result["id"],),
+        ).fetchone()
+        result["provenance"] = {
+            "origin": "automatic" if result.get("article_analysis_id") is not None else "manual",
+            "promotion_id": promotion["id"] if promotion else None,
+            "promotion_identity": promotion["promotion_identity"] if promotion else None,
+            "article_analysis_id": result.get("article_analysis_id"),
+            "candidate_claim_index": result.get("candidate_claim_index"),
+        }
         result["evidence"] = self._claim_evidence(conn, result["id"])
         return result
 
@@ -391,6 +409,53 @@ class EvidenceService:
             rows = conn.execute(
                 "SELECT * FROM claims WHERE story_id = ? ORDER BY created_at, id LIMIT ? OFFSET ?",
                 (story_id, page_size, (page - 1) * page_size),
+            ).fetchall()
+            return {
+                "items": [self._claim_result(conn, row) for row in rows],
+                "page": page,
+                "page_size": page_size,
+                "total": total,
+            }
+        finally:
+            conn.close()
+
+    def list_all_claims(
+        self,
+        *,
+        state: str | None = None,
+        assignment: str | None = None,
+        provenance: str | None = None,
+        page: int = 1,
+        page_size: int = 25,
+    ) -> dict[str, Any]:
+        if page < 1 or page_size < 1 or page_size > 100:
+            raise DomainValidation("page must be >= 1 and page_size must be between 1 and 100")
+        if assignment not in {None, "assigned", "unassigned"}:
+            raise DomainValidation("assignment must be assigned or unassigned")
+        if provenance not in {None, "manual", "automatic"}:
+            raise DomainValidation("provenance must be manual or automatic")
+        if state is not None and state not in CLAIM_STATES:
+            raise DomainValidation("invalid claim state")
+        clauses: list[str] = []
+        params: list[Any] = []
+        if state is not None:
+            clauses.append("state = ?")
+            params.append(state)
+        if assignment is not None:
+            clauses.append("story_id IS NOT NULL" if assignment == "assigned" else "story_id IS NULL")
+        if provenance is not None:
+            clauses.append(
+                "article_analysis_id IS NOT NULL"
+                if provenance == "automatic"
+                else "article_analysis_id IS NULL"
+            )
+        where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+        conn = storage.connect(self.db_path)
+        try:
+            total = conn.execute(f"SELECT COUNT(*) FROM claims {where}", params).fetchone()[0]
+            rows = conn.execute(
+                f"SELECT * FROM claims {where} ORDER BY created_at, id LIMIT ? OFFSET ?",
+                [*params, page_size, (page - 1) * page_size],
             ).fetchall()
             return {
                 "items": [self._claim_result(conn, row) for row in rows],
@@ -712,6 +777,29 @@ class EvidenceService:
                 (result["id"],),
             ).fetchall()
         ]
+        result["document_ids"] = [
+            item[0]
+            for item in conn.execute(
+                "SELECT document_id FROM story_revision_documents WHERE revision_id = ? ORDER BY role, document_id",
+                (result["id"],),
+            ).fetchall()
+        ]
+        event = conn.execute(
+            """
+            SELECT e.id
+            FROM jobs j
+            JOIN story_evolution_events e
+              ON e.id = json_extract(j.result_json, '$.event_id')
+             AND e.story_id = ?
+            WHERE j.job_type = 'automatic_story_stage'
+              AND json_extract(j.result_json, '$.stage_status') = 'completed'
+              AND json_extract(j.result_json, '$.revision_id') = ?
+            ORDER BY j.created_at, j.id LIMIT 1
+            """,
+            (result["story_id"], result["id"]),
+        ).fetchone()
+        result["origin"] = "automatic" if event else "manual"
+        result["story_evolution_event_id"] = event["id"] if event else None
         result["audit"] = {
             "passed": True,
             "unsupported_propositions": 0,
