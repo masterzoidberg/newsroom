@@ -129,9 +129,11 @@ class StoryCandidate:
     embedding: tuple[float, ...] = ()
     exclusion_keys: frozenset[str] = field(default_factory=frozenset)
     text: str = ""
+    source_ids: frozenset[str] = field(default_factory=frozenset)
+    data_truncated: bool = False
 
     def __post_init__(self) -> None:
-        for name in ("entities", "locations", "claim_keys", "topic_ids", "subject_ids", "exclusion_keys"):
+        for name in ("entities", "locations", "claim_keys", "topic_ids", "subject_ids", "source_ids", "exclusion_keys"):
             object.__setattr__(self, name, _as_set(getattr(self, name)))
         object.__setattr__(self, "event_key", normalize_event_signature(self.event_key) if self.event_key else None)
         object.__setattr__(self, "embedding", tuple(float(value) for value in self.embedding))
@@ -152,8 +154,10 @@ class StoryCandidate:
             claim_keys=_claim_keys(value.get("claim_keys") or value.get("claims")),
             topic_ids=_as_set(value.get("topic_ids")),
             subject_ids=_as_set(value.get("subject_ids")),
+            source_ids=_as_set(value.get("source_ids")),
             embedding=tuple(value.get("embedding") or ()),
             exclusion_keys=_as_set(value.get("exclusion_keys")),
+            data_truncated=bool(value.get("data_truncated", False)),
         )
 
 
@@ -183,6 +187,9 @@ def _candidate_signals(incoming: StoryCandidate, existing: StoryCandidate, time_
     entity_overlap = _jaccard(incoming.entities, existing.entities)
     location_overlap = _jaccard(incoming.locations, existing.locations)
     claim_overlap = _jaccard(incoming.claim_keys, existing.claim_keys)
+    incoming_text_tokens = _tokens(f"{incoming.headline} {incoming.text}")
+    existing_text_tokens = _tokens(f"{existing.headline} {existing.text}")
+    shared_claims = incoming.claim_keys & existing.claim_keys
     same_event_key = bool(incoming.event_key and existing.event_key and incoming.event_key == existing.event_key)
     event_key_conflict = bool(incoming.event_key and existing.event_key and incoming.event_key != existing.event_key)
     location_conflict = bool(incoming.locations and existing.locations and not incoming.locations & existing.locations)
@@ -192,12 +199,18 @@ def _candidate_signals(incoming: StoryCandidate, existing: StoryCandidate, time_
         "headline_similarity": round(headline.headline_sim, 6),
         "headline_level": headline.level,
         "text_overlap": round(text_overlap, 6),
+        "text_overlap_count": len(incoming_text_tokens & existing_text_tokens),
         "numeric_change": bool(incoming_numbers and existing_numbers and incoming_numbers != existing_numbers),
         "correction_marker": bool(incoming_markers & _CORRECTION_MARKERS),
         "contradiction_marker": bool(incoming_markers & _CONTRADICTION_MARKERS),
         "material_marker": bool(incoming_markers & _MATERIAL_MARKERS),
         "entity_overlap": round(entity_overlap, 6),
         "location_overlap": round(location_overlap, 6),
+        "claim_exact_match": bool(shared_claims),
+        "source_overlap": round(_jaccard(incoming.source_ids, existing.source_ids), 6),
+        "topic_overlap": round(_jaccard(incoming.topic_ids, existing.topic_ids), 6),
+        "subject_overlap": round(_jaccard(incoming.subject_ids, existing.subject_ids), 6),
+        "story_data_truncated": existing.data_truncated,
         "location_conflict": location_conflict,
         "shared_claim_overlap": round(claim_overlap, 6),
         "semantic_similarity": round(_cosine(incoming.embedding, existing.embedding), 6),
@@ -209,6 +222,16 @@ def _candidate_signals(incoming: StoryCandidate, existing: StoryCandidate, time_
             or incoming.event_key in existing.exclusion_keys
         ),
     }
+
+
+def candidate_signals(
+    incoming: StoryCandidate,
+    existing: StoryCandidate,
+    time_window_hours: int = 72,
+) -> dict[str, Any]:
+    """Expose the shared deterministic identity signals to side-effect-free resolvers."""
+
+    return _candidate_signals(incoming, existing, time_window_hours)
 
 
 def resolve_candidate(
@@ -898,6 +921,7 @@ __all__ = [
     "StoryResolution",
     "StoryCandidate",
     "StoryEvolutionService",
+    "candidate_signals",
     "classify_update",
     "replay_evolution",
     "resolve_candidate",

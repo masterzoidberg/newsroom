@@ -102,7 +102,9 @@ def validate_analysis_provenance(db_path: str | Path, analysis_id: str) -> dict[
         version = conn.execute(
             """
             SELECT dv.*, d.source_id, d.canonical_url, d.title AS document_title,
-                   s.name AS source_name, s.slug AS source_slug
+                   d.published_at AS document_published_at,
+                   s.name AS source_name, s.slug AS source_slug,
+                   s.deleted_at AS source_deleted_at
             FROM document_versions AS dv
             JOIN documents AS d ON d.id = dv.document_id
             JOIN sources AS s ON s.id = d.source_id
@@ -323,11 +325,13 @@ def validate_analysis_provenance(db_path: str | Path, analysis_id: str) -> dict[
                 "source_id": version["source_id"],
                 "canonical_url": version["canonical_url"],
                 "title": version["document_title"],
+                "published_at": version["document_published_at"],
             },
             "source": {
                 "id": version["source_id"],
                 "name": version["source_name"],
                 "slug": version["source_slug"],
+                "deleted_at": version["source_deleted_at"],
             },
             "monitor": dict(monitor),
             "scope_history": dict(scope_history),

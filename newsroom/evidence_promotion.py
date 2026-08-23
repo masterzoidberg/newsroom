@@ -321,8 +321,17 @@ def verify_automatic_promotion(
 
         return {
             "promotion": promotion,
+            "provenance_class": bundle["provenance_class"],
+            "input_contract_complete": bundle["input_contract_complete"],
+            "current_need_available": bundle["current_need_available"],
+            "current_need_status": bundle["current_need_status"],
             "analysis": analysis,
+            "analysis_output": parsed,
             "claim": claim,
+            "document_version": bundle["document_version"],
+            "document": bundle["document"],
+            "source": bundle["source"],
+            "monitor": bundle["monitor"],
             "evidence_spans": tuple(validated_spans[identifier] for identifier in evidence_ids),
             "claim_evidence": tuple(validated_links),
         }
