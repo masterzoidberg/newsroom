@@ -19,6 +19,11 @@ from newsroom.worker import WorkerProcess
 from test_phase23b_story_automation import _promotion
 from test_phase23c_report_automation import _complete_story_stage
 from test_phase21_article_analysis import T1, T2, _setup_relevant
+from test_phase23d_alert_automation import (
+    _alert_stage_job,
+    _complete_material_report_stage,
+    _run_alert_stage,
+)
 
 
 PASSWORD = "a-long-test-password-12345"
@@ -236,6 +241,51 @@ def test_real_worker_chain_export_and_full_replay_converge_without_duplicates(tm
     assert check_database(tmp_db).ok
 
 
+def test_integrated_story_report_alert_lease_recovery_converges(tmp_db):
+    apply_migrations(tmp_db)
+    _setup_relevant(tmp_db)
+    AlertService(tmp_db).create_rule(
+        {"name": "Phase 23F lease recovery", "target_type": "all"}
+    )
+    worker = WorkerProcess(
+        tmp_db,
+        build_worker_handlers(tmp_db),
+        worker_id="phase23f-recovery-worker",
+        queue=build_worker_queue(tmp_db),
+    )
+    processing = worker.run_once(now=T1)
+    assert processing["job_type"] == "document_version_process"
+    assert processing["status"] == "succeeded"
+
+    promotion_count = len(processing["result"]["promotion"]["outcomes"])
+    automatic_stage_types = {
+        "automatic_story_stage",
+        "automatic_report_stage",
+        "automatic_alert_stage",
+    }
+    recovered_results = []
+    for index in range(promotion_count * len(automatic_stage_types)):
+        queue = build_worker_queue(tmp_db)
+        claimed = queue.claim_next(f"stale-{index}", now=T1)
+        assert claimed["job_type"] in automatic_stage_types
+        assert queue.recover_expired(now="2026-08-24T00:00:00Z") == 1
+        recovered = JobService(tmp_db).get(claimed["id"])
+        result = worker.run_once(now=recovered["next_attempt_at"])
+        assert result["id"] == claimed["id"]
+        assert result["status"] == "succeeded"
+        recovered_results.append(result)
+
+    assert {
+        stage: sum(item["job_type"] == stage for item in recovered_results)
+        for stage in automatic_stage_types
+    } == {
+        stage: promotion_count for stage in automatic_stage_types
+    }
+    assert _table_count(tmp_db, "alerts") == promotion_count
+    assert _table_count(tmp_db, "alert_deliveries") == promotion_count
+    assert check_database(tmp_db).ok
+
+
 def test_integrity_detects_broken_completed_story_checkpoint(tmp_db):
     promotion_id, _ = _promotion(tmp_db)
     story_job, _ = _complete_story_stage(tmp_db, promotion_id)
@@ -253,6 +303,105 @@ def test_integrity_detects_broken_completed_story_checkpoint(tmp_db):
 
     assert any(
         issue.code == "invalid_automatic_story_checkpoint"
+        for issue in check_database(tmp_db).issues
+    )
+
+
+def test_integrity_rejects_deferred_story_checkpoint_with_mutation_ids(tmp_db):
+    promotion_id, _ = _promotion(tmp_db)
+    story_job, _ = _complete_story_stage(tmp_db, promotion_id)
+    broken = dict(story_job["result"])
+    broken["stage_status"] = "deferred"
+    conn = storage.connect(tmp_db)
+    try:
+        with storage.write_tx(conn):
+            conn.execute(
+                "UPDATE jobs SET result_json = ? WHERE id = ?",
+                (json.dumps(broken), story_job["id"]),
+            )
+    finally:
+        conn.close()
+
+    assert any(
+        issue.code == "invalid_automatic_story_checkpoint"
+        for issue in check_database(tmp_db).issues
+    )
+
+
+def test_integrity_rejects_report_checkpoint_copied_to_wrong_job_identity(tmp_db):
+    report_job, _ = _complete_material_report_stage(tmp_db)
+    broken = dict(report_job["result"])
+    broken["job_id"] = "job_unrelated"
+    conn = storage.connect(tmp_db)
+    try:
+        with storage.write_tx(conn):
+            conn.execute(
+                "UPDATE jobs SET result_json = ? WHERE id = ?",
+                (json.dumps(broken), report_job["id"]),
+            )
+    finally:
+        conn.close()
+
+    assert any(
+        issue.code == "invalid_automatic_report_checkpoint"
+        for issue in check_database(tmp_db).issues
+    )
+
+
+def test_integrity_rejects_alert_checkpoint_copied_to_wrong_job_identity(tmp_db):
+    report_job, report_outcome = _complete_material_report_stage(tmp_db)
+    AlertService(tmp_db).create_rule(
+        {
+            "name": "Phase 23F checkpoint identity",
+            "target_type": "report",
+            "target_id": report_outcome["report_id"],
+        }
+    )
+    alert_job = _alert_stage_job(tmp_db, report_job["id"])
+    _, completed = _run_alert_stage(tmp_db, alert_job)
+    broken = dict(completed["result"])
+    broken["job_id"] = "job_unrelated"
+    conn = storage.connect(tmp_db)
+    try:
+        with storage.write_tx(conn):
+            conn.execute(
+                "UPDATE jobs SET result_json = ? WHERE id = ?",
+                (json.dumps(broken), completed["id"]),
+            )
+    finally:
+        conn.close()
+
+    assert any(
+        issue.code == "invalid_automatic_alert_checkpoint"
+        for issue in check_database(tmp_db).issues
+    )
+
+
+def test_integrity_rejects_terminal_alert_checkpoint_with_delivery_ids(tmp_db):
+    report_job, report_outcome = _complete_material_report_stage(tmp_db)
+    AlertService(tmp_db).create_rule(
+        {
+            "name": "Phase 23F terminal checkpoint",
+            "target_type": "report",
+            "target_id": report_outcome["report_id"],
+        }
+    )
+    alert_job = _alert_stage_job(tmp_db, report_job["id"])
+    _, completed = _run_alert_stage(tmp_db, alert_job)
+    broken = dict(completed["result"])
+    broken["stage_status"] = "terminal"
+    conn = storage.connect(tmp_db)
+    try:
+        with storage.write_tx(conn):
+            conn.execute(
+                "UPDATE jobs SET result_json = ? WHERE id = ?",
+                (json.dumps(broken), completed["id"]),
+            )
+    finally:
+        conn.close()
+
+    assert any(
+        issue.code == "invalid_automatic_alert_checkpoint"
         for issue in check_database(tmp_db).issues
     )
 

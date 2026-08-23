@@ -105,3 +105,15 @@ handlers, completion hooks, local deterministic analysis, and SQLite. Exact
 Alert-to-Source provenance was reconstructed, the processing rerun created no
 duplicate domain effects, and final database integrity passed. The release
 gate harness is `scripts/live_test_c.py`.
+
+## Final acceptance audit addendum — 2026-08-23
+
+The independent final audit found and corrected one bounded integrity gap:
+Report- and Alert-stage checkpoint validation did not require the persisted
+checkpoint `job_id` to match its owning Job row, and deferred/terminal
+checkpoints could retain mutation/delivery identifiers. Phase 23F now rejects
+copied or falsely relabeled checkpoints. Integrated Story → Report → Alert
+lease-expiration recovery is covered through the production queue, and Live
+Test C replay compares exact logical identity snapshots rather than row counts.
+All Phase 22.3/23 focused suites, the full backend suite, frontend typecheck,
+Live Test C replay, foreign-key verification, and final `check_database()` pass.

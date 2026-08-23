@@ -49,8 +49,27 @@ class FixtureTransport:
         return HttpResponse(200, FIXTURE_URL, {"content-type": "text/html"}, FIXTURE_HTML)
 
 
-def _count(conn, table: str) -> int:
-    return conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
+def _identity_snapshot(conn) -> dict[str, list]:
+    queries = {
+        "promotions": "SELECT id, promotion_identity, claim_id FROM article_analysis_promotions ORDER BY id",
+        "claims": "SELECT id, story_id, state, accepted_at FROM claims ORDER BY id",
+        "assignments": "SELECT id, claim_id, to_story_id, reason FROM claim_story_assignment_history ORDER BY id",
+        "stories": "SELECT id, lifecycle, created_at, updated_at, deleted_at FROM stories ORDER BY id",
+        "evolution": "SELECT id, story_id, document_id FROM story_evolution_events ORDER BY id",
+        "story_revisions": "SELECT id, story_id, claim_set_hash FROM story_revisions ORDER BY id",
+        "story_revision_claims": "SELECT revision_id, claim_id, position FROM story_revision_claims ORDER BY revision_id, position",
+        "story_revision_documents": "SELECT revision_id, document_id, role FROM story_revision_documents ORDER BY revision_id, document_id",
+        "acceptance_history": "SELECT id, claim_id, from_state, to_state, reason FROM claim_state_history ORDER BY id",
+        "reports": "SELECT id, target_type, target_id, current_revision_id FROM living_reports ORDER BY id",
+        "report_revisions": "SELECT id, report_id, claim_set_hash FROM report_revisions ORDER BY id",
+        "report_causes": "SELECT id, revision_id, cause_id, claim_id, evidence_span_id, document_id FROM report_revision_causes ORDER BY id",
+        "alerts": "SELECT id, rule_id, report_revision_id, dedupe_key, cause_json, status FROM alerts ORDER BY id",
+        "deliveries": "SELECT id, alert_id, channel, status FROM alert_deliveries ORDER BY id",
+    }
+    return {
+        name: [tuple(row) for row in conn.execute(query)]
+        for name, query in queries.items()
+    }
 
 
 def run(database: Path) -> dict:
@@ -126,20 +145,31 @@ def run(database: Path) -> dict:
 
     conn = storage.connect(database)
     try:
-        before = {
-            table: _count(conn, table)
-            for table in (
-                "article_analysis_promotions", "claims", "stories", "story_revisions",
-                "claim_state_history", "report_revisions", "alerts", "alert_deliveries",
-            )
-        }
+        before = _identity_snapshot(conn)
         chain = conn.execute(
             """
             SELECT d.id AS document_id, dv.id AS document_version_id,
                    dv.artifact_id, aa.id AS analysis_id, p.id AS promotion_id,
                    c.id AS claim_id, es.id AS evidence_span_id, c.story_id,
                    sr.id AS story_revision_id, rr.id AS report_revision_id,
-                   a.id AS alert_id, ad.id AS delivery_id
+                   a.id AS alert_id, ad.id AS delivery_id,
+                   (SELECT id FROM jobs
+                    WHERE job_type = 'automatic_story_stage'
+                      AND json_extract(result_json, '$.claim_id') = c.id
+                      AND json_extract(result_json, '$.revision_id') = sr.id
+                    ORDER BY id LIMIT 1) AS story_job_id,
+                   (SELECT id FROM jobs
+                    WHERE job_type = 'automatic_report_stage'
+                      AND json_extract(result_json, '$.claim_id') = c.id
+                      AND json_extract(result_json, '$.revision_id') = rr.id
+                    ORDER BY id LIMIT 1) AS report_job_id,
+                   (SELECT j.id FROM jobs j
+                    WHERE j.job_type = 'automatic_alert_stage'
+                      AND EXISTS (
+                          SELECT 1 FROM json_each(json_extract(j.result_json, '$.alert_ids'))
+                          WHERE value = a.id
+                      )
+                    ORDER BY j.id LIMIT 1) AS alert_job_id
             FROM alerts a
             JOIN alert_deliveries ad ON ad.alert_id = a.id AND ad.channel = 'in_app'
             JOIN report_revisions rr ON rr.id = a.report_revision_id
@@ -159,7 +189,12 @@ def run(database: Path) -> dict:
         ).fetchone()
     finally:
         conn.close()
-    if chain is None or before["alerts"] < 1 or before["alerts"] != before["alert_deliveries"]:
+    if (
+        chain is None
+        or not all(chain[key] for key in ("story_job_id", "report_job_id", "alert_job_id"))
+        or len(before["alerts"]) < 1
+        or len(before["alerts"]) != len(before["deliveries"])
+    ):
         raise RuntimeError("Live Test C exact persisted chain is incomplete")
 
     processing = next(item for item in completed if item["job_type"] == "document_version_process")
@@ -168,7 +203,7 @@ def run(database: Path) -> dict:
         pass
     conn = storage.connect(database)
     try:
-        after = {table: _count(conn, table) for table in before}
+        after = _identity_snapshot(conn)
     finally:
         conn.close()
     if after != before:
@@ -186,8 +221,8 @@ def run(database: Path) -> dict:
         "monitor_id": monitor["id"],
         "chain": dict(chain),
         "stage_job_ids": [item["id"] for item in completed],
-        "counts": after,
-        "replay": "no_duplicate_domain_effects",
+        "counts": {name: len(rows) for name, rows in after.items()},
+        "replay": "exact_logical_identities_unchanged",
         "integrity": "ok",
     }
 

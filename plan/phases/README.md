@@ -19,6 +19,9 @@ without rewriting those historical records.
 
 **Current active gate: Phase 23 complete — Live Test C passed. Phase 24 is the
 next permitted phase.**
+The final independent acceptance audit corrected checkpoint-identity and
+terminal/deferred integrity validation in Phase 23F; the complete release gate
+and exact-identity Live Test C replay passed afterward.
 Phases 17 (runtime reconciliation and green baseline), Live Test A, Phase 18
 (durable normalized content artifact), Phase 19 (changed DocumentVersion
 processing Jobs), Phase 20 (semantic scope and automatic relevance), and

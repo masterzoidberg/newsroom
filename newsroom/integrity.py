@@ -360,6 +360,11 @@ def check_database(db_path: Optional[str] = None) -> IntegrityReport:
                     and result.get("job_id") == job["id"]
                     and result.get("promotion_id") == payload.get("promotion_id")
                 )
+                if valid and result.get("stage_status") in {"deferred", "terminal"}:
+                    valid = all(
+                        result.get(field) is None
+                        for field in ("story_id", "event_id", "revision_id")
+                    )
                 if valid and result.get("stage_status") == "completed":
                     chain = conn.execute(
                         """
@@ -566,9 +571,22 @@ def check_database(db_path: Optional[str] = None) -> IntegrityReport:
                 valid = bool(
                     isinstance(payload, dict)
                     and isinstance(result, dict)
+                    and result.get("job_id") == job["id"]
                     and result.get("stage_status")
                     in {"completed", "no_change", "deferred", "terminal"}
                 )
+                if valid and result.get("stage_status") in {"deferred", "terminal"}:
+                    valid = all(
+                        result.get(field) is None
+                        for field in (
+                            "report_id",
+                            "revision_id",
+                            "input_identity",
+                            "story_id",
+                            "claim_id",
+                            "promotion_id",
+                        )
+                    )
                 if valid and result.get("stage_status") in {"completed", "no_change"}:
                     revision = conn.execute(
                         """
@@ -667,6 +685,7 @@ def check_database(db_path: Optional[str] = None) -> IntegrityReport:
                 valid = bool(
                     isinstance(payload, dict)
                     and isinstance(result, dict)
+                    and result.get("job_id") == job["id"]
                     and result.get("stage_status")
                     in {"completed", "no_alert", "deferred", "terminal"}
                     and result.get("report_id") == payload.get("report_id")
@@ -693,6 +712,8 @@ def check_database(db_path: Optional[str] = None) -> IntegrityReport:
                         and upstream_result.get("revision_id")
                         == payload.get("report_revision_id")
                     )
+                if valid and result.get("stage_status") in {"deferred", "terminal"}:
+                    valid = not result.get("alert_ids") and not result.get("delivery_ids")
                 if valid and result.get("stage_status") in {"completed", "no_alert"}:
                     revision = conn.execute(
                         "SELECT 1 FROM report_revisions WHERE id = ? AND report_id = ?",
