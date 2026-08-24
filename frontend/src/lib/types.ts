@@ -215,6 +215,23 @@ export type NotificationPreferences = {
   online: boolean;
 };
 
+export type AttentionItem = {
+  id: string;
+  object_type: string;
+  object_id: string;
+  reason_code: string;
+  importance_score: number;
+  state: "open" | "seen" | "dismissed";
+  explanation: Record<string, unknown>;
+  created_at: string;
+  updated_at: string;
+};
+
+export type ExperienceState = {
+  mode: "simple" | "advanced";
+  capabilities: Record<string, boolean>;
+};
+
 export type Briefing = {
   id: string;
   period: "daily" | "weekly";

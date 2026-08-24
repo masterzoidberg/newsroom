@@ -11,6 +11,7 @@ from . import storage
 from .automatic_story_resolution import AUTOMATIC_STORY_RESOLVER_VERSION
 from .domain import DomainConflict, DomainNotFound, DomainValidation, new_id, precise_utc_now, utc_now
 from .story_context import reconcile_story_entity_projection_tx
+from .worker import RetryableJobFailure
 
 
 STORY_CORRECTION_RECONCILIATION_JOB_TYPE = "story_correction_reconcile"
@@ -319,13 +320,21 @@ class StoryCorrectionService:
         finally:
             conn.close()
 
-    def preview_merge(self, source_story_id: str, destination_story_id: str) -> dict[str, Any]:
+    def preview_merge(
+        self,
+        source_story_id: str,
+        destination_story_id: str,
+        metadata_decisions: Mapping[str, Any] | None = None,
+    ) -> dict[str, Any]:
         conn = storage.connect(self.db_path)
         try:
             source = self._require_story(conn, source_story_id)
             destination = self._require_story(conn, destination_story_id, active=True)
             if source_story_id == destination_story_id:
                 raise DomainConflict("cannot merge a Story into itself")
+            fingerprint = self._current_state_fingerprint(
+                conn, source_story_id, destination_story_id, metadata_decisions or {}
+            )
             return {
                 "source": dict(source), "destination": dict(destination),
                 "source_claim_count": conn.execute("SELECT COUNT(*) FROM claims WHERE story_id = ?", (source_story_id,)).fetchone()[0],
@@ -336,6 +345,7 @@ class StoryCorrectionService:
                 "destination_entity_ids": self._current_entity_ids(conn, destination_story_id),
                 "watch_consequences": self._watch_preview(conn, source_story_id, destination_story_id),
                 "expected_claim_moves": [row[0] for row in conn.execute("SELECT id FROM claims WHERE story_id = ? ORDER BY created_at, id", (source_story_id,))],
+                "expected_current_state_fingerprint": fingerprint,
             }
         finally:
             conn.close()
@@ -348,6 +358,7 @@ class StoryCorrectionService:
         actor: str | None = None,
         reason: str = "",
         expected_source_updated_at: str | None = None,
+        expected_current_state_fingerprint: str | None = None,
         metadata_decisions: Mapping[str, Any] | None = None,
         duplicate_evidence_hash: str | None = None,
     ) -> dict[str, Any]:
@@ -376,6 +387,15 @@ class StoryCorrectionService:
                     raise DomainConflict("historical Story cannot be merged again")
                 if expected_source_updated_at is not None and source["updated_at"] != expected_source_updated_at:
                     raise DomainConflict("merge preview is stale")
+                if expected_current_state_fingerprint is not None:
+                    actual_fingerprint = self._current_state_fingerprint(
+                        conn,
+                        source_story_id,
+                        destination_story_id,
+                        metadata_decisions or {},
+                    )
+                    if actual_fingerprint != expected_current_state_fingerprint:
+                        raise DomainConflict("merge preview is stale")
                 if self._would_merge_cycle(conn, source_story_id, destination_story_id):
                     raise DomainConflict("Story merge would create a lineage cycle")
                 correction = self._create_correction_tx(
@@ -485,23 +505,23 @@ class StoryCorrectionService:
         conn = storage.connect(self.db_path)
         try:
             self._require_story(conn, story_id)
-            current = story_id
-            seen = set()
-            while current not in seen:
-                seen.add(current)
-                edge = conn.execute(
-                    "SELECT target_story_id FROM story_lineage WHERE source_story_id = ? AND relationship = 'merged_into' ORDER BY created_at DESC, id DESC LIMIT 1",
-                    (current,),
-                ).fetchone()
-                if edge is None:
-                    break
-                current = edge[0]
-            if current != story_id:
-                return {"story_id": story_id, "resolution": "merged", "canonical_story_id": current, "resulting_story_ids": [current]}
-            children = [row[0] for row in conn.execute("SELECT target_story_id FROM story_lineage WHERE source_story_id = ? AND relationship = 'split_into' ORDER BY target_story_id", (story_id,))]
-            if children:
-                return {"story_id": story_id, "resolution": "split", "canonical_story_id": None, "resulting_story_ids": children}
-            return {"story_id": story_id, "resolution": "active", "canonical_story_id": story_id, "resulting_story_ids": [story_id]}
+            resolved, path = self._resolve_story_ids_tx(conn, story_id, [], set())
+            if resolved == [story_id]:
+                resolution = "active"
+                canonical = story_id
+            elif len(resolved) == 1:
+                resolution = "merged"
+                canonical = resolved[0]
+            else:
+                resolution = "split"
+                canonical = None
+            return {
+                "story_id": story_id,
+                "resolution": resolution,
+                "canonical_story_id": canonical,
+                "resulting_story_ids": resolved,
+                "lineage_path": path,
+            }
         finally:
             conn.close()
 
@@ -616,7 +636,22 @@ class StoryCorrectionService:
                 self._require_story(conn, story_id, active=True)
                 source_claims = [self._tokens(row[0]) for row in conn.execute("SELECT proposition FROM claims WHERE story_id = ?", (story_id,))]
                 output = []
-                for row in conn.execute("SELECT id FROM stories WHERE id <> ? AND deleted_at IS NULL AND lifecycle <> 'archived' ORDER BY id", (story_id,)):
+                source_tokens = sorted({token for tokens in source_claims for token in tokens})
+                if not source_tokens:
+                    return []
+                clauses = " OR ".join("LOWER(c.proposition) LIKE '%' || ? || '%'" for _ in source_tokens)
+                candidate_rows = conn.execute(
+                    f"""
+                    SELECT DISTINCT s.id
+                    FROM stories s JOIN claims c ON c.story_id = s.id
+                    WHERE s.id <> ? AND s.deleted_at IS NULL AND s.lifecycle <> 'archived'
+                      AND ({clauses})
+                    ORDER BY s.updated_at DESC, s.id
+                    LIMIT ?
+                    """,
+                    (story_id, *source_tokens, max(50, min(500, limit * 10))),
+                ).fetchall()
+                for row in candidate_rows:
                     candidate_claims = [self._tokens(item[0]) for item in conn.execute("SELECT proposition FROM claims WHERE story_id = ?", (row[0],))]
                     score = max((len(left & right) / max(1, len(left | right)) for left in source_claims for right in candidate_claims), default=0.0)
                     if score < 0.6:
@@ -628,8 +663,10 @@ class StoryCorrectionService:
                             "source": source,
                             "destination": destination,
                             "score": score,
-                            "source_claims": sorted(" ".join(sorted(tokens)) for tokens in source_claims),
-                            "candidate_claims": sorted(" ".join(sorted(tokens)) for tokens in candidate_claims),
+                            "claims": {
+                                source: sorted(" ".join(sorted(tokens)) for tokens in source_claims),
+                                destination: sorted(" ".join(sorted(tokens)) for tokens in candidate_claims),
+                            },
                         }).encode()
                     ).hexdigest()
                     dismissed = conn.execute("SELECT 1 FROM story_duplicate_decisions WHERE source_story_id = ? AND destination_story_id = ? AND evidence_hash = ? AND decision = 'dismissed'", (source, destination, evidence_hash)).fetchone()
@@ -740,8 +777,62 @@ class StoryCorrectionService:
         return list(effective_story_entity_ids(conn, story_id))
 
     @staticmethod
+    def _watch_state(conn: sqlite3.Connection, story_id: str) -> list[dict[str, Any]]:
+        rows = conn.execute(
+            """
+            SELECT 'watch' AS kind, id, target_id, status AS operational_state,
+                   resolution_state, resolution_options_json
+            FROM watches WHERE target_type = 'story' AND target_id = ?
+            UNION ALL
+            SELECT 'monitor' AS kind, id, target_id, CAST(enabled AS TEXT),
+                   resolution_state, resolution_options_json
+            FROM monitors WHERE target_type = 'story' AND target_id = ?
+            ORDER BY kind, id
+            """,
+            (story_id, story_id),
+        ).fetchall()
+        return [dict(row) for row in rows]
+
+    @classmethod
+    def _current_state_fingerprint(
+        cls,
+        conn: sqlite3.Connection,
+        source_story_id: str,
+        destination_story_id: str,
+        metadata_decisions: Mapping[str, Any],
+    ) -> str:
+        def story_state(story_id: str) -> dict[str, Any]:
+            latest_revision = conn.execute(
+                "SELECT id, claim_set_hash FROM story_revisions WHERE story_id = ? ORDER BY revision_number DESC, id DESC LIMIT 1",
+                (story_id,),
+            ).fetchone()
+            tags = [row[0] for row in conn.execute("SELECT tag_id FROM story_tags WHERE story_id = ? ORDER BY tag_id", (story_id,))]
+            assignments = [row[0] for row in conn.execute(
+                "SELECT tag_id FROM tag_assignments WHERE object_type = 'story' AND object_id = ? ORDER BY tag_id",
+                (story_id,),
+            )] if _table_exists(conn, "tag_assignments") else []
+            return {
+                "claim_ids": [row[0] for row in conn.execute("SELECT id FROM claims WHERE story_id = ? ORDER BY created_at, id", (story_id,))],
+                "revision": dict(latest_revision) if latest_revision else None,
+                "topics": [row[0] for row in conn.execute("SELECT topic_id FROM story_topics WHERE story_id = ? ORDER BY topic_id", (story_id,))],
+                "subjects": [row[0] for row in conn.execute("SELECT subject_id FROM story_subjects WHERE story_id = ? ORDER BY subject_id", (story_id,))],
+                "tags": sorted(set(tags) | set(assignments)),
+                "manual_entities": [row[0] for row in conn.execute("SELECT entity_id FROM story_entities WHERE story_id = ? AND authority = 'manual' ORDER BY entity_id", (story_id,))],
+                "watch_state": cls._watch_state(conn, story_id),
+            }
+
+        payload = {
+            "source_story_id": source_story_id,
+            "destination_story_id": destination_story_id,
+            "source": story_state(source_story_id),
+            "destination": story_state(destination_story_id),
+            "metadata_decisions": dict(metadata_decisions),
+        }
+        return hashlib.sha256(_json(payload).encode("utf-8")).hexdigest()
+
+    @staticmethod
     def _watch_preview(conn: sqlite3.Connection, source_story_id: str, destination_story_id: str) -> list[dict[str, Any]]:
-        return [dict(row) for row in conn.execute("SELECT id, 'watch' AS kind, name FROM watches WHERE target_type = 'story' AND target_id = ? UNION ALL SELECT id, 'monitor' AS kind, id AS name FROM monitors WHERE target_type = 'story' AND target_id = ?", (source_story_id, source_story_id)).fetchall()]
+        return [dict(row) for row in conn.execute("SELECT id, 'watch' AS kind, name FROM watches WHERE target_type = 'story' AND target_id IN (?, ?) UNION ALL SELECT id, 'monitor' AS kind, id AS name FROM monitors WHERE target_type = 'story' AND target_id IN (?, ?)", (source_story_id, destination_story_id, source_story_id, destination_story_id)).fetchall()]
 
     @staticmethod
     def _would_merge_cycle(conn: sqlite3.Connection, source: str, destination: str) -> bool:
@@ -780,7 +871,7 @@ class StoryCorrectionService:
         if decisions.get("copy_subjects"):
             conn.execute("INSERT OR IGNORE INTO story_subjects(story_id, subject_id) SELECT ?, subject_id FROM story_subjects WHERE story_id = ?", (destination, source))
         if decisions.get("copy_tags"):
-            conn.execute("INSERT OR IGNORE INTO story_tags(story_id, tag_id, created_at) SELECT ?, tag_id, created_at FROM story_tags WHERE story_id = ?", (destination, source))
+            StoryCorrectionService._copy_story_tags_tx(conn, source, destination)
         if decisions.get("copy_manual_entities"):
             conn.execute("INSERT OR IGNORE INTO story_entities(story_id, entity_id, origin, authority, created_at) SELECT ?, entity_id, origin, 'manual', created_at FROM story_entities WHERE story_id = ? AND authority = 'manual'", (destination, source))
 
@@ -789,9 +880,26 @@ class StoryCorrectionService:
         for table in ("watches", "monitors"):
             rows = conn.execute(f"SELECT id FROM {table} WHERE target_type = 'story' AND target_id = ?", (source,)).fetchall()
             for row in rows:
-                conflict = conn.execute(f"SELECT id FROM {table} WHERE target_type = 'story' AND target_id = ? AND id <> ?", (destination, row[0])).fetchone()
+                if table == "monitors":
+                    conflict = conn.execute(
+                        """
+                        SELECT id FROM monitors
+                        WHERE target_type = 'story' AND target_id = ? AND id <> ?
+                          AND COALESCE(need_type, '') = COALESCE((SELECT need_type FROM monitors WHERE id = ?), '')
+                          AND COALESCE(need_id, '') = COALESCE((SELECT need_id FROM monitors WHERE id = ?), '')
+                        """,
+                        (destination, row[0], row[0], row[0]),
+                    ).fetchone()
+                else:
+                    conflict = conn.execute(
+                        "SELECT id FROM watches WHERE target_type = 'story' AND target_id = ? AND id <> ?",
+                        (destination, row[0]),
+                    ).fetchone()
                 if conflict is not None:
-                    conn.execute(f"UPDATE {table} SET historical_target_id = ?, resolution_state = 'merged_into_existing', resolution_options_json = ?, updated_at = ? WHERE id = ?", (source, _json([destination]), utc_now(), row[0]))
+                    if table == "monitors":
+                        conn.execute("UPDATE monitors SET historical_target_id = COALESCE(historical_target_id, target_id), enabled = 0, resolution_state = 'merged_into_existing', resolution_options_json = ?, updated_at = ? WHERE id = ?", (_json([destination]), utc_now(), row[0]))
+                    else:
+                        conn.execute("UPDATE watches SET historical_target_id = COALESCE(historical_target_id, target_id), status = 'disabled', resolution_state = 'merged_into_existing', resolution_options_json = ?, updated_at = ? WHERE id = ?", (_json([destination]), utc_now(), row[0]))
                 else:
                     conn.execute(f"UPDATE {table} SET target_id = ?, historical_target_id = ?, resolution_state = 'active', resolution_options_json = '[]', updated_at = ? WHERE id = ?", (destination, source, utc_now(), row[0]))
                     if table == "monitors":
@@ -806,9 +914,122 @@ class StoryCorrectionService:
                         )
 
     @staticmethod
+    def _copy_story_tags_tx(conn: sqlite3.Connection, source: str, destination: str) -> None:
+        conn.execute(
+            "INSERT OR IGNORE INTO story_tags(story_id, tag_id, created_at) SELECT ?, tag_id, created_at FROM story_tags WHERE story_id = ?",
+            (destination, source),
+        )
+        if not _table_exists(conn, "tag_assignments"):
+            return
+        rows = conn.execute(
+            "SELECT tag_id, origin, confidence, reason, created_at FROM tag_assignments WHERE object_type = 'story' AND object_id = ? ORDER BY tag_id, id",
+            (source,),
+        ).fetchall()
+        for row in rows:
+            conn.execute(
+                "INSERT OR IGNORE INTO tag_assignments(id, tag_id, object_type, object_id, origin, confidence, reason, created_at) VALUES (?, ?, 'story', ?, ?, ?, ?, ?)",
+                (new_id("ta"), row["tag_id"], destination, row["origin"], row["confidence"], row["reason"], row["created_at"]),
+            )
+
+    @staticmethod
+    def _resolve_story_ids_tx(
+        conn: sqlite3.Connection,
+        story_id: str,
+        path: list[dict[str, Any]],
+        seen: set[str],
+    ) -> tuple[list[str], list[dict[str, Any]]]:
+        if story_id in seen:
+            raise DomainConflict("Story lineage contains a cycle")
+        next_seen = set(seen)
+        next_seen.add(story_id)
+        merged = conn.execute(
+            "SELECT * FROM story_lineage WHERE source_story_id = ? AND relationship = 'merged_into' ORDER BY created_at DESC, id DESC LIMIT 1",
+            (story_id,),
+        ).fetchone()
+        if merged is not None:
+            return StoryCorrectionService._resolve_story_ids_tx(
+                conn,
+                merged["target_story_id"],
+                [*path, {"edge": dict(merged), "from_story_id": story_id}],
+                next_seen,
+            )
+        children = conn.execute(
+            "SELECT * FROM story_lineage WHERE source_story_id = ? AND relationship = 'split_into' ORDER BY target_story_id, id",
+            (story_id,),
+        ).fetchall()
+        if not children:
+            return [story_id], [*path, {"story_id": story_id, "resolution": "active"}]
+        resolved: list[str] = []
+        resolved_path = [*path, {"story_id": story_id, "resolution": "split", "children": [row["target_story_id"] for row in children]}]
+        for child in children:
+            child_ids, child_path = StoryCorrectionService._resolve_story_ids_tx(
+                conn,
+                child["target_story_id"],
+                [*resolved_path, {"edge": dict(child), "from_story_id": story_id}],
+                next_seen,
+            )
+            for identifier in child_ids:
+                if identifier not in resolved:
+                    resolved.append(identifier)
+            resolved_path = child_path
+        return sorted(resolved), resolved_path
+
+    @staticmethod
     def _mark_split_watch_review_tx(conn: sqlite3.Connection, source: str, children: list[str]) -> None:
         for table in ("watches", "monitors"):
             conn.execute(f"UPDATE {table} SET historical_target_id = COALESCE(historical_target_id, target_id), resolution_state = 'needs_review', resolution_options_json = ?, updated_at = ? WHERE target_type = 'story' AND target_id = ?", (_json(children), utc_now(), source))
+
+    def resolve_split_target(
+        self,
+        target_kind: str,
+        target_id: str,
+        target_story_ids: Iterable[str] | None = None,
+        *,
+        disable: bool = False,
+        actor: str | None = None,
+    ) -> dict[str, Any]:
+        """Resolve one split Watch/Monitor without erasing the historical target."""
+        if target_kind not in {"watch", "monitor"}:
+            raise DomainValidation("target_kind must be watch or monitor")
+        selected = list(dict.fromkeys(str(item).strip() for item in (target_story_ids or []) if str(item).strip()))
+        if not disable and len(selected) != 1:
+            raise DomainValidation("existing Story targeting supports exactly one split child")
+        table = "watches" if target_kind == "watch" else "monitors"
+        conn = storage.connect(self.db_path)
+        try:
+            with storage.write_tx(conn):
+                row = conn.execute(f"SELECT * FROM {table} WHERE id = ?", (target_id,)).fetchone()
+                if row is None:
+                    raise DomainNotFound(f"{target_kind} not found")
+                options = json.loads(row["resolution_options_json"] or "[]")
+                if not isinstance(options, list):
+                    raise DomainConflict("split resolution options are malformed")
+                historical = row["historical_target_id"] or row["target_id"]
+                if disable:
+                    if table == "watches":
+                        conn.execute("UPDATE watches SET status = 'disabled', resolution_state = 'active', resolution_options_json = '[]', updated_at = ? WHERE id = ?", (utc_now(), target_id))
+                    else:
+                        conn.execute("UPDATE monitors SET enabled = 0, resolution_state = 'active', resolution_options_json = '[]', updated_at = ? WHERE id = ?", (utc_now(), target_id))
+                    resolution = "disabled"
+                else:
+                    selected_story_id = selected[0]
+                    if selected_story_id not in options:
+                        raise DomainConflict("selected Story is not a current split child")
+                    self._require_story(conn, selected_story_id, active=True)
+                    if table == "watches":
+                        conn.execute("UPDATE watches SET target_id = ?, status = 'active', resolution_state = 'active', resolution_options_json = '[]', updated_at = ? WHERE id = ?", (selected_story_id, utc_now(), target_id))
+                    else:
+                        conn.execute("UPDATE monitors SET target_id = ?, enabled = 1, resolution_state = 'active', resolution_options_json = '[]', updated_at = ? WHERE id = ?", (selected_story_id, utc_now(), target_id))
+                        from .monitoring import MonitorService, _scope_for_target
+                        MonitorService._write_scope_history(conn, target_id, _scope_for_target(conn, "story", selected_story_id), change_type="manual", changed_by=actor, created_at=utc_now())
+                    resolution = "selected"
+                conn.execute(
+                    "INSERT INTO story_target_resolution_history(id, target_kind, target_id, historical_story_id, selected_story_ids_json, resolution, actor, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                    (new_id("str"), target_kind, target_id, historical, _json(selected), resolution, actor, utc_now()),
+                )
+                return dict(conn.execute(f"SELECT * FROM {table} WHERE id = ?", (target_id,)).fetchone())
+        finally:
+            conn.close()
 
 
 class StoryCorrectionReconciliationService:
@@ -917,7 +1138,15 @@ class StoryCorrectionReconciliationService:
                     if (revision_id := self._reconcile_story_revision_tx(conn, story_id)) is not None
                 }
                 report_ids = [row[0] for row in conn.execute(
-                    "SELECT id FROM living_reports WHERE target_type = 'story' AND target_id IN ({}) ORDER BY id".format(",".join("?" for _ in unique_story_ids)),
+                    """
+                    SELECT lr.id
+                    FROM living_reports lr
+                    JOIN stories s ON s.id = lr.target_id
+                    WHERE lr.target_type = 'story'
+                      AND lr.target_id IN ({})
+                      AND s.lifecycle <> 'archived'
+                    ORDER BY lr.id
+                    """.format(",".join("?" for _ in unique_story_ids)),
                     unique_story_ids,
                 )] if unique_story_ids and _table_exists(conn, "living_reports") else []
                 result = {
@@ -933,12 +1162,14 @@ class StoryCorrectionReconciliationService:
         finally:
             conn.close()
 
-        # Downstream systems are deliberately best-effort and isolated from
-        # the committed correction transaction. Their normal services remain
-        # the authority for report and Question history.
+        # Downstream systems remain isolated from the committed correction
+        # transaction, but failures are durable retry obligations. Successful
+        # work is idempotent on replay; a correction Job may not report success
+        # while a required report or Question target was skipped.
         report_results: list[dict[str, Any]] = []
         alert_results: list[dict[str, Any]] = []
-        for report_id in report_ids[:50]:
+        failures: list[dict[str, Any]] = []
+        for report_id in report_ids:
             try:
                 from .reports import LivingReportService
                 generated = LivingReportService(self.db_path).generate(report_id)
@@ -950,20 +1181,26 @@ class StoryCorrectionReconciliationService:
                     emitted = AlertService(self.db_path).emit_for_report_revision(report_id, revision_id)
                     alert_results.append({"report_id": report_id, "created_count": emitted.get("created_count", 0), "alert_ids": emitted.get("alert_ids", [])})
             except Exception as exc:  # downstream failure must not invalidate the correction
-                report_results.append({"report_id": report_id, "status": "deferred", "error": type(exc).__name__})
+                failures.append({"kind": "report", "id": report_id, "error": type(exc).__name__})
+                report_results.append({"report_id": report_id, "status": "retryable", "error": type(exc).__name__})
         question_results: list[dict[str, Any]] = []
-        for claim_id in affected_claim_ids[:100]:
+        for claim_id in affected_claim_ids:
             try:
                 from .research_questions import ResearchQuestionService
                 question_results.append(ResearchQuestionService(self.db_path).reevaluate_for_claim(claim_id))
             except Exception as exc:  # downstream failure is recoverable on the next normal evaluation
-                question_results.append({"claim_id": claim_id, "status": "deferred", "error": type(exc).__name__})
+                failures.append({"kind": "research_question", "id": claim_id, "error": type(exc).__name__})
+                question_results.append({"claim_id": claim_id, "status": "retryable", "error": type(exc).__name__})
         result["report_results"] = report_results
         result["alert_results"] = alert_results
         result["question_results"] = question_results
         result["research_question_targets_reconciled"] = sum(
             int(item.get("evaluated_count", 0)) for item in question_results
         )
+        if failures:
+            raise RetryableJobFailure(
+                _json({"correction_id": correction_id, "downstream_failures": failures})
+            )
         return result
 
 

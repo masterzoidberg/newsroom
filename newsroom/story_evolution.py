@@ -785,7 +785,7 @@ class StoryEvolutionService:
                 group if len(source_ids) > 1 else next(iter(source_ids))
                 for group, source_ids in group_sources.items()
             }
-            return {
+            result = {
                 "publication_count": len(document_ids),
                 "independent_source_count": len(independent_keys),
                 "distinct_source_count": len({row["source_id"] for row in rows}),
@@ -794,6 +794,20 @@ class StoryEvolutionService:
             }
         finally:
             conn.close()
+        from .source_robustness import SourceRobustnessService
+
+        robustness = SourceRobustnessService(self.db_path).evidence_summary(
+            "claim" if claim_id is not None else "story",
+            claim_id or story_id,
+        )
+        result["distinct_source_count"] = robustness["distinct_source_count"] or result["distinct_source_count"]
+        result["lineage_group_count"] = robustness["lineage_group_count"] or result["lineage_group_count"]
+        result["evidence_family_count"] = robustness["evidence_family_count"]
+        result["fragility"] = SourceRobustnessService(self.db_path).analyze_fragility(
+            "claim" if claim_id is not None else "story",
+            claim_id or story_id,
+        )
+        return result
 
     def _new_update(self, conn: sqlite3.Connection, story_id: str) -> bool:
         review = conn.execute("SELECT last_reviewed_revision_id FROM story_review WHERE story_id = ?", (story_id,)).fetchone()

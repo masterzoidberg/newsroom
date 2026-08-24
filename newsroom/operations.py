@@ -60,7 +60,6 @@ _EXPORT_COLUMNS: dict[str, tuple[str, ...]] = {
     "claim_entities": ("claim_id", "entity_id", "role", "origin", "mention_id", "created_at"),
     "story_entities": ("story_id", "entity_id", "origin", "authority", "created_at"),
     "story_corrections": ("id", "operation_type", "origin", "actor", "reason_code", "reason", "cause_class", "caused_by_type", "caused_by_id", "occurred_at", "metadata_json"),
-    "story_transition_authorizations": ("id", "claim_id"),
     "story_lineage": ("id", "source_story_id", "target_story_id", "relationship", "correction_id", "created_at"),
     "story_duplicate_decisions": ("id", "source_story_id", "destination_story_id", "evidence_hash", "decision", "correction_id", "reason", "created_at"),
     "story_duplicate_suggestions": ("id", "source_story_id", "destination_story_id", "evidence_hash", "score", "explanation_json", "resolver_version", "created_at"),
@@ -112,6 +111,20 @@ _EXPORT_COLUMNS: dict[str, tuple[str, ...]] = {
     "ask_runs": ("id", "conversation_id", "turn_number", "status", "retrieval_json", "citations_json", "refusal_code", "context_units", "provider_route", "estimated_cost_usd", "created_at", "completed_at"),
     "article_analyses": ("id", "document_version_id", "relevance_id", "monitor_id", "job_id", "scope_version", "artifact_id", "normalized_content_hash", "schema_version", "prompt_version", "provider", "model", "paid", "confidence", "input_char_count", "analyzed_char_count", "truncated", "input_view_version", "input_content_hash", "analyzed_content_hash", "invocation_id", "created_at"),
     "article_analysis_promotions": ("id", "promotion_identity", "article_analysis_id", "candidate_claim_index", "outcome_code", "claim_id", "evidence_span_ids_json", "created_at"),
+    "story_target_resolution_history": ("id", "target_kind", "target_id", "historical_story_id", "selected_story_ids_json", "resolution", "actor", "created_at"),
+    "coverage_runs": ("id", "target_type", "target_id", "target_version", "window_start", "window_end", "policy_version", "included_sources_json", "excluded_sources_json", "status", "causing_job_id", "created_at", "completed_at"),
+    "coverage_items": ("id", "run_id", "item_key", "channel_type", "source_id", "source_class", "required", "state", "observation_refs_json", "reason", "observed_at", "created_at", "updated_at"),
+    "coverage_summaries": ("run_id", "expected_count", "required_count", "observed_count", "complete_count", "completeness", "qualified_negative", "state_counts_json", "explanation_json", "created_at"),
+    "evidence_families": ("id", "family_key", "label", "origin", "authority", "algorithm_version", "created_at", "updated_at"),
+    "evidence_family_members": ("family_id", "document_id", "source_id", "relationship", "confidence", "created_at"),
+    "evidence_fragility_analyses": ("id", "target_type", "target_id", "input_fingerprint", "claim_ids_json", "distinct_source_count", "lineage_group_count", "evidence_family_count", "fragility_score", "support_paths_json", "explanation_json", "created_at"),
+    "blind_spot_suggestions": ("id", "target_type", "target_id", "source_class", "coverage_run_id", "priority", "reason", "status", "created_at", "reviewed_at", "reviewed_by"),
+    "attention_items": ("id", "object_type", "object_id", "reason_code", "importance_score", "state", "source_fingerprint", "explanation_json", "created_at", "updated_at"),
+    "attention_feedback": ("id", "attention_id", "feedback", "actor", "created_at"),
+    "hypotheses": ("id", "question_id", "statement", "status", "origin", "provider_route", "created_at", "updated_at", "approved_at", "approved_by"),
+    "hypothesis_claim_links": ("id", "hypothesis_id", "claim_id", "relationship", "created_at"),
+    "hypothesis_gaps": ("id", "hypothesis_id", "description", "status", "created_at", "updated_at"),
+    "hypothesis_history": ("id", "hypothesis_id", "from_status", "to_status", "actor", "reason", "created_at"),
 }
 
 

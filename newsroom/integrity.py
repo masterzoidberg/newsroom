@@ -1095,6 +1095,90 @@ def check_database(db_path: Optional[str] = None) -> IntegrityReport:
                 if not valid:
                     issues.append(IntegrityIssue("invalid_story_correction_checkpoint", f"job={job['id']}"))
 
+        # Phase 28 — derived intelligence must remain explainable and must
+        # point back to existing observation/domain records.
+        observation_tables = {
+            "acquisition_event": "acquisition_events",
+            "monitor_activity": "monitor_activity",
+            "story_evolution_event": "story_evolution_events",
+            "research_question_attempt": "research_question_attempts",
+            "document_version": "document_versions",
+            "evidence_span": "evidence_spans",
+        }
+        if _table_exists(conn, "coverage_items"):
+            for item in conn.execute("SELECT id, observation_refs_json FROM coverage_items ORDER BY id"):
+                try:
+                    references = json.loads(item[1] or "[]")
+                except (TypeError, ValueError, json.JSONDecodeError):
+                    references = None
+                if not isinstance(references, list):
+                    issues.append(IntegrityIssue("invalid_coverage_observation_refs", f"item={item[0]}"))
+                    continue
+                for reference in references:
+                    prefix, separator, identifier = str(reference).partition(":")
+                    table = observation_tables.get(prefix) if separator else None
+                    if table is None or not identifier or not _table_exists(conn, table) or conn.execute(f"SELECT 1 FROM {table} WHERE id = ?", (identifier,)).fetchone() is None:
+                        issues.append(IntegrityIssue("orphan_coverage_observation_ref", f"item={item[0]} ref={reference}"))
+
+        if _table_exists(conn, "coverage_summaries") and _table_exists(conn, "coverage_items"):
+            for summary in conn.execute("SELECT run_id, required_count, complete_count, qualified_negative, explanation_json FROM coverage_summaries ORDER BY run_id"):
+                try:
+                    explanation = json.loads(summary[4] or "{}")
+                except (TypeError, ValueError, json.JSONDecodeError):
+                    explanation = None
+                qualified = bool(summary[3])
+                if summary[2] > summary[1] or not isinstance(explanation, dict) or (qualified and (summary[2] != summary[1] or explanation.get("blocking_states"))):
+                    issues.append(IntegrityIssue("invalid_qualified_coverage_summary", f"run={summary[0]}"))
+
+        if _table_exists(conn, "evidence_family_members"):
+            for member in conn.execute("SELECT family_id, document_id, source_id FROM evidence_family_members ORDER BY family_id, document_id"):
+                if _table_exists(conn, "evidence_families") and conn.execute("SELECT 1 FROM evidence_families WHERE id = ?", (member[0],)).fetchone() is None:
+                    issues.append(IntegrityIssue("orphan_evidence_family", f"family={member[0]} document={member[1]}"))
+                if _table_exists(conn, "documents") and conn.execute("SELECT 1 FROM documents WHERE id = ?", (member[1],)).fetchone() is None:
+                    issues.append(IntegrityIssue("orphan_evidence_family_document", f"family={member[0]} document={member[1]}"))
+                if _table_exists(conn, "sources") and conn.execute("SELECT 1 FROM sources WHERE id = ?", (member[2],)).fetchone() is None:
+                    issues.append(IntegrityIssue("orphan_evidence_family_source", f"family={member[0]} source={member[2]}"))
+
+        if _table_exists(conn, "blind_spot_suggestions"):
+            for suggestion in conn.execute("SELECT id, coverage_run_id FROM blind_spot_suggestions ORDER BY id"):
+                if suggestion[1] and _table_exists(conn, "coverage_runs") and conn.execute("SELECT 1 FROM coverage_runs WHERE id = ?", (suggestion[1],)).fetchone() is None:
+                    issues.append(IntegrityIssue("orphan_blind_spot_coverage", f"suggestion={suggestion[0]} run={suggestion[1]}"))
+
+        polymorphic_attention = {
+            "alert": "alerts", "coverage_run": "coverage_runs", "story_correction": "story_corrections",
+            "blind_spot": "blind_spot_suggestions", "story": "stories", "claim": "claims",
+            "research_question": "research_questions", "research_gap": "research_question_gaps",
+        }
+        if _table_exists(conn, "attention_items"):
+            for item in conn.execute("SELECT id, object_type, object_id, explanation_json FROM attention_items ORDER BY id"):
+                table = polymorphic_attention.get(item[1])
+                if table is None or not _table_exists(conn, table) or conn.execute(f"SELECT 1 FROM {table} WHERE id = ?", (item[2],)).fetchone() is None:
+                    issues.append(IntegrityIssue("orphan_attention_reference", f"attention={item[0]} target={item[1]}:{item[2]}"))
+                try:
+                    explanation = json.loads(item[3] or "{}")
+                except (TypeError, ValueError, json.JSONDecodeError):
+                    explanation = None
+                if not isinstance(explanation, dict):
+                    issues.append(IntegrityIssue("invalid_attention_explanation", f"attention={item[0]}"))
+
+        if _table_exists(conn, "hypotheses"):
+            for hypothesis in conn.execute("SELECT id, question_id, status FROM hypotheses ORDER BY id"):
+                if _table_exists(conn, "research_questions") and conn.execute("SELECT 1 FROM research_questions WHERE id = ?", (hypothesis[1],)).fetchone() is None:
+                    issues.append(IntegrityIssue("orphan_hypothesis_question", f"hypothesis={hypothesis[0]} question={hypothesis[1]}"))
+                if hypothesis[2] not in {"draft", "approved", "rejected", "archived"}:
+                    issues.append(IntegrityIssue("invalid_hypothesis_status", f"hypothesis={hypothesis[0]} status={hypothesis[2]}"))
+        if _table_exists(conn, "hypothesis_claim_links"):
+            for link in conn.execute("SELECT id, hypothesis_id, claim_id FROM hypothesis_claim_links ORDER BY id"):
+                if _table_exists(conn, "hypotheses") and conn.execute("SELECT 1 FROM hypotheses WHERE id = ?", (link[1],)).fetchone() is None:
+                    issues.append(IntegrityIssue("orphan_hypothesis", f"link={link[0]} hypothesis={link[1]}"))
+                if _table_exists(conn, "claims") and conn.execute("SELECT 1 FROM claims WHERE id = ?", (link[2],)).fetchone() is None:
+                    issues.append(IntegrityIssue("orphan_hypothesis_claim", f"link={link[0]} claim={link[2]}"))
+
+        if _table_exists(conn, "settings"):
+            for setting in conn.execute("SELECT key, value FROM settings WHERE key = 'experience.mode'"):
+                if setting[1] not in {"simple", "advanced"}:
+                    issues.append(IntegrityIssue("invalid_experience_mode", f"value={setting[1]}"))
+
         return IntegrityReport(not issues, tuple(issues))
     finally:
         conn.close()

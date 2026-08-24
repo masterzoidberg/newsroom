@@ -14,6 +14,9 @@ from newsroom.monitoring import MonitorService, MonitoringPolicyService
 from newsroom.story_corrections import StoryCorrectionService
 from newsroom.story_corrections import StoryCorrectionReconciliationService
 from newsroom import storage
+from newsroom.jobs import JobService
+from newsroom.worker import WorkerProcess
+from newsroom.reports import LivingReportService
 
 
 def _stories_and_claim(tmp_db):
@@ -255,3 +258,104 @@ def test_duplicate_review_identity_and_watch_resolution_are_durable(tmp_db):
     split_watch_after = WatchService(tmp_db).get(split_watch["id"])
     assert split_watch_after["resolution_state"] == "needs_review"
     assert json.loads(split_watch_after["resolution_options_json"]) == [item["id"] for item in split["children"]]
+    resolved_watch = service.resolve_split_target("watch", split_watch["id"], [split["children"][0]["id"]], actor="user-1")
+    assert resolved_watch["target_id"] == split["children"][0]["id"]
+    assert resolved_watch["resolution_state"] == "active"
+    conn = storage.connect(tmp_db)
+    try:
+        assert conn.execute("SELECT 1 FROM story_target_resolution_history WHERE target_kind = 'watch' AND target_id = ?", (split_watch["id"],)).fetchone()
+    finally:
+        conn.close()
+
+
+def test_merge_fingerprint_rejects_claim_set_change_after_preview(tmp_db):
+    first, second, claim = _stories_and_claim(tmp_db)
+    service = StoryCorrectionService(tmp_db)
+    preview = service.preview_merge(first["id"], second["id"])
+    extra = EvidenceService(tmp_db).create_claim(first["id"], {"proposition": "Added after preview"})
+
+    with pytest.raises(DomainConflict, match="merge preview is stale"):
+        service.merge_stories(
+            first["id"],
+            second["id"],
+            expected_current_state_fingerprint=preview["expected_current_state_fingerprint"],
+        )
+
+    assert EvidenceService(tmp_db).get_claim(claim["id"])["story_id"] == first["id"]
+    assert EvidenceService(tmp_db).get_claim(extra["id"])["story_id"] == first["id"]
+
+
+def test_lineage_resolution_composes_merge_then_split_and_later_merge(tmp_db):
+    first, second, _ = _stories_and_claim(tmp_db)
+    service = StoryCorrectionService(tmp_db)
+    merged = service.merge_stories(second["id"], first["id"])
+    source = CoreService(tmp_db).create_story({"headline": "Split source"})
+    claims = [
+        EvidenceService(tmp_db).create_claim(source["id"], {"proposition": value})
+        for value in ("A", "B")
+    ]
+    split = service.split_story(source["id"], [[claims[0]["id"]], [claims[1]["id"]]])
+    later = service.merge_stories(split["children"][0]["id"], first["id"])
+
+    resolved_merged = service.resolve_story(second["id"])
+    assert resolved_merged["resulting_story_ids"] == [first["id"]]
+    resolved_split = service.resolve_story(source["id"])
+    assert resolved_split["resulting_story_ids"] == sorted([first["id"], split["children"][1]["id"]])
+    assert later["destination"]["id"] == first["id"]
+
+
+def test_duplicate_identity_is_symmetric_and_dismissal_is_direction_independent(tmp_db):
+    first, second, _ = _stories_and_claim(tmp_db)
+    EvidenceService(tmp_db).create_claim(second["id"], {"proposition": "A durable proposition"})
+    service = StoryCorrectionService(tmp_db)
+    from_first = service.suggest_duplicates(first["id"])
+    from_second = service.suggest_duplicates(second["id"])
+    assert from_first and from_second
+    assert from_first[0]["evidence_hash"] == from_second[0]["evidence_hash"]
+    assert from_first[0]["id"] == from_second[0]["id"]
+
+    service.dismiss_duplicate(first["id"], second["id"], evidence_hash=from_first[0]["evidence_hash"])
+    assert service.suggest_duplicates(first["id"]) == []
+    assert service.suggest_duplicates(second["id"]) == []
+
+
+def test_merge_tag_propagation_keeps_legacy_and_phase26_assignments_in_sync(tmp_db):
+    first, second, _ = _stories_and_claim(tmp_db)
+    service = StoryCorrectionService(tmp_db)
+    tag_id = CoreService(tmp_db).create_tag({"name": "Phase 28"})["id"]
+    conn = storage.connect(tmp_db)
+    try:
+        with storage.write_tx(conn):
+            conn.execute("INSERT INTO story_tags(story_id, tag_id, created_at) VALUES (?, ?, ?)", (first["id"], tag_id, precise_utc_now()))
+            conn.execute("INSERT INTO tag_assignments(id, tag_id, object_type, object_id, origin, created_at) VALUES (?, ?, 'story', ?, 'user', ?)", (new_id("ta"), tag_id, first["id"], precise_utc_now()))
+    finally:
+        conn.close()
+
+    service.merge_stories(first["id"], second["id"], metadata_decisions={"copy_tags": True})
+    conn = storage.connect(tmp_db)
+    try:
+        assert conn.execute("SELECT 1 FROM story_tags WHERE story_id = ? AND tag_id = ?", (second["id"], tag_id)).fetchone()
+        assert conn.execute("SELECT 1 FROM tag_assignments WHERE object_type = 'story' AND object_id = ? AND tag_id = ?", (second["id"], tag_id)).fetchone()
+    finally:
+        conn.close()
+
+
+def test_reconciliation_downstream_failure_remains_retryable(tmp_db, monkeypatch):
+    first, second, claim = _stories_and_claim(tmp_db)
+    LivingReportService(tmp_db).create({"name": "Second report", "target_type": "story", "target_id": second["id"]})
+    result = StoryCorrectionService(tmp_db).reassign_claim(claim["id"], second["id"])
+    job = JobService(tmp_db).get(result["job_id"])
+
+    class FailingReports:
+        def __init__(self, db_path):
+            pass
+
+        def generate(self, report_id):
+            raise RuntimeError("temporary report failure")
+
+    monkeypatch.setattr("newsroom.reports.LivingReportService", FailingReports)
+    worker = WorkerProcess(tmp_db, StoryCorrectionReconciliationService(tmp_db).handlers(), worker_id="phase28-test")
+    worker.run_once()
+    retried = JobService(tmp_db).get(job["id"])
+    assert retried["status"] == "queued"
+    assert retried["attempts"] == 1

@@ -69,6 +69,14 @@ reference known candidates.
 
 ## 3. Metric definitions
 
+Phase 28 adds bounded scenarios for explicit Coverage states and qualified
+negative language, syndicated/derivative evidence families, non-mutating
+fragility counterfactuals, blind-spot-to-Research planning, Attention reason
+codes, Simple/Advanced visibility over one database, and Hypothesis links that
+cannot affect factual Claims. These scenarios extend the existing evaluation
+corpus and use the same canonical evidence ledger; they do not create a second
+benchmark or truth path.
+
 All metrics are pure functions of a gold `EvaluationCase` and a `Prediction`.
 Predictions are provider-neutral structured outputs (see
 `newsroom/evals/prediction.py`).

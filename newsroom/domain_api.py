@@ -40,6 +40,12 @@ from .workbench import ComparisonService, DiagnosticsService, SearchService, Wor
 from .ask import AskService
 from .knowledge import KnowledgeService
 from .story_corrections import StoryCorrectionService
+from .coverage import CoverageService
+from .source_robustness import SourceRobustnessService
+from .attention import AttentionService
+from .hypotheses import HypothesisService
+from .experience import ExperienceService
+from .research_prioritization import ResearchPrioritizationService
 
 
 class StrictModel(BaseModel):
@@ -676,6 +682,7 @@ class ClaimStoryCorrectionWrite(StrictModel):
 class StoryMergeWrite(StrictModel):
     destination_story_id: str = Field(min_length=1, max_length=200)
     expected_source_updated_at: Optional[str] = Field(default=None, max_length=64)
+    expected_current_state_fingerprint: Optional[str] = Field(default=None, min_length=1, max_length=128)
     reason: str = Field(default="", max_length=4000)
     metadata_decisions: dict[str, Any] = Field(default_factory=dict)
 
@@ -686,6 +693,78 @@ class StorySplitWrite(StrictModel):
     expected_source_updated_at: Optional[str] = Field(default=None, max_length=64)
     reason: str = Field(default="", max_length=4000)
     child_metadata: list[StoryCreate] = Field(default_factory=list, max_length=20)
+
+
+class StoryTargetResolutionWrite(StrictModel):
+    selected_story_ids: list[str] = Field(min_length=1, max_length=1)
+    disable: bool = False
+
+
+class CoverageChannelWrite(StrictModel):
+    key: str = Field(min_length=1, max_length=200)
+    channel_type: str = Field(min_length=1, max_length=100)
+    source_id: Optional[str] = Field(default=None, max_length=200)
+    source_class: str = Field(default="", max_length=100)
+    required: bool = True
+
+
+class CoverageRunCreate(StrictModel):
+    target_type: str = Field(pattern="^(watch|research_question|story|ask|source)$")
+    target_id: str = Field(min_length=1, max_length=200)
+    window_start: str = Field(min_length=1, max_length=64)
+    window_end: str = Field(min_length=1, max_length=64)
+    expected_channels: list[CoverageChannelWrite] = Field(default_factory=list, max_length=500)
+    included_sources: list[dict[str, Any] | str] = Field(default_factory=list, max_length=500)
+    excluded_sources: list[dict[str, Any] | str] = Field(default_factory=list, max_length=500)
+    target_version: str = Field(default="", max_length=200)
+    policy_version: str = Field(default="coverage_v1", max_length=100)
+    causing_job_id: Optional[str] = Field(default=None, max_length=200)
+
+
+class CoverageItemWrite(StrictModel):
+    state: str = Field(pattern="^(observed|not_found|not_observed|not_searched|failed_acquisition|out_of_scope|stale)$")
+    observation_refs: list[str] = Field(default_factory=list, max_length=100)
+    reason: str = Field(default="", max_length=4000)
+    observed_at: Optional[str] = Field(default=None, max_length=64)
+
+
+class CoverageCompleteWrite(StrictModel):
+    status: Optional[str] = Field(default=None, pattern="^(completed|partial|failed)$")
+
+
+class BlindSpotReviewWrite(StrictModel):
+    status: str = Field(pattern="^(approved|dismissed|used)$")
+
+
+class AttentionFeedbackWrite(StrictModel):
+    feedback: str = Field(pattern="^(useful|not_important|already_knew|needs_investigation|mute_pattern)$")
+
+
+class ExperienceModeWrite(StrictModel):
+    mode: str = Field(pattern="^(simple|advanced)$")
+
+
+class HypothesisCreate(StrictModel):
+    statement: str = Field(min_length=1, max_length=10_000)
+    origin: str = Field(default="human", pattern="^(human|deterministic|provider)$")
+    provider_route: str = Field(default="local_deterministic", max_length=100)
+
+
+class HypothesisClaimLinkCreate(StrictModel):
+    relationship: str = Field(pattern="^(supports|contradicts|discriminates)$")
+
+
+class HypothesisGapCreate(StrictModel):
+    description: str = Field(min_length=1, max_length=4_000)
+
+
+class HypothesisReviewWrite(StrictModel):
+    status: str = Field(pattern="^(approved|rejected|archived)$")
+    reason: str = Field(default="", max_length=4_000)
+
+
+class CounterfactualWrite(StrictModel):
+    excluded_family_ids: list[str] = Field(default_factory=list, max_length=100)
 
 
 class StoryExtractWrite(StrictModel):
@@ -950,6 +1029,12 @@ def create_domain_router(
     diagnostics = DiagnosticsService(service.db_path)
     workbench = WorkbenchService(service.db_path)
     ask = AskService(service.db_path)
+    coverage = CoverageService(service.db_path)
+    source_robustness = SourceRobustnessService(service.db_path)
+    attention = AttentionService(service.db_path)
+    hypotheses = HypothesisService(service.db_path)
+    experience = ExperienceService(service.db_path)
+    research_prioritization = ResearchPrioritizationService(service.db_path)
     analyses = ArticleAnalysisService(service.db_path)
     knowledge = KnowledgeService(service.db_path)
     corrections = StoryCorrectionService(service.db_path)
@@ -1408,6 +1493,11 @@ def create_domain_router(
         read_guard(request)
         return profiles.get(identifier)
 
+    @router.get("/sources/{identifier}/source-robustness")
+    async def source_robustness_summary(request: Request, identifier: str):
+        read_guard(request)
+        return source_robustness.source_summary(identifier)
+
     @router.post("/sources/{identifier}/acquire", status_code=201)
     async def acquire_source_document(request: Request, identifier: str, payload: AcquisitionCreate):
         write_guard(request)
@@ -1470,6 +1560,11 @@ def create_domain_router(
     async def document_lineage(request: Request, document_id: str):
         read_guard(request)
         return evolution.lineage(document_id)
+
+    @router.get("/documents/{document_id}/dependencies")
+    async def document_dependencies(request: Request, document_id: str):
+        read_guard(request)
+        return source_robustness.dependency_summary(document_id)
 
     @router.post("/documents/{document_id}/lineage", status_code=201)
     async def create_document_lineage(request: Request, document_id: str, payload: LineageCreate):
@@ -1569,6 +1664,21 @@ def create_domain_router(
             "history": item.get("assessment_history", []),
         }
 
+    @router.get("/research-questions/{identifier}/hypotheses")
+    async def list_hypotheses(request: Request, identifier: str, status: Optional[str] = None, limit: int = Query(100, ge=1, le=500)):
+        read_guard(request)
+        return hypotheses.list(identifier, status=status, limit=limit)
+
+    @router.get("/research-questions/{identifier}/priorities")
+    async def research_question_priorities(request: Request, identifier: str, limit: int = Query(100, ge=1, le=500)):
+        read_guard(request)
+        return research_prioritization.prioritize(identifier, limit=limit)
+
+    @router.post("/research-questions/{identifier}/hypotheses", status_code=201)
+    async def create_hypothesis(request: Request, identifier: str, payload: HypothesisCreate):
+        write_guard(request)
+        return hypotheses.create(identifier, payload.statement, origin=payload.origin, provider_route=payload.provider_route)
+
     @router.post("/research-questions/{identifier}/evaluate")
     async def evaluate_research_question(request: Request, identifier: str):
         write_guard(request)
@@ -1661,6 +1771,26 @@ def create_domain_router(
     async def link_research_question_claim(request: Request, identifier: str, payload: ResearchQuestionClaimLinkCreate):
         write_guard(request)
         return research.link_claim(identifier, payload.claim_id, payload.relationship)
+
+    @router.post("/hypotheses/{identifier}/claims/{claim_id}", status_code=201)
+    async def link_hypothesis_claim(request: Request, identifier: str, claim_id: str, payload: HypothesisClaimLinkCreate):
+        write_guard(request)
+        return hypotheses.link_claim(identifier, claim_id, payload.relationship)
+
+    @router.post("/hypotheses/{identifier}/gaps", status_code=201)
+    async def create_hypothesis_gap(request: Request, identifier: str, payload: HypothesisGapCreate):
+        write_guard(request)
+        return hypotheses.add_gap(identifier, payload.description)
+
+    @router.get("/hypotheses/{identifier}")
+    async def get_hypothesis(request: Request, identifier: str):
+        read_guard(request)
+        return hypotheses.get(identifier)
+
+    @router.post("/hypotheses/{identifier}/review")
+    async def review_hypothesis(request: Request, identifier: str, payload: HypothesisReviewWrite):
+        user = write_guard(request)
+        return hypotheses.review(identifier, payload.status, actor=user.user_id, reason=payload.reason)
 
     @router.post("/research-questions/{identifier}/claims/{claim_id}/correction")
     async def correct_research_question_claim(request: Request, identifier: str, claim_id: str, payload: ResearchQuestionClaimCorrection):
@@ -2038,7 +2168,7 @@ def create_domain_router(
     @router.post("/stories/{identifier}/merge-preview")
     async def merge_story_preview(request: Request, identifier: str, payload: StoryMergeWrite):
         read_guard(request)
-        return corrections.preview_merge(identifier, payload.destination_story_id)
+        return corrections.preview_merge(identifier, payload.destination_story_id, payload.metadata_decisions)
 
     @router.post("/stories/{identifier}/merge")
     async def merge_stories(request: Request, identifier: str, payload: StoryMergeWrite):
@@ -2049,6 +2179,7 @@ def create_domain_router(
             actor=user.user_id,
             reason=payload.reason,
             expected_source_updated_at=payload.expected_source_updated_at,
+            expected_current_state_fingerprint=payload.expected_current_state_fingerprint,
             metadata_decisions=payload.metadata_decisions,
         )
 
@@ -2091,6 +2222,23 @@ def create_domain_router(
         read_guard(request)
         return service.get_story(identifier, include_deleted=include_deleted)
 
+    @router.get("/stories/{identifier}/coverage")
+    async def story_coverage(request: Request, identifier: str, limit: int = Query(20, ge=1, le=200)):
+        read_guard(request)
+        return {"items": coverage.list_runs(target_type="story", target_id=identifier, limit=limit)}
+
+    @router.get("/stories/{identifier}/source-robustness")
+    async def story_source_robustness(request: Request, identifier: str):
+        read_guard(request)
+        summary = source_robustness.evidence_summary("story", identifier)
+        summary["fragility"] = source_robustness.analyze_fragility("story", identifier)
+        return summary
+
+    @router.post("/stories/{identifier}/fragility/counterfactual")
+    async def story_fragility_counterfactual(request: Request, identifier: str, payload: CounterfactualWrite):
+        read_guard(request)
+        return source_robustness.counterfactual("story", identifier, payload.excluded_family_ids)
+
     @router.patch("/stories/{identifier}")
     async def patch_story(request: Request, identifier: str, payload: StoryPatch):
         write_guard(request)
@@ -2116,6 +2264,18 @@ def create_domain_router(
     async def claim(request: Request, identifier: str):
         read_guard(request)
         return ledger.get_claim(identifier)
+
+    @router.get("/claims/{identifier}/source-robustness")
+    async def claim_source_robustness(request: Request, identifier: str):
+        read_guard(request)
+        summary = source_robustness.evidence_summary("claim", identifier)
+        summary["fragility"] = source_robustness.analyze_fragility("claim", identifier)
+        return summary
+
+    @router.post("/claims/{identifier}/fragility/counterfactual")
+    async def claim_fragility_counterfactual(request: Request, identifier: str, payload: CounterfactualWrite):
+        read_guard(request)
+        return source_robustness.counterfactual("claim", identifier, payload.excluded_family_ids)
 
     @router.post("/claims/{identifier}/state")
     async def set_claim_state(request: Request, identifier: str, payload: ClaimStateWrite):
@@ -2229,6 +2389,17 @@ def create_domain_router(
     async def get_watch(request: Request, identifier: str):
         read_guard(request)
         return watches.get(identifier)
+
+    @router.post("/watches/{identifier}/story-resolution")
+    async def resolve_watch_story_target(request: Request, identifier: str, payload: StoryTargetResolutionWrite):
+        user = write_guard(request)
+        return corrections.resolve_split_target(
+            "watch",
+            identifier,
+            payload.selected_story_ids,
+            disable=payload.disable,
+            actor=user.user_id,
+        )
 
     @router.patch("/watches/{identifier}")
     async def update_watch(request: Request, identifier: str, payload: WatchPatch):
@@ -2354,6 +2525,17 @@ def create_domain_router(
         read_guard(request)
         return monitors.get(identifier)
 
+    @router.post("/monitors/{identifier}/story-resolution")
+    async def resolve_monitor_story_target(request: Request, identifier: str, payload: StoryTargetResolutionWrite):
+        user = write_guard(request)
+        return corrections.resolve_split_target(
+            "monitor",
+            identifier,
+            payload.selected_story_ids,
+            disable=payload.disable,
+            actor=user.user_id,
+        )
+
     @router.patch("/monitors/{identifier}")
     async def patch_monitor(request: Request, identifier: str, payload: MonitorPatch):
         write_guard(request)
@@ -2378,6 +2560,73 @@ def create_domain_router(
     async def monitor_scope_history(request: Request, identifier: str, page: int = Query(1, ge=1), page_size: int = Query(25, ge=1, le=100)):
         read_guard(request)
         return monitors.scope_history(identifier, page=page, page_size=page_size)
+
+    @router.get("/coverage/runs")
+    async def list_coverage_runs(
+        request: Request,
+        target_type: Optional[str] = None,
+        target_id: Optional[str] = None,
+        limit: int = Query(50, ge=1, le=200),
+    ):
+        read_guard(request)
+        return {"items": coverage.list_runs(target_type=target_type, target_id=target_id, limit=limit)}
+
+    @router.post("/coverage/runs", status_code=201)
+    async def create_coverage_run(request: Request, payload: CoverageRunCreate):
+        write_guard(request)
+        values = payload.model_dump()
+        values["expected_channels"] = [item.model_dump() for item in payload.expected_channels]
+        return coverage.create_run(**values)
+
+    @router.get("/coverage/runs/{identifier}")
+    async def get_coverage_run(request: Request, identifier: str):
+        read_guard(request)
+        return coverage.get_run(identifier)
+
+    @router.post("/coverage/runs/{identifier}/items/{item_key}")
+    async def record_coverage_item(request: Request, identifier: str, item_key: str, payload: CoverageItemWrite):
+        write_guard(request)
+        return coverage.record_item(identifier, item_key, **payload.model_dump())
+
+    @router.post("/coverage/runs/{identifier}/complete")
+    async def complete_coverage_run(request: Request, identifier: str, payload: CoverageCompleteWrite):
+        write_guard(request)
+        return coverage.complete(identifier, status=payload.status)
+
+    @router.get("/coverage/blind-spots")
+    async def list_blind_spots(request: Request, target_type: Optional[str] = None, target_id: Optional[str] = None, status: Optional[str] = None, limit: int = Query(100, ge=1, le=500)):
+        read_guard(request)
+        return coverage.list_blind_spots(target_type=target_type, target_id=target_id, status=status, limit=limit)
+
+    @router.post("/coverage/runs/{identifier}/blind-spots")
+    async def generate_blind_spots(request: Request, identifier: str):
+        write_guard(request)
+        return coverage.generate_blind_spots(identifier)
+
+    @router.post("/coverage/blind-spots/{identifier}/review")
+    async def review_blind_spot(request: Request, identifier: str, payload: BlindSpotReviewWrite):
+        user = write_guard(request)
+        return coverage.review_blind_spot(identifier, payload.status, actor=user.user_id)
+
+    @router.get("/attention")
+    async def list_attention(request: Request, state: Optional[str] = None, limit: int = Query(100, ge=1, le=500)):
+        read_guard(request)
+        return attention.list(state=state, limit=limit)
+
+    @router.post("/attention/refresh")
+    async def refresh_attention(request: Request, limit: int = Query(200, ge=1, le=500)):
+        write_guard(request)
+        return attention.refresh(limit=limit)
+
+    @router.get("/attention/{identifier}")
+    async def get_attention(request: Request, identifier: str):
+        read_guard(request)
+        return attention.get(identifier)
+
+    @router.post("/attention/{identifier}/feedback")
+    async def feedback_attention(request: Request, identifier: str, payload: AttentionFeedbackWrite):
+        user = write_guard(request)
+        return attention.feedback(identifier, payload.feedback, actor=user.user_id)
 
     @router.post("/relevance/evaluate")
     async def evaluate_relevance(request: Request, payload: RelevanceEvaluate):
@@ -2488,6 +2737,16 @@ def create_domain_router(
     async def settings(request: Request, page: int = Query(1, ge=1), page_size: int = Query(100, ge=1, le=100)):
         read_guard(request)
         return service.list_settings(page=page, page_size=page_size)
+
+    @router.get("/experience")
+    async def get_experience(request: Request):
+        read_guard(request)
+        return experience.get()
+
+    @router.put("/experience")
+    async def set_experience(request: Request, payload: ExperienceModeWrite):
+        write_guard(request)
+        return experience.set_mode(payload.mode)
 
     @router.put("/settings/{key}")
     async def set_setting(request: Request, key: str, payload: SettingWrite):

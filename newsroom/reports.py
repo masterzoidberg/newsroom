@@ -40,6 +40,10 @@ def _decode(value: str | None, default: Any) -> Any:
         return default
 
 
+def _table_exists(conn: sqlite3.Connection, table: str) -> bool:
+    return conn.execute("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?", (table,)).fetchone() is not None
+
+
 def _encode(value: Any) -> str:
     try:
         return json.dumps(value, sort_keys=True, separators=(",", ":"))
@@ -327,7 +331,13 @@ class LivingReportService:
             ).fetchall()
         }
 
-    def _collect_sections(self, conn: sqlite3.Connection, story_ids: list[str], claims: list[sqlite3.Row]) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    def _collect_sections(
+        self,
+        conn: sqlite3.Connection,
+        story_ids: list[str],
+        claims: list[sqlite3.Row],
+        coverage_target_id: str | None = None,
+    ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
         claim_ids = [claim["id"] for claim in claims]
         claim_id_set = set(claim_ids)
         active_stories = []
@@ -361,7 +371,18 @@ class LivingReportService:
             support = [item for item in evidence if item["relationship"] == "supports"]
             conflict = [item for item in evidence if item["relationship"] == "contradicts"]
             source_ids = _unique([item["source_id"] for item in support])
-            strength.append({"story_id": claim["story_id"], "claim_id": claim["id"], "supporting_evidence_count": len(support), "contradicting_evidence_count": len(conflict), "independent_source_count": len(source_ids), "state": claim["state"]})
+            family_count = conn.execute(
+                """
+                SELECT COUNT(DISTINCT efm.family_id)
+                FROM claim_evidence ce
+                JOIN evidence_spans es ON es.id = ce.evidence_span_id
+                JOIN document_versions dv ON dv.id = es.document_version_id
+                JOIN evidence_family_members efm ON efm.document_id = dv.document_id
+                WHERE ce.claim_id = ? AND ce.relationship = 'supports'
+                """,
+                (claim["id"],),
+            ).fetchone()[0] if _table_exists(conn, "evidence_family_members") else 0
+            strength.append({"story_id": claim["story_id"], "claim_id": claim["id"], "supporting_evidence_count": len(support), "contradicting_evidence_count": len(conflict), "distinct_source_count": len(source_ids), "evidence_family_count": family_count, "state": claim["state"]})
             if claim["state"] == "disputed" or conflict:
                 contradictions.append({"claim_id": claim["id"], "proposition": claim["proposition"], "evidence_span_ids": [item["evidence_span_id"] for item in conflict]})
         question_params: list[Any] = []
@@ -378,6 +399,15 @@ class LivingReportService:
         suggestions = []
         if question_clauses:
             suggestions = [dict(item) for item in conn.execute(f"SELECT rgs.id, rgs.suggestion, rgs.rationale, rgs.expected_information_value, rgs.suggestion_type, rgs.origin_type, rgs.origin_id FROM research_gap_suggestions rgs WHERE rgs.status = 'pending' AND ({' OR '.join('(' + clause.replace('rq.', 'rgs.') + ')' for clause in question_clauses)}) ORDER BY rgs.expected_information_value DESC, rgs.created_at, rgs.id LIMIT 100", question_params).fetchall()]
+        coverage_gaps = []
+        if _table_exists(conn, "coverage_runs"):
+            coverage_targets = story_ids or ([coverage_target_id] if coverage_target_id else [])
+            if coverage_targets:
+                placeholders = ",".join("?" for _ in coverage_targets)
+                coverage_gaps = [dict(item) for item in conn.execute(
+                    f"SELECT id, target_type, target_id, status, window_start, window_end FROM coverage_runs WHERE target_id IN ({placeholders}) AND status <> 'completed' ORDER BY created_at DESC, id DESC LIMIT 10",
+                    coverage_targets,
+                ).fetchall()]
         sections = {
             "current_status": f"{len(active_stories)} active Story record(s) with {len(claim_ids)} accepted Claim(s).",
             "what_changed": [],
@@ -386,6 +416,7 @@ class LivingReportService:
             "contradictions": contradictions,
             "unresolved_questions": unresolved,
             "recommended_investigations": suggestions,
+            "coverage_gaps": coverage_gaps,
         }
         return sections, [{"text": claim["proposition"], "claim_ids": [claim["id"]]} for claim in claims if claim["id"] in claim_id_set]
 
@@ -427,6 +458,17 @@ class LivingReportService:
             return False
         if cause.get("cause_id") == cause.get("claim_id"):
             return True
+        if cause.get("cause_type") == "correction":
+            correction = conn.execute(
+                """
+                SELECT 1
+                FROM story_corrections sc
+                JOIN claim_story_assignment_history h ON h.correction_id = sc.id
+                WHERE sc.id = ? AND h.claim_id = ? AND h.to_story_id = ?
+                """,
+                (cause.get("cause_id"), cause.get("claim_id"), cause.get("story_id")),
+            ).fetchone()
+            return correction is not None
         event = conn.execute(
             "SELECT story_id, document_id FROM story_evolution_events WHERE id = ?",
             (cause.get("cause_id"),),
@@ -452,7 +494,9 @@ class LivingReportService:
             raise DomainConflict("archived living reports cannot be generated")
         story_ids = self._story_ids(conn, report)
         claims = self._accepted_claims(conn, story_ids)
-        sections, propositions = self._collect_sections(conn, story_ids, claims)
+        sections, propositions = self._collect_sections(
+            conn, story_ids, claims, report["target_id"]
+        )
         current_claim_ids = [claim["id"] for claim in claims]
         current_hash = claim_set_hash(current_claim_ids)
         input_identity = _report_input_identity(sections, propositions)
@@ -477,7 +521,18 @@ class LivingReportService:
                     and item["evidence_span_id"] in previous_evidence_ids
                 ):
                     continue
-                cause_type = (
+                correction = conn.execute(
+                    """
+                    SELECT sc.id
+                    FROM story_corrections sc
+                    JOIN claim_story_assignment_history h ON h.correction_id = sc.id
+                    WHERE h.claim_id = ? AND h.to_story_id = ?
+                    ORDER BY h.occurred_at DESC, h.id DESC
+                    LIMIT 1
+                    """,
+                    (claim["id"], claim["story_id"]),
+                ).fetchone()
+                cause_type = "correction" if correction is not None and claim["id"] not in previous_claim_ids else (
                     "new_primary_evidence"
                     if item["default_quality"] == "primary" or item["source_kind"] == "official"
                     else "material_update"
@@ -486,12 +541,12 @@ class LivingReportService:
                     {
                         "id": new_id("cause"),
                         "cause_type": cause_type,
-                        "cause_id": claim["id"],
+                        "cause_id": correction["id"] if cause_type == "correction" else claim["id"],
                         "story_id": claim["story_id"],
                         "claim_id": claim["id"],
                         "evidence_span_id": item["evidence_span_id"],
                         "document_id": item["document_id"],
-                        "rationale": "Accepted Claim entered the report evidence set.",
+                        "rationale": "Story organization changed; this report revision reflects a corrected Claim membership." if cause_type == "correction" else "Accepted Claim entered the report evidence set.",
                     }
                 )
         event_rows = []

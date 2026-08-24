@@ -5,6 +5,8 @@ import json
 import pytest
 
 from newsroom import storage
+from newsroom.attention import ATTENTION_REFRESH_JOB_TYPE
+from newsroom.coverage import COVERAGE_REFRESH_JOB_TYPE
 from newsroom.domain import CoreService, DomainConflict, DomainNotFound
 from newsroom.evidence import EvidenceService
 from newsroom.jobs import (
@@ -34,6 +36,7 @@ from newsroom.research_questions import (
 )
 from newsroom.runtime import build_worker_handlers, build_worker_queue
 from newsroom.scheduler import SchedulerProcess
+from newsroom.source_robustness import EVIDENCE_FAMILY_REBUILD_JOB_TYPE, FRAGILITY_ANALYSIS_JOB_TYPE
 from newsroom.worker import WorkerProcess, merge_handlers
 
 
@@ -104,6 +107,10 @@ def test_production_handler_coverage(tmp_db):
         WATCH_SOURCE_DISCOVERY_JOB_TYPE,
         WATCH_VOCABULARY_SUGGESTION_JOB_TYPE,
         STORY_CORRECTION_RECONCILIATION_JOB_TYPE,
+        COVERAGE_REFRESH_JOB_TYPE,
+        EVIDENCE_FAMILY_REBUILD_JOB_TYPE,
+        FRAGILITY_ANALYSIS_JOB_TYPE,
+        ATTENTION_REFRESH_JOB_TYPE,
     }
     missing = produced - set(handlers)
     assert not missing, f"enqueue producers without a production handler: {sorted(missing)}"

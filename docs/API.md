@@ -72,6 +72,31 @@ Accepted Claims must be `supported` or `partially_supported` and have a
 supporting Evidence Span. Accepted Claim proposition text cannot be edited;
 corrections create a new Claim with `supersedes_claim_id`.
 
+## Phase 28 Coverage, robustness, and analysis
+
+Coverage uses authenticated routes under `/coverage/runs`: create a bounded
+expected denominator with `POST /coverage/runs`, record each item with
+`POST /coverage/runs/{id}/items/{item_key}`, and close it with
+`POST /coverage/runs/{id}/complete`. `GET /coverage/runs/{id}` returns explicit
+states, completeness, blocking states, and qualified-negative explanation.
+`GET /stories/{id}/coverage` and `/research-questions/{id}/priorities` provide
+bounded contextual views. Blind spots are generated/reviewed through
+`/coverage/runs/{id}/blind-spots`, `/coverage/blind-spots`, and the review route.
+
+`GET /documents/{id}/dependencies` and
+`GET /sources/{id}/source-robustness` inspect dependency context. Stories and
+Claims expose `/source-robustness` plus read-only
+`/fragility/counterfactual` endpoints. Counterfactuals exclude evidence family
+IDs in memory and do not mutate canonical Claim/Evidence state.
+
+`GET /attention`, `POST /attention/refresh`, and
+`POST /attention/{id}/feedback` expose the explainable Attention projection.
+`GET/PUT /experience` stores the Simple/Advanced disclosure mode. Hypotheses
+are created under `/research-questions/{id}/hypotheses`, linked to existing
+Claims through `/hypotheses/{id}/claims/{claim_id}`, given Gaps, and reviewed
+explicitly. These records are analytical/review state and are not factual
+Claim/Evidence alternatives.
+
 ## Reports, briefings, and alerts
 
 Phase 11 adds authenticated, evidence-bound output paths:

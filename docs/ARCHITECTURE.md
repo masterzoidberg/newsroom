@@ -655,7 +655,7 @@ manual evidence; automatic Claims begin story-less and may only receive a
 controlled, audited initial Story association. No Story matching, Story
 creation, Story evolution, Report, or Alert automation is introduced here.
 
-The current applied schema is migration 0031 / schema version 31 (see
+The current applied schema is migration 0032 / schema version 32 (see
 `newsroom/migrations.py`). Migration 0015 added the Phase 18 content artifact
 substrate; migration 0016 added the Phase 19 processing-ownership column
 (`jobs.document_version_id`), the durable result column (`jobs.result_json`),
@@ -669,11 +669,14 @@ post-audit reconciliation (Phase 17) added no migration; migration 0021 added
 the original verified Evidence/Claim substrate, migration 0022 separated
 manual/automatic EvidenceSpan identity and added controlled Claim Story
 history, and migration 0023 hardened the remaining promotion/evidence insert
-contracts without starting Story automation. Migrations 0029–0031 add the
+contracts without starting Story automation. Migrations 0029–0032 add the
 append-only Story correction aggregate, transition-capable Claim membership
 history, manual/derived Story Entity authority, merge/split lineage, duplicate
-decisions, durable duplicate suggestion identity, Watch resolution state, and
-nullable current Claim Story pointers needed for Advanced Story Intelligence.
+decisions, durable duplicate suggestion identity, Watch resolution state, nullable
+current Claim Story pointers, Coverage/CoverageSummary, evidence families,
+derived fragility/blind-spot state, Attention projection, and reviewable
+Hypotheses. Phase 28 analytical records are derived or review state; they do not
+replace the canonical evidence ledger.
 
 Due Research Questions use a separate bounded scheduler path: each tick can
 enqueue at most one durable `research_question` Job per due Question, and the
@@ -699,6 +702,32 @@ dedupe key, cause payload, acknowledgement state, and per-channel delivery
 state. In-app delivery is durable. Browser delivery is an optional pending,
 sent, denied, offline, failed, or skipped state; no email/SMS or public
 publishing path is introduced.
+
+## Phase 28 intelligence quality and experience
+
+Phase 28 preserves one canonical engine while adding derived intelligence around
+it. Coverage runs store an explicit expected denominator and distinguish
+`observed`, `not_found`, `not_observed`, `not_searched`, `failed_acquisition`,
+`out_of_scope`, and `stale`; a complete `not_found` result is exposed only as a
+qualified negative. Coverage item references are validated against existing
+observation facts.
+
+Document lineage feeds deterministic evidence-family membership. Source counts,
+lineage groups, and evidence-family counts are reported separately; fragility
+and counterfactual endpoints are non-mutating and never change Claims or
+Evidence. Blind spots are bounded suggestions that can be reviewed and then
+prioritized through the existing Research Question/Gap/Task path.
+
+Attention is a rebuildable, explainable projection over Alerts, Corrections,
+Coverage gaps, and blind spots. Feedback is durable but does not rewrite
+canonical facts. `/experience` stores the existing Simple/Advanced visibility
+preference; the mode changes disclosure only. Hypotheses are attached to
+Research Questions and may link existing Claims or Gaps, but cannot become
+ClaimEvidence or resolve a Question automatically.
+
+The durable derived handlers `coverage_refresh`, `evidence_family_rebuild`,
+`fragility_analysis`, and `attention_refresh` use the existing JobService and
+WorkerProcess.
 
 ## Product UI and PWA
 

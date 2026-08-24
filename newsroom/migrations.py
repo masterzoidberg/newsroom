@@ -3251,6 +3251,213 @@ MIGRATION_0031_CHECKSUM = hashlib.sha256(
 ).hexdigest()
 
 
+# 0032: Phase 28 derived intelligence and explicit split-target resolution.
+# These tables reference canonical evidence/domain rows but never replace them
+# as factual authority. Projection rows are rebuildable; human decisions and
+# append-only histories remain separately identifiable.
+MIGRATION_0032_STATEMENTS: tuple[str, ...] = (
+    """
+    CREATE TABLE story_target_resolution_history (
+        id TEXT PRIMARY KEY,
+        target_kind TEXT NOT NULL CHECK (target_kind IN ('watch', 'monitor')),
+        target_id TEXT NOT NULL,
+        historical_story_id TEXT NOT NULL REFERENCES stories(id) ON DELETE RESTRICT,
+        selected_story_ids_json TEXT NOT NULL DEFAULT '[]',
+        resolution TEXT NOT NULL CHECK (resolution IN ('selected', 'disabled')),
+        actor TEXT,
+        created_at TEXT NOT NULL
+    )
+    """,
+    "CREATE INDEX story_target_resolution_history_target_idx ON story_target_resolution_history(target_kind, target_id, created_at DESC, id)",
+    """
+    CREATE TABLE coverage_runs (
+        id TEXT PRIMARY KEY,
+        target_type TEXT NOT NULL CHECK (target_type IN ('watch', 'research_question', 'story', 'ask', 'source')),
+        target_id TEXT NOT NULL,
+        target_version TEXT NOT NULL DEFAULT '',
+        window_start TEXT NOT NULL,
+        window_end TEXT NOT NULL,
+        policy_version TEXT NOT NULL,
+        included_sources_json TEXT NOT NULL DEFAULT '[]',
+        excluded_sources_json TEXT NOT NULL DEFAULT '[]',
+        status TEXT NOT NULL DEFAULT 'running' CHECK (status IN ('running', 'completed', 'partial', 'failed')),
+        causing_job_id TEXT REFERENCES jobs(id) ON DELETE SET NULL,
+        created_at TEXT NOT NULL,
+        completed_at TEXT
+    )
+    """,
+    "CREATE INDEX coverage_runs_target_idx ON coverage_runs(target_type, target_id, created_at DESC, id)",
+    """
+    CREATE TABLE coverage_items (
+        id TEXT PRIMARY KEY,
+        run_id TEXT NOT NULL REFERENCES coverage_runs(id) ON DELETE CASCADE,
+        item_key TEXT NOT NULL,
+        channel_type TEXT NOT NULL,
+        source_id TEXT REFERENCES sources(id) ON DELETE SET NULL,
+        source_class TEXT NOT NULL DEFAULT '',
+        required INTEGER NOT NULL DEFAULT 1 CHECK (required IN (0, 1)),
+        state TEXT NOT NULL CHECK (state IN ('observed', 'not_found', 'not_observed', 'not_searched', 'failed_acquisition', 'out_of_scope', 'stale')),
+        observation_refs_json TEXT NOT NULL DEFAULT '[]',
+        reason TEXT NOT NULL DEFAULT '',
+        observed_at TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        UNIQUE(run_id, item_key)
+    )
+    """,
+    "CREATE INDEX coverage_items_state_idx ON coverage_items(run_id, state, required, item_key)",
+    "CREATE INDEX coverage_items_source_idx ON coverage_items(source_id, state, updated_at)",
+    """
+    CREATE TABLE coverage_summaries (
+        run_id TEXT PRIMARY KEY REFERENCES coverage_runs(id) ON DELETE CASCADE,
+        expected_count INTEGER NOT NULL CHECK (expected_count >= 0),
+        required_count INTEGER NOT NULL CHECK (required_count >= 0),
+        observed_count INTEGER NOT NULL CHECK (observed_count >= 0),
+        complete_count INTEGER NOT NULL CHECK (complete_count >= 0),
+        completeness REAL NOT NULL CHECK (completeness >= 0.0 AND completeness <= 1.0),
+        qualified_negative INTEGER NOT NULL DEFAULT 0 CHECK (qualified_negative IN (0, 1)),
+        state_counts_json TEXT NOT NULL DEFAULT '{}',
+        explanation_json TEXT NOT NULL DEFAULT '{}',
+        created_at TEXT NOT NULL
+    )
+    """,
+    """
+    CREATE TABLE evidence_families (
+        id TEXT PRIMARY KEY,
+        family_key TEXT NOT NULL UNIQUE,
+        label TEXT NOT NULL DEFAULT '',
+        origin TEXT NOT NULL CHECK (origin IN ('deterministic', 'provider', 'human', 'import')),
+        authority TEXT NOT NULL CHECK (authority IN ('derived', 'reviewed')),
+        algorithm_version TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+    )
+    """,
+    """
+    CREATE TABLE evidence_family_members (
+        family_id TEXT NOT NULL REFERENCES evidence_families(id) ON DELETE CASCADE,
+        document_id TEXT NOT NULL REFERENCES documents(id) ON DELETE RESTRICT,
+        source_id TEXT NOT NULL REFERENCES sources(id) ON DELETE RESTRICT,
+        relationship TEXT NOT NULL DEFAULT 'member',
+        confidence REAL NOT NULL DEFAULT 1.0 CHECK (confidence >= 0.0 AND confidence <= 1.0),
+        created_at TEXT NOT NULL,
+        PRIMARY KEY(family_id, document_id)
+    )
+    """,
+    "CREATE INDEX evidence_family_members_document_idx ON evidence_family_members(document_id, family_id)",
+    """
+    CREATE TABLE evidence_fragility_analyses (
+        id TEXT PRIMARY KEY,
+        target_type TEXT NOT NULL CHECK (target_type IN ('claim', 'story', 'report', 'ask')),
+        target_id TEXT NOT NULL,
+        input_fingerprint TEXT NOT NULL,
+        claim_ids_json TEXT NOT NULL DEFAULT '[]',
+        distinct_source_count INTEGER NOT NULL DEFAULT 0 CHECK (distinct_source_count >= 0),
+        lineage_group_count INTEGER NOT NULL DEFAULT 0 CHECK (lineage_group_count >= 0),
+        evidence_family_count INTEGER NOT NULL DEFAULT 0 CHECK (evidence_family_count >= 0),
+        fragility_score REAL NOT NULL CHECK (fragility_score >= 0.0 AND fragility_score <= 1.0),
+        support_paths_json TEXT NOT NULL DEFAULT '[]',
+        explanation_json TEXT NOT NULL DEFAULT '{}',
+        created_at TEXT NOT NULL,
+        UNIQUE(target_type, target_id, input_fingerprint)
+    )
+    """,
+    """
+    CREATE TABLE blind_spot_suggestions (
+        id TEXT PRIMARY KEY,
+        target_type TEXT NOT NULL,
+        target_id TEXT NOT NULL,
+        source_class TEXT NOT NULL,
+        coverage_run_id TEXT REFERENCES coverage_runs(id) ON DELETE SET NULL,
+        priority REAL NOT NULL CHECK (priority >= 0.0 AND priority <= 1.0),
+        reason TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'approved', 'dismissed', 'used')),
+        created_at TEXT NOT NULL,
+        reviewed_at TEXT,
+        reviewed_by TEXT,
+        UNIQUE(target_type, target_id, source_class, coverage_run_id)
+    )
+    """,
+    """
+    CREATE TABLE attention_items (
+        id TEXT PRIMARY KEY,
+        object_type TEXT NOT NULL,
+        object_id TEXT NOT NULL,
+        reason_code TEXT NOT NULL,
+        importance_score REAL NOT NULL CHECK (importance_score >= 0.0 AND importance_score <= 1.0),
+        state TEXT NOT NULL DEFAULT 'open' CHECK (state IN ('open', 'seen', 'dismissed')),
+        source_fingerprint TEXT NOT NULL,
+        explanation_json TEXT NOT NULL DEFAULT '{}',
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        UNIQUE(object_type, object_id, reason_code, source_fingerprint)
+    )
+    """,
+    "CREATE INDEX attention_items_rank_idx ON attention_items(state, importance_score DESC, updated_at DESC, id)",
+    """
+    CREATE TABLE attention_feedback (
+        id TEXT PRIMARY KEY,
+        attention_id TEXT NOT NULL REFERENCES attention_items(id) ON DELETE CASCADE,
+        feedback TEXT NOT NULL CHECK (feedback IN ('useful', 'not_important', 'already_knew', 'needs_investigation', 'mute_pattern')),
+        actor TEXT,
+        created_at TEXT NOT NULL
+    )
+    """,
+    """
+    CREATE TABLE hypotheses (
+        id TEXT PRIMARY KEY,
+        question_id TEXT NOT NULL REFERENCES research_questions(id) ON DELETE CASCADE,
+        statement TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'draft' CHECK (status IN ('draft', 'approved', 'rejected', 'archived')),
+        origin TEXT NOT NULL CHECK (origin IN ('human', 'deterministic', 'provider')),
+        provider_route TEXT NOT NULL DEFAULT 'local_deterministic',
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        approved_at TEXT,
+        approved_by TEXT
+    )
+    """,
+    "CREATE INDEX hypotheses_question_idx ON hypotheses(question_id, status, updated_at DESC, id)",
+    """
+    CREATE TABLE hypothesis_claim_links (
+        id TEXT PRIMARY KEY,
+        hypothesis_id TEXT NOT NULL REFERENCES hypotheses(id) ON DELETE CASCADE,
+        claim_id TEXT NOT NULL REFERENCES claims(id) ON DELETE RESTRICT,
+        relationship TEXT NOT NULL CHECK (relationship IN ('supports', 'contradicts', 'discriminates')),
+        created_at TEXT NOT NULL,
+        UNIQUE(hypothesis_id, claim_id, relationship)
+    )
+    """,
+    """
+    CREATE TABLE hypothesis_gaps (
+        id TEXT PRIMARY KEY,
+        hypothesis_id TEXT NOT NULL REFERENCES hypotheses(id) ON DELETE CASCADE,
+        description TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'open' CHECK (status IN ('open', 'approved', 'used', 'dismissed')),
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        UNIQUE(hypothesis_id, description)
+    )
+    """,
+    """
+    CREATE TABLE hypothesis_history (
+        id TEXT PRIMARY KEY,
+        hypothesis_id TEXT NOT NULL REFERENCES hypotheses(id) ON DELETE CASCADE,
+        from_status TEXT,
+        to_status TEXT NOT NULL,
+        actor TEXT,
+        reason TEXT NOT NULL DEFAULT '',
+        created_at TEXT NOT NULL
+    )
+    """,
+    "CREATE INDEX hypothesis_history_idx ON hypothesis_history(hypothesis_id, created_at, id)",
+)
+
+MIGRATION_0032_CHECKSUM = hashlib.sha256(
+    "\n".join(MIGRATION_0032_STATEMENTS).encode("utf-8")
+).hexdigest()
+
+
 @dataclass(frozen=True)
 class MigrationResult:
     applied_versions: tuple[int, ...]
@@ -3329,6 +3536,7 @@ def apply_migrations(db_path: Optional[str | Path] = None) -> MigrationResult:
                 29: MIGRATION_0029_STATEMENTS,
                 30: MIGRATION_0030_STATEMENTS,
                 31: MIGRATION_0031_STATEMENTS,
+                32: MIGRATION_0032_STATEMENTS,
             }
             for version, statements in migrations.items():
                 if version in existing:

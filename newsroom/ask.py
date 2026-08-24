@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any, Callable, Mapping, Sequence
 
 from . import storage
+from .coverage import CoverageService
 from .domain import DomainConflict, DomainNotFound, DomainValidation, new_id, utc_now
 from .workbench import KnowledgeRetrievalService
 
@@ -124,6 +125,7 @@ class AskService:
         self.max_citations = max_citations
         self.hosted_enabled = hosted_enabled
         self.search = KnowledgeRetrievalService(db_path)
+        self.coverage = CoverageService(db_path)
 
     def create_conversation(self, *, scope_type: str = "global", scope_id: str | None = None) -> dict[str, Any]:
         scope_type = self._normalize_scope_type(scope_type)
@@ -334,7 +336,7 @@ class AskService:
     ) -> dict[str, Any]:
         terms = _tokens(prompt)
         if not terms:
-            return {"items": [], "claims": {}, "evidence": {}, "notes": [], "reports": [], "questions": [], "gaps": [], "tasks": [], "terms": [], "packet_ids": []}
+            return {"items": [], "claims": {}, "evidence": {}, "notes": [], "reports": [], "questions": [], "gaps": [], "tasks": [], "terms": [], "packet_ids": [], "coverage": self._coverage_context(scope_type, scope_id)}
         if self._cancelled(run_id, cancel_check):
             return {"cancelled": True}
         try:
@@ -425,6 +427,9 @@ class AskService:
                 packet_ids.add(f"report:{report['id']}")
                 if report.get("current_revision_id"):
                     packet_ids.add(f"report_revision:{report['current_revision_id']}")
+            coverage = self._coverage_context(scope_type, scope_id)
+            for run in coverage:
+                packet_ids.add(f"coverage_run:{run['id']}")
             return {
                 "items": list(items.values()),
                 "claims": claims,
@@ -440,10 +445,23 @@ class AskService:
                 "context_truncated": len(selected_evidence) < len(evidence),
                 "scope": {"type": scope_type, "id": scope_id},
                 "packet_ids": sorted(packet_ids),
+                "coverage": coverage,
                 "retrieval_ranking": shared.get("ranking", "exact_match_then_bm25_then_entity_type_then_entity_id"),
             }
         finally:
             conn.close()
+
+    def _coverage_context(self, scope_type: str, scope_id: str | None) -> list[dict[str, Any]]:
+        target_type = {
+            "question": "research_question",
+            "story": "story",
+            "source": "source",
+        }.get(scope_type)
+        if scope_type == "global":
+            target_type = None
+        if target_type is None and scope_type != "global":
+            return []
+        return self.coverage.list_runs(target_type=target_type, target_id=scope_id, limit=5)
 
     def _scope_sets(self, conn, scope_type: str, scope_id: str | None) -> dict[str, Any]:
         empty = {key: set() for key in ("stories", "claims", "evidence", "documents", "subjects", "questions", "monitors", "reports", "notes", "entities", "gaps", "tasks", "sources")}
@@ -846,6 +864,31 @@ class AskService:
             if status:
                 add_statement(f"Report status: {status}", "fact", [report_citation])
 
+        for run in retrieved.get("coverage", []):
+            coverage_citation = cite(
+                "coverage_run",
+                run["id"],
+                f"Coverage run {run['id']}",
+                kind="coverage",
+                target_type=run.get("target_type"),
+                target_id=run.get("target_id"),
+                status=run.get("status"),
+            )
+            summary = run.get("summary", {})
+            if summary.get("qualified_negative"):
+                add_statement(
+                    "Coverage supports a qualified negative: the expected channels were searched, but no observation was recorded for at least one required channel.",
+                    "uncertainty",
+                    [coverage_citation],
+                )
+            elif run.get("status") != "completed" or summary.get("blocking_states"):
+                blocking = ", ".join(summary.get("blocking_states", [])) or run.get("status", "incomplete")
+                add_statement(
+                    f"Coverage is incomplete ({blocking}); absence in the uncompleted channels should not be treated as evidence of absence.",
+                    "uncertainty",
+                    [coverage_citation],
+                )
+
         for item in retrieved.get("items", []):
             if item["entity_type"] in {"story", "subject", "document", "entity", "source", "watch", "monitor"}:
                 cite(item["entity_type"], item["entity_id"], item.get("title", item["entity_id"]), kind=item["entity_type"])
@@ -911,6 +954,16 @@ class AskService:
                 {"question_id": gap["question_id"], "gap_id": gap["id"], "description": gap["description"], "status": gap["status"]}
                 for gap in retrieved.get("gaps", []) if gap.get("status") in {"open", "pursuing"}
             ][:20],
+            "coverage": [
+                {
+                    "id": run["id"],
+                    "target_type": run.get("target_type"),
+                    "target_id": run.get("target_id"),
+                    "status": run.get("status"),
+                    "summary": run.get("summary", {}),
+                }
+                for run in retrieved.get("coverage", [])
+            ],
             "retrieval_ranking": retrieved.get("retrieval_ranking"),
         }
 
@@ -998,6 +1051,7 @@ class AskService:
             "watch": ("watches", "id", "1 = 1"),
             "article_analysis": ("article_analyses", "id", "1 = 1"),
             "story_correction": ("story_corrections", "id", "1 = 1"),
+            "coverage_run": ("coverage_runs", "id", "1 = 1"),
         }
         definition = table_map.get(citation.get("object_type"))
         if definition is None:

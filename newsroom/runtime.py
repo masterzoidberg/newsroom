@@ -17,8 +17,10 @@ from .alert_automation import (
     automatic_alert_stage_completion_hook,
     automatic_alert_stage_rerun_factory,
 )
+from .attention import AttentionService
 from .ai import AIRouter, CapabilityBundle, SQLiteTelemetrySink
 from .config import RuntimeConfig
+from .coverage import CoverageService
 from .document_processing import (
     DocumentProcessingExecutionService,
     document_version_processing_rerun_factory,
@@ -38,6 +40,7 @@ from .research_questions import (
     ResearchQuestionExecutionService,
     research_job_recovery_hook,
 )
+from .source_robustness import SourceRobustnessService
 from .scheduler import SchedulerProcess
 from .story_automation import (
     AutomaticStoryStageExecutionService,
@@ -139,6 +142,9 @@ def build_worker_handlers(db_path: str | Path) -> dict[str, Any]:
         AutomaticReportStageExecutionService(db_path).handlers(),
         AutomaticAlertStageExecutionService(db_path).handlers(),
         WatchMaintenanceService(db_path).handlers(),
+        CoverageService(db_path).handlers(),
+        SourceRobustnessService(db_path).handlers(),
+        AttentionService(db_path).handlers(),
     )
 
 

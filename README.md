@@ -78,7 +78,7 @@ excerpts by unique exact code-point match, and atomically persists immutable
 verified EvidenceSpans, pending Claims, and ClaimEvidence links. Ambiguous,
 fabricated, and out-of-slice candidates fail closed; model offsets are never
 trusted, and legacy/manual spans remain distinct. The current applied schema
-is migration 0023 / schema version 23. Phase 23A–E now connect verified
+is migration 0032 / schema version 32. Phase 23A–E now connect verified
 automatic Claims to deterministic Story resolution, audited Claim acceptance,
 evidence-bound Living Reports, exact-cause Alerts, and durable in-app delivery.
 The complete chain has bounded compatibility/status APIs, logical-export
@@ -88,6 +88,13 @@ Monitor targets perform real acquisition today;
 `topic`, `subject`, `story`, and `research_question` are accepted by the
 schema/API but explicitly unsupported at runtime
 (`error`/`unsupported_target`).
+
+Phase 28 adds durable correction reconciliation hardening; explicit Coverage
+states and qualified absence; explainable Source dependency, evidence-family,
+fragility, counterfactual, and blind-spot analysis; cross-domain Attention;
+Simple/Advanced disclosure; and reviewable Hypotheses that remain outside the
+canonical Claim/Evidence path. The derived refresh handlers use the existing
+JobService and WorkerProcess.
 
 ## Authority
 
