@@ -145,8 +145,8 @@ def test_phase24_database_upgrades_to_phase25_without_reinterpreting_existing_qu
     from newsroom.migrations import migration_status
 
     result = apply_migrations(tmp_db)
-    assert result.applied_versions == (25,)
-    assert migration_status(tmp_db) == tuple(range(1, 26))
+    assert result.applied_versions == (25, 26)
+    assert migration_status(tmp_db) == tuple(range(1, 27))
     current = ResearchQuestionService(tmp_db).get("rq-legacy")
     assert current["status"] == "open"
     assert current["assessment_state"] == "open"

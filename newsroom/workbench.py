@@ -32,6 +32,10 @@ ENTITY_TYPES = (
     "tag",
     "question",
     "note",
+    "entity",
+    "research_task",
+    "report",
+    "watch",
 )
 OBJECT_TABLES = {
     "story": ("stories", "id", "deleted_at"),
@@ -121,6 +125,25 @@ class SearchService:
                 subject_id=row["id"],
             )
 
+        if conn.execute("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'entities'").fetchone() is not None:
+            for row in conn.execute("SELECT * FROM entities WHERE status <> 'merged' ORDER BY id"):
+                aliases = " ".join(
+                    item[0]
+                    for item in conn.execute(
+                        "SELECT alias FROM entity_aliases WHERE entity_id = ? AND status = 'active' ORDER BY id",
+                        (row["id"],),
+                    )
+                )
+                _append_record(
+                    records,
+                    entity_type="entity",
+                    entity_id=row["id"],
+                    title=row["canonical_name"],
+                    body=" ".join(filter(None, (row["description"], row["entity_type"], row["status"], aliases))),
+                    created_at=row["created_at"],
+                    state=row["status"],
+                )
+
         for row in conn.execute(
             """
             SELECT d.*, s.name AS source_name
@@ -182,7 +205,30 @@ class SearchService:
         for row in conn.execute("SELECT * FROM research_questions WHERE deleted_at IS NULL ORDER BY id"):
             title = row["question"]
             titles[("question", row["id"])] = title
-            _append_record(records, entity_type="question", entity_id=row["id"], title=title, body=" ".join(filter(None, (row["status"], row["priority"], row["resolution_note"]))), created_at=row["created_at"], question_id=row["id"], state=row["status"])
+            _append_record(records, entity_type="question", entity_id=row["id"], title=title, body=" ".join(filter(None, (row["status"], row["priority"], row["resolution_note"], row["assessment_state"], row["assessment_explanation"]))), created_at=row["created_at"], question_id=row["id"], state=row["status"], assessment_state=row["assessment_state"])
+
+        if conn.execute("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'research_tasks'").fetchone() is not None:
+            for row in conn.execute(
+                "SELECT t.*, q.question, g.description AS gap_description FROM research_tasks t JOIN research_questions q ON q.id = t.question_id JOIN research_question_gaps g ON g.id = t.gap_id ORDER BY t.id"
+            ):
+                _append_record(
+                    records,
+                    entity_type="research_task",
+                    entity_id=row["id"],
+                    title=f"Research task: {row['question']}",
+                    body=" ".join(filter(None, (row["status"], row["gap_description"], row["plan_json"], row["outcome_json"]))),
+                    created_at=row["created_at"],
+                    question_id=row["question_id"],
+                    state=row["status"],
+                )
+
+        if conn.execute("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'living_reports'").fetchone() is not None:
+            for row in conn.execute("SELECT id, name, status, target_type, target_id, updated_at FROM living_reports ORDER BY id"):
+                _append_record(records, entity_type="report", entity_id=row["id"], title=row["name"], body=" ".join(filter(None, (row["status"], row["target_type"], row["target_id"]))), created_at=row["updated_at"], state=row["status"])
+
+        if conn.execute("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'watches'").fetchone() is not None:
+            for row in conn.execute("SELECT * FROM watches ORDER BY id"):
+                _append_record(records, entity_type="watch", entity_id=row["id"], title=row["name"], body=" ".join(filter(None, (row["status"], row["target_type"], row["target_id"], row["priority"]))), created_at=row["created_at"], state=row["status"])
 
         for row in conn.execute(
             """
@@ -247,7 +293,7 @@ class SearchService:
         conn.execute("DELETE FROM search_fts")
         conn.execute("DELETE FROM search_records")
         for record in records:
-            columns = ("id", "entity_type", "entity_id", "title", "body", "source_id", "story_id", "subject_id", "monitor_id", "question_id", "tag_id", "document_id", "state", "lifecycle", "created_at")
+            columns = ("id", "entity_type", "entity_id", "title", "body", "source_id", "story_id", "subject_id", "monitor_id", "question_id", "tag_id", "document_id", "state", "lifecycle", "assessment_state", "created_at")
             conn.execute(f"INSERT INTO search_records ({', '.join(columns)}) VALUES ({', '.join('?' for _ in columns)})", tuple(record.get(column) for column in columns))
         conn.execute(
             """
@@ -277,6 +323,7 @@ class SearchService:
         tag_id: str | None = None,
         document_id: str | None = None,
         state: str | None = None,
+        assessment_state: str | None = None,
         lifecycle: str | None = None,
         date_from: str | None = None,
         date_to: str | None = None,
@@ -292,12 +339,19 @@ class SearchService:
         conn = storage.connect(self.db_path)
         try:
             self._ensure_index(conn)
-            clauses = ["search_fts MATCH ?"]
-            params: list[Any] = [match]
+            direct_id = query.strip()
+            if re.fullmatch(r"[A-Za-z][A-Za-z0-9-]{1,40}_[A-Za-z0-9-]{4,200}", direct_id) or ":" in direct_id:
+                clauses = ["r.entity_id = ?"]
+                params: list[Any] = [direct_id]
+                uses_fts = False
+            else:
+                clauses = ["search_fts MATCH ?"]
+                params = [match]
+                uses_fts = True
             if types:
                 clauses.append(f"r.entity_type IN ({', '.join('?' for _ in types)})")
                 params.extend(types)
-            for column, value in (("source_id", source_id), ("story_id", story_id), ("subject_id", subject_id), ("monitor_id", monitor_id), ("question_id", question_id), ("tag_id", tag_id), ("document_id", document_id), ("state", state), ("lifecycle", lifecycle)):
+            for column, value in (("source_id", source_id), ("story_id", story_id), ("subject_id", subject_id), ("monitor_id", monitor_id), ("question_id", question_id), ("tag_id", tag_id), ("document_id", document_id), ("state", state), ("lifecycle", lifecycle), ("assessment_state", assessment_state)):
                 if value is not None:
                     clauses.append(f"r.{column} = ?")
                     params.append(value)
@@ -308,24 +362,38 @@ class SearchService:
                 clauses.append("r.created_at <= ?")
                 params.append(date_to)
             where = " AND ".join(clauses)
-            total = conn.execute(f"SELECT COUNT(*) FROM search_fts JOIN search_records r ON r.rowid = search_fts.rowid WHERE {where}", params).fetchone()[0]
+            relation = "search_fts JOIN search_records r ON r.rowid = search_fts.rowid" if uses_fts else "search_records r"
+            total = conn.execute(f"SELECT COUNT(*) FROM {relation} WHERE {where}", params).fetchone()[0]
             rows = conn.execute(
                 f"""
-                SELECT r.*, bm25(search_fts, 1.0, 0.6) AS score
-                FROM search_fts JOIN search_records r ON r.rowid = search_fts.rowid
+                SELECT r.*, {"bm25(search_fts, 1.0, 0.6)" if uses_fts else "0.0"} AS score
+                FROM {relation}
                 WHERE {where}
                 ORDER BY score ASC, r.entity_type ASC, r.entity_id ASC
                 LIMIT ? OFFSET ?
                 """,
                 [*params, page_size, offset],
             ).fetchall()
+            facet_rows = conn.execute(
+                f"SELECT r.entity_type, COUNT(*) AS count FROM {relation} WHERE {where} GROUP BY r.entity_type ORDER BY r.entity_type",
+                params,
+            ).fetchall()
             items: list[dict[str, Any]] = []
             for row in rows:
                 item = _as_dict(row) or {}
                 item["snippet"] = (f"{item['title']} {item['body']}".strip())[:280]
+                query_normalized = normalized_text(query).casefold()
+                title_normalized = normalized_text(item.get("title", "")).casefold()
+                if title_normalized == query_normalized:
+                    item["match_reason"] = "exact_canonical_name"
+                elif item.get("entity_type") == "entity" and query_normalized in str(item.get("body", "")).casefold().split():
+                    item["match_reason"] = "exact_alias"
+                else:
+                    item["match_reason"] = "fts_match"
+                item["rank"] = offset + len(items) + 1
                 item.pop("id", None)
                 items.append(item)
-            return {"items": items, "page": page, "page_size": page_size, "total": total, "has_more": offset + len(items) < total, "ranking": "bm25_then_entity_type_then_entity_id"}
+            return {"items": items, "page": page, "page_size": page_size, "total": total, "has_more": offset + len(items) < total, "ranking": "bm25_then_entity_type_then_entity_id", "facets": {row["entity_type"]: row["count"] for row in facet_rows}}
         except sqlite3.OperationalError as exc:
             raise DomainValidation("search query could not be evaluated") from exc
         finally:

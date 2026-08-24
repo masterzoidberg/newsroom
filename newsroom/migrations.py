@@ -2535,6 +2535,231 @@ MIGRATION_0025_CHECKSUM = hashlib.sha256(
 ).hexdigest()
 
 
+# Phase 26 — canonical knowledge metadata.  These tables are deliberately
+# additive: Entity/Tag metadata can organize existing intelligence, but it is
+# never an alternative Evidence or Claim path.
+MIGRATION_0026_STATEMENTS: tuple[str, ...] = (
+    """
+    CREATE TABLE entities (
+        id TEXT PRIMARY KEY,
+        canonical_name TEXT NOT NULL,
+        normalized_name TEXT NOT NULL UNIQUE,
+        entity_type TEXT NOT NULL CHECK (entity_type IN ('person','organization','agency','company','program','location','event','legislation','technology','publication','other','unknown')),
+        description TEXT NOT NULL DEFAULT '',
+        status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active','candidate','merged')),
+        merged_into_id TEXT REFERENCES entities(id) ON DELETE SET NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+    )
+    """,
+    "CREATE INDEX entities_type_status_idx ON entities(entity_type, status, normalized_name, id)",
+    """
+    CREATE TABLE entity_aliases (
+        id TEXT PRIMARY KEY,
+        entity_id TEXT NOT NULL REFERENCES entities(id) ON DELETE CASCADE,
+        alias TEXT NOT NULL,
+        normalized_alias TEXT NOT NULL,
+        alias_type TEXT NOT NULL CHECK (alias_type IN ('alternate_name','acronym','expanded_name','abbreviation','former_name','deterministic')),
+        origin TEXT NOT NULL CHECK (origin IN ('user','subject','watch','article_analysis','deterministic','provider','import')),
+        status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active','retired')),
+        created_at TEXT NOT NULL,
+        UNIQUE(entity_id, normalized_alias)
+    )
+    """,
+    "CREATE INDEX entity_aliases_lookup_idx ON entity_aliases(normalized_alias, status, entity_id)",
+    """
+    CREATE TABLE entity_mentions (
+        id TEXT PRIMARY KEY,
+        entity_id TEXT REFERENCES entities(id) ON DELETE SET NULL,
+        mention_text TEXT NOT NULL,
+        normalized_mention TEXT NOT NULL,
+        source_type TEXT NOT NULL CHECK (source_type IN ('article_analysis','document_version','claim','manual','unknown')),
+        source_id TEXT,
+        article_analysis_id TEXT REFERENCES article_analyses(id) ON DELETE SET NULL,
+        document_version_id TEXT REFERENCES document_versions(id) ON DELETE SET NULL,
+        resolution_status TEXT NOT NULL CHECK (resolution_status IN ('resolved','unresolved','ambiguous')),
+        resolution_method TEXT NOT NULL CHECK (resolution_method IN ('user','deterministic','provider','unresolved')),
+        confidence REAL CHECK (confidence IS NULL OR (confidence >= 0.0 AND confidence <= 1.0)),
+        context_json TEXT NOT NULL DEFAULT '{}',
+        created_at TEXT NOT NULL,
+        UNIQUE(source_type, source_id, normalized_mention)
+    )
+    """,
+    "CREATE INDEX entity_mentions_entity_idx ON entity_mentions(entity_id, created_at, id)",
+    "CREATE INDEX entity_mentions_analysis_idx ON entity_mentions(article_analysis_id, normalized_mention, id)",
+    """
+    CREATE TABLE claim_entities (
+        claim_id TEXT NOT NULL REFERENCES claims(id) ON DELETE CASCADE,
+        entity_id TEXT NOT NULL REFERENCES entities(id) ON DELETE RESTRICT,
+        role TEXT NOT NULL CHECK (role IN ('subject','object','mentioned','context')),
+        origin TEXT NOT NULL CHECK (origin IN ('user','deterministic','provider','import','backfill')),
+        mention_id TEXT REFERENCES entity_mentions(id) ON DELETE SET NULL,
+        created_at TEXT NOT NULL,
+        PRIMARY KEY(claim_id, entity_id, role)
+    )
+    """,
+    "CREATE INDEX claim_entities_entity_idx ON claim_entities(entity_id, claim_id, role)",
+    """
+    CREATE TABLE story_entities (
+        story_id TEXT NOT NULL REFERENCES stories(id) ON DELETE CASCADE,
+        entity_id TEXT NOT NULL REFERENCES entities(id) ON DELETE RESTRICT,
+        origin TEXT NOT NULL CHECK (origin IN ('user','deterministic','provider','import','backfill')),
+        created_at TEXT NOT NULL,
+        PRIMARY KEY(story_id, entity_id)
+    )
+    """,
+    "CREATE INDEX story_entities_entity_idx ON story_entities(entity_id, story_id)",
+    """
+    CREATE TABLE research_question_entities (
+        question_id TEXT NOT NULL REFERENCES research_questions(id) ON DELETE CASCADE,
+        entity_id TEXT NOT NULL REFERENCES entities(id) ON DELETE RESTRICT,
+        origin TEXT NOT NULL CHECK (origin IN ('user','deterministic','provider','import','backfill')),
+        created_at TEXT NOT NULL,
+        PRIMARY KEY(question_id, entity_id)
+    )
+    """,
+    "CREATE INDEX research_question_entities_entity_idx ON research_question_entities(entity_id, question_id)",
+    """
+    CREATE TABLE research_gap_entities (
+        gap_id TEXT NOT NULL REFERENCES research_question_gaps(id) ON DELETE CASCADE,
+        entity_id TEXT NOT NULL REFERENCES entities(id) ON DELETE RESTRICT,
+        origin TEXT NOT NULL CHECK (origin IN ('user','deterministic','provider','import','backfill')),
+        created_at TEXT NOT NULL,
+        PRIMARY KEY(gap_id, entity_id)
+    )
+    """,
+    """
+    CREATE TABLE research_task_entities (
+        task_id TEXT NOT NULL REFERENCES research_tasks(id) ON DELETE CASCADE,
+        entity_id TEXT NOT NULL REFERENCES entities(id) ON DELETE RESTRICT,
+        origin TEXT NOT NULL CHECK (origin IN ('user','deterministic','provider','import','backfill')),
+        created_at TEXT NOT NULL,
+        PRIMARY KEY(task_id, entity_id)
+    )
+    """,
+    "CREATE INDEX research_task_entities_entity_idx ON research_task_entities(entity_id, task_id)",
+    """
+    CREATE TABLE watch_entities (
+        watch_id TEXT NOT NULL REFERENCES watches(id) ON DELETE CASCADE,
+        entity_id TEXT NOT NULL REFERENCES entities(id) ON DELETE RESTRICT,
+        origin TEXT NOT NULL CHECK (origin IN ('user','deterministic','provider','import','backfill')),
+        created_at TEXT NOT NULL,
+        PRIMARY KEY(watch_id, entity_id)
+    )
+    """,
+    """
+    CREATE TABLE tag_assignments (
+        id TEXT PRIMARY KEY,
+        tag_id TEXT NOT NULL REFERENCES tags(id) ON DELETE CASCADE,
+        object_type TEXT NOT NULL CHECK (object_type IN ('entity','claim','evidence','document','story','research_question','research_gap','research_task','source','watch','article_analysis')),
+        object_id TEXT NOT NULL,
+        origin TEXT NOT NULL CHECK (origin IN ('user','deterministic','provider','import','backfill')),
+        confidence REAL CHECK (confidence IS NULL OR (confidence >= 0.0 AND confidence <= 1.0)),
+        reason TEXT NOT NULL DEFAULT '',
+        created_at TEXT NOT NULL,
+        UNIQUE(tag_id, object_type, object_id)
+    )
+    """,
+    "CREATE INDEX tag_assignments_object_idx ON tag_assignments(object_type, object_id, tag_id)",
+    "CREATE INDEX tag_assignments_tag_idx ON tag_assignments(tag_id, object_type, object_id)",
+    "CREATE UNIQUE INDEX tags_namespace_normalized_unique_idx ON tags(namespace, normalized_name)",
+    """
+    CREATE TABLE entity_merges (
+        id TEXT PRIMARY KEY,
+        from_entity_id TEXT NOT NULL REFERENCES entities(id) ON DELETE RESTRICT,
+        into_entity_id TEXT NOT NULL REFERENCES entities(id) ON DELETE RESTRICT,
+        reason TEXT NOT NULL DEFAULT '',
+        actor TEXT NOT NULL DEFAULT 'user',
+        created_at TEXT NOT NULL,
+        UNIQUE(from_entity_id, into_entity_id)
+    )
+    """,
+    """
+    CREATE TABLE knowledge_backfills (
+        id TEXT PRIMARY KEY,
+        kind TEXT NOT NULL CHECK (kind IN ('article_analysis_entities','smart_tags')),
+        status TEXT NOT NULL CHECK (status IN ('queued','running','completed','failed','cancelled')),
+        cursor TEXT,
+        processed INTEGER NOT NULL DEFAULT 0 CHECK (processed >= 0),
+        row_limit INTEGER NOT NULL CHECK (row_limit > 0),
+        batch_size INTEGER NOT NULL CHECK (batch_size > 0),
+        error_code TEXT,
+        error_detail TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        completed_at TEXT
+    )
+    """,
+    "CREATE INDEX knowledge_backfills_status_idx ON knowledge_backfills(kind, status, updated_at, id)",
+    "ALTER TABLE search_records RENAME TO search_records_legacy_0026",
+    """
+    CREATE TABLE search_records (
+        id TEXT PRIMARY KEY,
+        entity_type TEXT NOT NULL CHECK (entity_type IN ('monitor','source','document','story','subject','claim','evidence','tag','question','note','entity','research_task','report','watch')),
+        entity_id TEXT NOT NULL,
+        title TEXT NOT NULL,
+        body TEXT NOT NULL DEFAULT '',
+        source_id TEXT,
+        story_id TEXT,
+        subject_id TEXT,
+        monitor_id TEXT,
+        question_id TEXT,
+        tag_id TEXT,
+        document_id TEXT,
+        state TEXT,
+        lifecycle TEXT,
+        assessment_state TEXT,
+        created_at TEXT NOT NULL,
+        UNIQUE(entity_type, entity_id)
+    )
+    """,
+    """
+    INSERT INTO search_records
+        (id, entity_type, entity_id, title, body, source_id, story_id,
+         subject_id, monitor_id, question_id, tag_id, document_id, state,
+         lifecycle, assessment_state, created_at)
+    SELECT id, entity_type, entity_id, title, body, source_id, story_id,
+           subject_id, monitor_id, question_id, tag_id, document_id, state,
+           lifecycle, NULL, created_at
+    FROM search_records_legacy_0026
+    """,
+    "DROP TABLE search_records_legacy_0026",
+    "CREATE INDEX search_records_type_idx ON search_records(entity_type, entity_id)",
+    "CREATE INDEX search_records_filter_idx ON search_records(source_id, story_id, subject_id, monitor_id, question_id, tag_id, document_id)",
+    "UPDATE search_index_meta SET dirty = 1, updated_at = CURRENT_TIMESTAMP WHERE id = 1",
+    """
+    CREATE TRIGGER entity_merges_immutable_update
+    BEFORE UPDATE ON entity_merges
+    BEGIN SELECT RAISE(ABORT, 'entity merge lineage is append-only'); END
+    """,
+    """
+    CREATE TRIGGER entity_merges_immutable_delete
+    BEFORE DELETE ON entity_merges
+    BEGIN SELECT RAISE(ABORT, 'entity merge lineage is append-only'); END
+    """,
+    *tuple(
+        f"""
+        CREATE TRIGGER search_dirty_{table}_{operation}
+        AFTER {operation.upper()} ON {table}
+        BEGIN
+            UPDATE search_index_meta SET dirty = 1, updated_at = CURRENT_TIMESTAMP WHERE id = 1;
+        END
+        """
+        for table in (
+            "entities", "entity_aliases", "entity_mentions", "claim_entities",
+            "story_entities", "research_question_entities", "research_gap_entities",
+            "research_task_entities", "watch_entities", "tag_assignments",
+            "entity_merges", "knowledge_backfills",
+        )
+        for operation in ("insert", "update", "delete")
+    ),
+)
+
+MIGRATION_0026_CHECKSUM = hashlib.sha256(
+    "\n".join(MIGRATION_0026_STATEMENTS).encode("utf-8")
+).hexdigest()
+
+
 @dataclass(frozen=True)
 class MigrationResult:
     applied_versions: tuple[int, ...]
@@ -2607,6 +2832,7 @@ def apply_migrations(db_path: Optional[str | Path] = None) -> MigrationResult:
                 23: MIGRATION_0023_STATEMENTS,
                 24: MIGRATION_0024_STATEMENTS,
                 25: MIGRATION_0025_STATEMENTS,
+                26: MIGRATION_0026_STATEMENTS,
             }
             for version, statements in migrations.items():
                 if version in existing:

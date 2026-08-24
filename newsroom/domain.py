@@ -985,6 +985,13 @@ class CoreService:
         conn = storage.connect(self.db_path)
         try:
             with storage.write_tx(conn):
+                existing = conn.execute(
+                    "SELECT id FROM tags WHERE namespace = ? AND normalized_name = ?",
+                    (namespace, normalized_text(name)),
+                ).fetchone()
+                if existing is not None:
+                    identifier = existing[0]
+                    return self.get_tag(identifier)
                 self._insert(
                     conn,
                     "tags",
@@ -1082,6 +1089,11 @@ class CoreService:
                     "story_tags",
                     {"story_id": story_id, "tag_id": tag_id, "created_at": utc_now()},
                 )
+                if conn.execute("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'tag_assignments'").fetchone() is not None:
+                    conn.execute(
+                        "INSERT OR IGNORE INTO tag_assignments(id, tag_id, object_type, object_id, origin, reason, created_at) VALUES (?, ?, 'story', ?, 'user', 'legacy story tag assignment', ?)",
+                        (new_id("tagassign"), tag_id, story_id, utc_now()),
+                    )
         finally:
             conn.close()
         return self.get_story(story_id, include_deleted=True)
