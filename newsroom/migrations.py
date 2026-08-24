@@ -2343,6 +2343,198 @@ MIGRATION_0024_CHECKSUM = hashlib.sha256(
 ).hexdigest()
 
 
+# Phase 25 — extend the Phase 10 Research Question records with a derived,
+# evidence-grounded assessment and durable bounded pursuit records.  The
+# original ``status`` column remains the explicit human lifecycle authority;
+# ``assessment_state`` is the deterministic state computed from canonical
+# Claim/Evidence relationships.  The new tables deliberately keep planning,
+# candidate discovery, and task history separate from trusted evidence.
+MIGRATION_0025_STATEMENTS: tuple[str, ...] = (
+    "ALTER TABLE research_questions ADD COLUMN assessment_state TEXT NOT NULL DEFAULT 'open' CHECK (assessment_state IN ('open','partially_answered','supported','contradicted','resolved','stale'))",
+    "ALTER TABLE research_questions ADD COLUMN assessment_hash TEXT",
+    "ALTER TABLE research_questions ADD COLUMN assessment_explanation TEXT NOT NULL DEFAULT ''",
+    "ALTER TABLE research_questions ADD COLUMN assessment_at TEXT",
+    "ALTER TABLE research_questions ADD COLUMN criteria_json TEXT NOT NULL DEFAULT '{}'",
+    "ALTER TABLE research_questions ADD COLUMN pursuit_policy TEXT NOT NULL DEFAULT 'manual' CHECK (pursuit_policy IN ('disabled','manual','automatic'))",
+    "ALTER TABLE research_questions ADD COLUMN pursuit_cooldown_seconds INTEGER NOT NULL DEFAULT 3600 CHECK (pursuit_cooldown_seconds >= 0)",
+    "ALTER TABLE research_question_claims ADD COLUMN origin TEXT NOT NULL DEFAULT 'manual' CHECK (origin IN ('manual','automatic','task'))",
+    "ALTER TABLE research_question_claims ADD COLUMN confidence REAL NOT NULL DEFAULT 1.0 CHECK (confidence >= 0.0 AND confidence <= 1.0)",
+    "ALTER TABLE research_question_claims ADD COLUMN rationale TEXT NOT NULL DEFAULT ''",
+    "ALTER TABLE research_question_claims ADD COLUMN actor TEXT NOT NULL DEFAULT 'system'",
+    "ALTER TABLE research_question_attempts ADD COLUMN task_id TEXT",
+    "ALTER TABLE research_question_attempts ADD COLUMN gap_id TEXT",
+    """
+    CREATE TABLE research_question_assessments (
+        id TEXT PRIMARY KEY,
+        question_id TEXT NOT NULL REFERENCES research_questions(id) ON DELETE CASCADE,
+        snapshot_hash TEXT NOT NULL,
+        state TEXT NOT NULL CHECK (state IN ('open','partially_answered','supported','contradicted','resolved','stale')),
+        explanation TEXT NOT NULL DEFAULT '',
+        supporting_claim_count INTEGER NOT NULL DEFAULT 0 CHECK (supporting_claim_count >= 0),
+        contradicting_claim_count INTEGER NOT NULL DEFAULT 0 CHECK (contradicting_claim_count >= 0),
+        contextual_claim_count INTEGER NOT NULL DEFAULT 0 CHECK (contextual_claim_count >= 0),
+        qualifying_evidence_count INTEGER NOT NULL DEFAULT 0 CHECK (qualifying_evidence_count >= 0),
+        open_gap_count INTEGER NOT NULL DEFAULT 0 CHECK (open_gap_count >= 0),
+        origin TEXT NOT NULL CHECK (origin IN ('automatic','manual')),
+        created_at TEXT NOT NULL,
+        UNIQUE(question_id, snapshot_hash)
+    )
+    """,
+    "CREATE INDEX research_question_assessments_question_idx ON research_question_assessments(question_id, created_at, id)",
+    """
+    CREATE TABLE research_question_assessment_history (
+        id TEXT PRIMARY KEY,
+        question_id TEXT NOT NULL REFERENCES research_questions(id) ON DELETE CASCADE,
+        assessment_id TEXT NOT NULL REFERENCES research_question_assessments(id) ON DELETE CASCADE,
+        from_state TEXT CHECK (from_state IS NULL OR from_state IN ('open','partially_answered','supported','contradicted','resolved','stale')),
+        to_state TEXT NOT NULL CHECK (to_state IN ('open','partially_answered','supported','contradicted','resolved','stale')),
+        reason_code TEXT NOT NULL,
+        claim_ids_json TEXT NOT NULL DEFAULT '[]',
+        origin TEXT NOT NULL CHECK (origin IN ('automatic','manual')),
+        created_at TEXT NOT NULL,
+        UNIQUE(question_id, assessment_id, to_state)
+    )
+    """,
+    "CREATE INDEX research_question_assessment_history_idx ON research_question_assessment_history(question_id, created_at, id)",
+    """
+    CREATE TABLE research_question_claim_overrides (
+        id TEXT PRIMARY KEY,
+        question_id TEXT NOT NULL REFERENCES research_questions(id) ON DELETE CASCADE,
+        claim_id TEXT NOT NULL REFERENCES claims(id) ON DELETE RESTRICT,
+        relationship TEXT NOT NULL CHECK (relationship IN ('supports','contradicts','contextualizes','resolves')),
+        action TEXT NOT NULL CHECK (action IN ('exclude','restore')),
+        reason TEXT NOT NULL DEFAULT '',
+        actor TEXT NOT NULL DEFAULT 'user',
+        created_at TEXT NOT NULL,
+        UNIQUE(question_id, claim_id, relationship, action)
+    )
+    """,
+    "CREATE INDEX research_question_claim_overrides_idx ON research_question_claim_overrides(question_id, claim_id, relationship, action)",
+    """
+    CREATE TABLE research_question_gaps (
+        id TEXT PRIMARY KEY,
+        question_id TEXT NOT NULL REFERENCES research_questions(id) ON DELETE CASCADE,
+        gap_key TEXT NOT NULL,
+        gap_type TEXT NOT NULL CHECK (gap_type IN ('supporting_evidence','contradiction_review','independent_support','primary_source')),
+        description TEXT NOT NULL,
+        rationale TEXT NOT NULL DEFAULT '',
+        condition_json TEXT NOT NULL DEFAULT '{}',
+        status TEXT NOT NULL DEFAULT 'open' CHECK (status IN ('open','pursuing','satisfied','dismissed','blocked')),
+        origin TEXT NOT NULL CHECK (origin IN ('automatic','manual')),
+        assessment_hash TEXT,
+        first_seen_at TEXT NOT NULL,
+        last_evaluated_at TEXT NOT NULL,
+        satisfied_at TEXT,
+        dismissed_at TEXT,
+        dismissed_by TEXT,
+        dismissal_reason TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        UNIQUE(question_id, gap_key)
+    )
+    """,
+    "CREATE INDEX research_question_gaps_question_idx ON research_question_gaps(question_id, status, updated_at, id)",
+    """
+    CREATE TABLE research_question_gap_history (
+        id TEXT PRIMARY KEY,
+        gap_id TEXT NOT NULL REFERENCES research_question_gaps(id) ON DELETE CASCADE,
+        from_status TEXT,
+        to_status TEXT NOT NULL,
+        reason_code TEXT NOT NULL,
+        assessment_hash TEXT,
+        task_id TEXT,
+        actor TEXT NOT NULL DEFAULT 'system',
+        created_at TEXT NOT NULL
+    )
+    """,
+    "CREATE INDEX research_question_gap_history_idx ON research_question_gap_history(gap_id, created_at, id)",
+    """
+    CREATE TABLE research_tasks (
+        id TEXT PRIMARY KEY,
+        question_id TEXT NOT NULL REFERENCES research_questions(id) ON DELETE CASCADE,
+        gap_id TEXT NOT NULL REFERENCES research_question_gaps(id) ON DELETE RESTRICT,
+        task_no INTEGER NOT NULL CHECK (task_no > 0),
+        mode TEXT NOT NULL CHECK (mode IN ('manual','automatic')),
+        status TEXT NOT NULL DEFAULT 'planned' CHECK (status IN ('planned','running','completed_with_evidence','completed_with_candidates','completed_no_findings','deferred','failed','cancelled')),
+        job_id TEXT REFERENCES jobs(id) ON DELETE SET NULL,
+        attempt_id TEXT REFERENCES research_question_attempts(id) ON DELETE SET NULL,
+        snapshot_hash TEXT,
+        plan_json TEXT NOT NULL DEFAULT '{}',
+        limits_json TEXT NOT NULL DEFAULT '{}',
+        outcome_json TEXT NOT NULL DEFAULT '{}',
+        error_code TEXT,
+        error_detail TEXT,
+        next_attempt_at TEXT,
+        started_at TEXT,
+        completed_at TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        UNIQUE(question_id, gap_id, task_no)
+    )
+    """,
+    "CREATE INDEX research_tasks_question_idx ON research_tasks(question_id, created_at, id)",
+    "CREATE INDEX research_tasks_gap_idx ON research_tasks(gap_id, status, created_at, id)",
+    "CREATE UNIQUE INDEX research_tasks_one_active_gap_idx ON research_tasks(gap_id) WHERE status IN ('planned','running')",
+    """
+    CREATE TABLE research_task_queries (
+        id TEXT PRIMARY KEY,
+        task_id TEXT NOT NULL REFERENCES research_tasks(id) ON DELETE CASCADE,
+        query TEXT NOT NULL,
+        query_hash TEXT NOT NULL,
+        strategy TEXT NOT NULL,
+        ordinal INTEGER NOT NULL CHECK (ordinal >= 0),
+        created_at TEXT NOT NULL,
+        UNIQUE(task_id, query_hash)
+    )
+    """,
+    "CREATE INDEX research_task_queries_task_idx ON research_task_queries(task_id, ordinal, id)",
+    """
+    CREATE TABLE research_task_findings (
+        id TEXT PRIMARY KEY,
+        task_id TEXT NOT NULL REFERENCES research_tasks(id) ON DELETE CASCADE,
+        finding_type TEXT NOT NULL CHECK (finding_type IN ('corpus','source_candidate','document','document_version','claim','evidence')),
+        identity_key TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'candidate' CHECK (status IN ('candidate','acquired','processed','relevant','produced_claim','irrelevant')),
+        source_id TEXT REFERENCES sources(id) ON DELETE SET NULL,
+        document_id TEXT REFERENCES documents(id) ON DELETE SET NULL,
+        document_version_id TEXT REFERENCES document_versions(id) ON DELETE SET NULL,
+        claim_id TEXT REFERENCES claims(id) ON DELETE SET NULL,
+        evidence_span_id TEXT REFERENCES evidence_spans(id) ON DELETE SET NULL,
+        rank INTEGER NOT NULL DEFAULT 0 CHECK (rank >= 0),
+        metadata_json TEXT NOT NULL DEFAULT '{}',
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        UNIQUE(task_id, finding_type, identity_key)
+    )
+    """,
+    "CREATE INDEX research_task_findings_task_idx ON research_task_findings(task_id, status, created_at, id)",
+    """
+    CREATE TRIGGER research_question_assessment_history_immutable_update
+    BEFORE UPDATE ON research_question_assessment_history
+    BEGIN SELECT RAISE(ABORT, 'research question assessment history is append-only'); END
+    """,
+    """
+    CREATE TRIGGER research_question_assessment_history_immutable_delete
+    BEFORE DELETE ON research_question_assessment_history
+    BEGIN SELECT RAISE(ABORT, 'research question assessment history is append-only'); END
+    """,
+    """
+    CREATE TRIGGER research_question_gap_history_immutable_update
+    BEFORE UPDATE ON research_question_gap_history
+    BEGIN SELECT RAISE(ABORT, 'research question gap history is append-only'); END
+    """,
+    """
+    CREATE TRIGGER research_question_gap_history_immutable_delete
+    BEFORE DELETE ON research_question_gap_history
+    BEGIN SELECT RAISE(ABORT, 'research question gap history is append-only'); END
+    """,
+)
+
+MIGRATION_0025_CHECKSUM = hashlib.sha256(
+    "\n".join(MIGRATION_0025_STATEMENTS).encode("utf-8")
+).hexdigest()
+
+
 @dataclass(frozen=True)
 class MigrationResult:
     applied_versions: tuple[int, ...]
@@ -2414,6 +2606,7 @@ def apply_migrations(db_path: Optional[str | Path] = None) -> MigrationResult:
                 22: MIGRATION_0022_STATEMENTS,
                 23: MIGRATION_0023_STATEMENTS,
                 24: MIGRATION_0024_STATEMENTS,
+                25: MIGRATION_0025_STATEMENTS,
             }
             for version, statements in migrations.items():
                 if version in existing:

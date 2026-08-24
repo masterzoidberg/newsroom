@@ -262,6 +262,55 @@ class VocabularyOutput(AIModel):
         return self
 
 
+class ResearchPlanOutput(AIModel):
+    """Bounded, non-authoritative planning suggestions for one Research Task."""
+
+    query_suggestions: list[str] = Field(default_factory=list, max_length=20)
+    preferred_source_classes: list[str] = Field(default_factory=list, max_length=10)
+    date_from: str | None = Field(default=None, max_length=32)
+    date_to: str | None = Field(default=None, max_length=32)
+    explanation: str = Field(default="", max_length=500)
+
+    @field_validator("query_suggestions", "preferred_source_classes")
+    @classmethod
+    def _bounded_plan_strings(cls, value: list[str]) -> list[str]:
+        result = []
+        seen: set[str] = set()
+        for item in value:
+            text = str(item).strip()
+            identity = " ".join(text.casefold().split())
+            if not identity or len(text) > 300 or identity in seen:
+                raise ValueError("research plan suggestions must be unique, nonblank, and bounded")
+            seen.add(identity)
+            result.append(text)
+        return result
+
+
+@dataclass(frozen=True)
+class ResearchPlanRequest:
+    """Minimal Question/Gap context allowed into a planning provider."""
+
+    question: str
+    gap_type: str
+    gap_description: str
+    approved_vocabulary: Sequence[str]
+    max_queries: int
+
+    def __post_init__(self) -> None:
+        if not str(self.question).strip() or len(str(self.question)) > 10_000:
+            raise ValueError("research plan question is invalid")
+        if not str(self.gap_type).strip() or len(str(self.gap_type)) > 80:
+            raise ValueError("research plan gap type is invalid")
+        if not str(self.gap_description).strip() or len(str(self.gap_description)) > 1_000:
+            raise ValueError("research plan gap description is invalid")
+        if isinstance(self.approved_vocabulary, (str, bytes)) or len(self.approved_vocabulary) > 25:
+            raise ValueError("research plan vocabulary is too large")
+        if any(not str(term).strip() or len(str(term)) > 300 for term in self.approved_vocabulary):
+            raise ValueError("research plan vocabulary contains invalid text")
+        if isinstance(self.max_queries, bool) or not 1 <= self.max_queries <= 50:
+            raise ValueError("research plan max_queries must be between 1 and 50")
+
+
 @dataclass(frozen=True)
 class VocabularyRequest:
     """Bounded Watch context supplied to a vocabulary provider."""
@@ -314,6 +363,10 @@ class ArticleAnalysisProvider(Protocol):
 
 class VocabularyProvider(Protocol):
     def suggest(self, request: VocabularyRequest) -> VocabularyOutput | Mapping[str, Any]: ...
+
+
+class ResearchPlannerProvider(Protocol):
+    def plan(self, request: ResearchPlanRequest) -> ResearchPlanOutput | Mapping[str, Any]: ...
 
 
 def _tokens(text: str) -> set[str]:
@@ -612,6 +665,15 @@ class LocalVocabularyProvider:
         return VocabularyOutput(suggestions=[], confidence=0.0)
 
 
+class LocalResearchPlannerProvider:
+    """Zero-cost route; deterministic query generation owns the baseline."""
+
+    model_name = "local-research-planner"
+
+    def plan(self, request: ResearchPlanRequest) -> ResearchPlanOutput:
+        return ResearchPlanOutput()
+
+
 @dataclass(frozen=True)
 class CapabilityBundle:
     embedding: EmbeddingProvider | None = None
@@ -622,6 +684,7 @@ class CapabilityBundle:
     synthesis: SynthesisProvider | None = None
     article_analysis: ArticleAnalysisProvider | None = None
     vocabulary: VocabularyProvider | None = None
+    research_plan: ResearchPlannerProvider | None = None
 
     @classmethod
     def local_defaults(cls) -> "CapabilityBundle":
@@ -634,6 +697,7 @@ class CapabilityBundle:
             synthesis=LocalSynthesisProvider(),
             article_analysis=LocalArticleAnalysisProvider(),
             vocabulary=LocalVocabularyProvider(),
+            research_plan=LocalResearchPlannerProvider(),
         )
 
 
@@ -761,6 +825,7 @@ _OUTPUT_TYPES: dict[str, type[AIModel]] = {
     "synthesis": SynthesisOutput,
     "article_analysis": ArticleAnalysisOutput,
     "vocabulary": VocabularyOutput,
+    "research_plan": ResearchPlanOutput,
 }
 
 
@@ -807,6 +872,9 @@ class AIRouter:
 
     def vocabulary(self, request: VocabularyRequest, *, work_id: str | None = None) -> VocabularyOutput:
         return self._execute("vocabulary", lambda provider: provider.suggest(request), work_id=work_id)
+
+    def research_plan(self, request: ResearchPlanRequest, *, work_id: str | None = None) -> ResearchPlanOutput:
+        return self._execute("research_plan", lambda provider: provider.plan(request), work_id=work_id)
 
     def _execute(self, capability: str, call: Callable[[Any], Any], *, work_id: str | None) -> Any:
         local_provider = getattr(self.local, capability)
@@ -998,6 +1066,9 @@ __all__ = [
     "VocabularyOutput",
     "VocabularyRequest",
     "VocabularyProvider",
+    "ResearchPlanOutput",
+    "ResearchPlanRequest",
+    "ResearchPlannerProvider",
     "LocalEmbeddingProvider",
     "LocalRerankerProvider",
     "LocalEntailmentProvider",
@@ -1013,6 +1084,7 @@ __all__ = [
     "DeterministicSynthesisProvider",
     "DeterministicArticleAnalysisProvider",
     "LocalVocabularyProvider",
+    "LocalResearchPlannerProvider",
     "CapabilityBundle",
     "RoutePolicy",
     "TelemetryEvent",
