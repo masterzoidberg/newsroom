@@ -342,7 +342,7 @@ class KnowledgeService:
                 story = conn.execute("SELECT story_id FROM claims WHERE id = ?", (claim_id,)).fetchone()
                 if story and story[0]:
                     conn.execute(
-                        "INSERT OR IGNORE INTO story_entities(story_id, entity_id, origin, created_at) VALUES (?, ?, ?, ?)",
+                        "INSERT OR IGNORE INTO story_entities(story_id, entity_id, origin, authority, created_at) VALUES (?, ?, ?, 'derived', ?)",
                         (story[0], entity_id, origin, utc_now()),
                     )
         finally:
@@ -708,7 +708,7 @@ class KnowledgeService:
         conn.execute("INSERT OR IGNORE INTO claim_entities(claim_id, entity_id, role, origin, mention_id, created_at) VALUES (?, ?, ?, ?, ?, ?)", (claim_id, entity_id, role, origin, mention_id, utc_now()))
         story = conn.execute("SELECT story_id FROM claims WHERE id = ?", (claim_id,)).fetchone()
         if story and story[0]:
-            conn.execute("INSERT OR IGNORE INTO story_entities(story_id, entity_id, origin, created_at) VALUES (?, ?, ?, ?)", (story[0], entity_id, origin, utc_now()))
+            conn.execute("INSERT OR IGNORE INTO story_entities(story_id, entity_id, origin, authority, created_at) VALUES (?, ?, ?, 'derived', ?)", (story[0], entity_id, origin, utc_now()))
 
     def _link_pair_tx(self, conn: sqlite3.Connection, relation_table: str, left_column: str, left_id: str, left_table: str, entity_id: str, origin: str) -> None:
         conn.execute(
@@ -741,7 +741,19 @@ class KnowledgeService:
             result["aliases"] = [dict(row) for row in conn.execute("SELECT * FROM entity_aliases WHERE entity_id = ? AND status = 'active' ORDER BY normalized_alias, id LIMIT 100", (identifier,))]
             result["mentions"] = [self._mention_row(row) for row in conn.execute("SELECT * FROM entity_mentions WHERE entity_id = ? ORDER BY created_at DESC, id DESC LIMIT 100", (identifier,))]
             result["claims"] = self._claim_rows(conn, identifier)
-            result["stories"] = [dict(row) for row in conn.execute("SELECT s.* FROM story_entities se JOIN stories s ON s.id = se.story_id WHERE se.entity_id = ? AND s.deleted_at IS NULL ORDER BY s.updated_at DESC, s.id DESC LIMIT 100", (identifier,))]
+            result["stories"] = [dict(row) for row in conn.execute(
+                """
+                SELECT s.* FROM stories s
+                WHERE s.deleted_at IS NULL AND s.id IN (
+                    SELECT story_id FROM story_entities WHERE entity_id = ? AND authority = 'manual'
+                    UNION
+                    SELECT c.story_id FROM claims c JOIN claim_entities ce ON ce.claim_id = c.id
+                    WHERE ce.entity_id = ? AND c.story_id IS NOT NULL
+                )
+                ORDER BY s.updated_at DESC, s.id DESC LIMIT 100
+                """,
+                (identifier, identifier),
+            )]
             result["research_questions"] = [dict(row) for row in conn.execute("SELECT q.id, q.question, q.status, q.assessment_state, q.assessment_explanation FROM research_question_entities qe JOIN research_questions q ON q.id = qe.question_id WHERE qe.entity_id = ? AND q.deleted_at IS NULL ORDER BY q.updated_at DESC, q.id DESC LIMIT 100", (identifier,))]
             result["gaps"] = [dict(row) for row in conn.execute("SELECT g.* FROM research_gap_entities ge JOIN research_question_gaps g ON g.id = ge.gap_id WHERE ge.entity_id = ? ORDER BY g.updated_at DESC, g.id DESC LIMIT 100", (identifier,))]
             result["tasks"] = [dict(row) for row in conn.execute("SELECT t.id, t.question_id, t.gap_id, t.status, t.mode, t.created_at, t.updated_at FROM research_task_entities te JOIN research_tasks t ON t.id = te.task_id WHERE te.entity_id = ? ORDER BY t.updated_at DESC, t.id DESC LIMIT 100", (identifier,))]

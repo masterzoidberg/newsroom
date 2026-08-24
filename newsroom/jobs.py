@@ -69,6 +69,7 @@ AUTOMATIC_REPORT_STAGE_JOB_TYPE = "automatic_report_stage"
 AUTOMATIC_ALERT_STAGE_JOB_TYPE = "automatic_alert_stage"
 WATCH_SOURCE_DISCOVERY_JOB_TYPE = "watch_source_discovery"
 WATCH_VOCABULARY_SUGGESTION_JOB_TYPE = "watch_vocabulary_suggestion"
+STORY_CORRECTION_RECONCILIATION_JOB_TYPE = "story_correction_reconcile"
 
 RecoveryHook = Callable[[sqlite3.Connection, sqlite3.Row, str], None]
 CompletionHook = Callable[[sqlite3.Connection, sqlite3.Row, str, Mapping[str, Any] | None], None]

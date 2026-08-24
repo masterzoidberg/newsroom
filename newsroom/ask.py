@@ -363,6 +363,32 @@ class AskService:
             reports = self._load_reports(conn, [item["entity_id"] for item in items.values() if item["entity_type"] == "report"])
             gaps = self._load_gaps(conn, sorted(question_ids))
             tasks = self._load_tasks(conn, sorted(task_ids | {gap["task_id"] for gap in gaps if gap.get("task_id")} | {item["entity_id"] for item in items.values() if item["entity_type"] == "research_task"}))
+            correction_story_ids = set(scope.get("stories", set()))
+            correction_story_ids.update(
+                claim.get("story_id") for claim in claims.values() if claim.get("story_id")
+            )
+            correction_terms = {"merge", "merged", "split", "correction", "corrected", "moved", "unassign", "unassigned", "duplicate", "extract", "extracted", "lineage"}
+            correction_rows = []
+            if correction_story_ids:
+                placeholders = _placeholders(sorted(correction_story_ids))
+                correction_rows = [dict(row) for row in conn.execute(
+                    f"""
+                    SELECT DISTINCT sc.*
+                    FROM story_corrections sc
+                    LEFT JOIN claim_story_assignment_history csh ON csh.correction_id = sc.id
+                    LEFT JOIN story_lineage sl ON sl.correction_id = sc.id
+                    LEFT JOIN story_duplicate_decisions sdd ON sdd.correction_id = sc.id
+                    WHERE csh.from_story_id IN ({placeholders}) OR csh.to_story_id IN ({placeholders})
+                       OR sl.source_story_id IN ({placeholders}) OR sl.target_story_id IN ({placeholders})
+                       OR sdd.source_story_id IN ({placeholders}) OR sdd.destination_story_id IN ({placeholders})
+                    ORDER BY sc.occurred_at DESC, sc.id DESC LIMIT 50
+                    """,
+                    [*sorted(correction_story_ids)] * 6,
+                )]
+            elif correction_terms.intersection(terms):
+                correction_rows = [dict(row) for row in conn.execute(
+                    "SELECT * FROM story_corrections ORDER BY occurred_at DESC, id DESC LIMIT 50"
+                )]
             context_units = 0
             selected_evidence: dict[str, dict[str, Any]] = {}
             for evidence_id, item in sorted(evidence.items(), key=lambda pair: (float(pair[1].get("score", 0)), pair[0])):
@@ -393,6 +419,8 @@ class AskService:
                 packet_ids.add(f"research_gap:{gap['id']}")
             for task in tasks:
                 packet_ids.add(f"research_task:{task['id']}")
+            for correction in correction_rows:
+                packet_ids.add(f"story_correction:{correction['id']}")
             for report in reports:
                 packet_ids.add(f"report:{report['id']}")
                 if report.get("current_revision_id"):
@@ -406,6 +434,7 @@ class AskService:
                 "reports": reports,
                 "gaps": gaps,
                 "tasks": tasks,
+                "corrections": correction_rows,
                 "terms": terms,
                 "context_units": context_units,
                 "context_truncated": len(selected_evidence) < len(evidence),
@@ -460,7 +489,15 @@ class AskService:
         elif scope_type == "entity":
             empty["entities"].add(scope_id)
             empty["claims"].update(row[0] for row in conn.execute("SELECT claim_id FROM claim_entities WHERE entity_id = ?", (scope_id,)))
-            empty["stories"].update(row[0] for row in conn.execute("SELECT story_id FROM story_entities WHERE entity_id = ?", (scope_id,)))
+            empty["stories"].update(row[0] for row in conn.execute(
+                """
+                SELECT story_id FROM story_entities WHERE entity_id = ? AND authority = 'manual'
+                UNION
+                SELECT c.story_id FROM claims c JOIN claim_entities ce ON ce.claim_id = c.id
+                WHERE ce.entity_id = ? AND c.story_id IS NOT NULL
+                """,
+                (scope_id, scope_id),
+            ))
             empty["questions"].update(row[0] for row in conn.execute("SELECT question_id FROM research_question_entities WHERE entity_id = ?", (scope_id,)))
             empty["gaps"].update(row[0] for row in conn.execute("SELECT gap_id FROM research_gap_entities WHERE entity_id = ?", (scope_id,)))
             empty["tasks"].update(row[0] for row in conn.execute("SELECT task_id FROM research_task_entities WHERE entity_id = ?", (scope_id,)))
@@ -787,6 +824,20 @@ class AskService:
             if task.get("status") not in {"completed", "completed_with_evidence"}:
                 add_statement(f"Research task state: {task['status']}", "uncertainty", [task_citation])
 
+        for correction in retrieved.get("corrections", []):
+            correction_citation = cite(
+                "story_correction",
+                correction["id"],
+                correction.get("operation_type", "Story correction"),
+                kind="story_correction",
+                reason_code=correction.get("reason_code"),
+                origin=correction.get("origin"),
+                occurred_at=correction.get("occurred_at"),
+            )
+            reason = correction.get("reason") or "No human reason was recorded."
+            operation = str(correction.get("operation_type", "correction")).replace("_", " ")
+            add_statement(f"Story organization history: {operation}; {reason}", "context", [correction_citation])
+
         for report in retrieved.get("reports", []):
             citation_type = "report_revision" if report["current_revision_id"] else "report"
             citation_id = report["current_revision_id"] or report["id"]
@@ -846,6 +897,7 @@ class AskService:
         return {
             "candidate_count": len(items),
             "entity_types": sorted({item["entity_type"] for item in items}),
+            "correction_count": len(retrieved.get("corrections", [])),
             "retrieved_object_ids": [f"{item['entity_type']}:{item['entity_id']}" for item in items[:100]],
             "packet_ids": sorted(retrieved.get("packet_ids", []))[:300],
             "context_units": int(retrieved.get("context_units", 0)),
@@ -945,6 +997,7 @@ class AskService:
             "research_task": ("research_tasks", "id", "1 = 1"),
             "watch": ("watches", "id", "1 = 1"),
             "article_analysis": ("article_analyses", "id", "1 = 1"),
+            "story_correction": ("story_corrections", "id", "1 = 1"),
         }
         definition = table_map.get(citation.get("object_type"))
         if definition is None:

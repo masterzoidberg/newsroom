@@ -17,6 +17,7 @@ from .domain import (
     new_id,
     normalized_slug,
     normalized_text,
+    precise_utc_now,
     utc_now,
 )
 from .repository import evidence_span_hash
@@ -372,13 +373,13 @@ class EvidenceService:
             conn.close()
 
     def assign_claim_to_story(self, claim_id: str, story_id: str | None) -> dict[str, Any]:
-        """Perform the one supported initial Story association for a Claim."""
+        """Perform a backwards-compatible initial Story association."""
         if not str(story_id or "").strip():
             raise DomainValidation("story_id must not be empty")
         conn = storage.connect(self.db_path)
         try:
             with storage.write_tx(conn):
-                self._assign_claim_to_story_tx(conn, claim_id, story_id)
+                self._assign_claim_to_story_tx(conn, claim_id, story_id, origin="human")
                 return self._claim_result(
                     conn,
                     _require(conn, "claims", claim_id, "claim"),
@@ -387,17 +388,62 @@ class EvidenceService:
             conn.close()
 
     @staticmethod
-    def _assign_claim_to_story_tx(conn, claim_id: str, story_id: str) -> sqlite3.Row:
+    def _assign_claim_to_story_tx(
+        conn,
+        claim_id: str,
+        story_id: str,
+        *,
+        origin: str = "automatic",
+        correction_id: str | None = None,
+        reason_code: str = "initial_assignment",
+        reason: str = "controlled Story assignment",
+    ) -> sqlite3.Row:
         """Assign a Claim inside a caller-owned mutation transaction."""
 
         claim = _require(conn, "claims", claim_id, "claim")
         _require(conn, "stories", story_id, "story", live=True)
         if claim["story_id"] == story_id:
             return claim
+        if origin == "automatic":
+            latest = conn.execute(
+                "SELECT origin, to_story_id FROM claim_story_assignment_history WHERE claim_id = ? ORDER BY occurred_at DESC, id DESC LIMIT 1",
+                (claim_id,),
+            ).fetchone()
+            if latest and latest["origin"] == "human" and latest["to_story_id"] is None:
+                raise DomainConflict("human unassignment is authoritative")
         if claim["story_id"] is not None:
             raise DomainConflict("Claim Story association cannot be reassigned")
-        conn.execute("UPDATE claims SET story_id = ? WHERE id = ?", (story_id, claim_id))
+        authorization = new_id("sta")
+        conn.execute(
+            "INSERT INTO story_transition_authorizations(id, claim_id) VALUES (?, ?)",
+            (authorization, claim_id),
+        )
+        try:
+            conn.execute("UPDATE claims SET story_id = ? WHERE id = ?", (story_id, claim_id))
+        finally:
+            conn.execute("DELETE FROM story_transition_authorizations WHERE id = ?", (authorization,))
+        occurred = precise_utc_now()
+        conn.execute(
+            """
+            INSERT INTO claim_story_assignment_history
+                (id, claim_id, from_story_id, to_story_id, correction_id, origin,
+                 reason_code, reason, occurred_at, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (new_id("csa"), claim_id, claim["story_id"], story_id, correction_id,
+             origin, reason_code, reason, occurred, occurred),
+        )
         return _require(conn, "claims", claim_id, "claim")
+
+    def reassign_claim(self, claim_id: str, story_id: str, **kwargs: Any) -> dict[str, Any]:
+        from .story_corrections import StoryCorrectionService
+
+        return StoryCorrectionService(self.db_path).reassign_claim(claim_id, story_id, **kwargs)
+
+    def unassign_claim(self, claim_id: str, **kwargs: Any) -> dict[str, Any]:
+        from .story_corrections import StoryCorrectionService
+
+        return StoryCorrectionService(self.db_path).unassign_claim(claim_id, **kwargs)
 
     def list_claims(self, story_id: str, *, page=1, page_size=100) -> dict[str, Any]:
         if page < 1 or page_size < 1 or page_size > 100:
@@ -477,7 +523,7 @@ class EvidenceService:
             if parent["story_id"] != story_id:
                 raise DomainValidation("superseded claim must belong to the same story")
         identifier = new_id("claim")
-        now = utc_now()
+        now = precise_utc_now()
         _insert(
             conn,
             "claims",

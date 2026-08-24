@@ -16,7 +16,7 @@ from .acquisition import (
     SourceSuggestionService,
 )
 from .article_analysis import ArticleAnalysisService
-from .domain import CoreService, DomainNotFound, DomainValidation
+from .domain import CoreService, DomainConflict, DomainNotFound, DomainValidation
 from .evidence import EvidenceService
 from .jobs import BudgetService, JobService, SchedulerService, compose_completion_hooks
 from .intelligent_monitoring import WatchMaintenanceService, WatchService
@@ -39,6 +39,7 @@ from .story_evolution import StoryCandidate, StoryEvolutionService
 from .workbench import ComparisonService, DiagnosticsService, SearchService, WorkbenchService
 from .ask import AskService
 from .knowledge import KnowledgeService
+from .story_corrections import StoryCorrectionService
 
 
 class StrictModel(BaseModel):
@@ -666,6 +667,46 @@ class StoryPatch(StrictModel):
     lifecycle: str = Field(pattern="^(developing|stable|resolved|archived)$")
 
 
+class ClaimStoryCorrectionWrite(StrictModel):
+    story_id: Optional[str] = Field(default=None, max_length=200)
+    expected_from_story_id: Optional[str] = Field(default=None, max_length=200)
+    reason: str = Field(default="", max_length=4000)
+
+
+class StoryMergeWrite(StrictModel):
+    destination_story_id: str = Field(min_length=1, max_length=200)
+    expected_source_updated_at: Optional[str] = Field(default=None, max_length=64)
+    reason: str = Field(default="", max_length=4000)
+    metadata_decisions: dict[str, Any] = Field(default_factory=dict)
+
+
+class StorySplitWrite(StrictModel):
+    groups: list[list[str]] = Field(min_length=2, max_length=20)
+    expected_claim_ids: Optional[list[str]] = Field(default=None, max_length=500)
+    expected_source_updated_at: Optional[str] = Field(default=None, max_length=64)
+    reason: str = Field(default="", max_length=4000)
+    child_metadata: list[StoryCreate] = Field(default_factory=list, max_length=20)
+
+
+class StoryExtractWrite(StrictModel):
+    claim_ids: list[str] = Field(min_length=1, max_length=500)
+    story: StoryCreate
+    reason: str = Field(default="", max_length=4000)
+
+
+class DuplicateDecisionWrite(StrictModel):
+    destination_story_id: str = Field(min_length=1, max_length=200)
+    evidence_hash: str = Field(default="current", min_length=1, max_length=256)
+    expected_source_updated_at: Optional[str] = Field(default=None, max_length=64)
+    reason: str = Field(default="", max_length=4000)
+    metadata_decisions: dict[str, Any] = Field(default_factory=dict)
+
+
+class StoryEntityWrite(StrictModel):
+    entity_id: str = Field(min_length=1, max_length=200)
+    origin: str = Field(default="user", pattern="^(user|import)$")
+
+
 class TagCreate(StrictModel):
     name: str = Field(min_length=1, max_length=100)
     namespace: str = Field(default="user", min_length=1, max_length=64, pattern=r"^[A-Za-z0-9._:-]+$")
@@ -911,6 +952,7 @@ def create_domain_router(
     ask = AskService(service.db_path)
     analyses = ArticleAnalysisService(service.db_path)
     knowledge = KnowledgeService(service.db_path)
+    corrections = StoryCorrectionService(service.db_path)
 
     def read_guard(request: Request):
         return require_user(request)
@@ -1843,6 +1885,30 @@ def create_domain_router(
         write_guard(request)
         return ledger.create_claim(story_id, payload.model_dump())
 
+    @router.post("/claims/{identifier}/reassign")
+    async def reassign_claim(request: Request, identifier: str, payload: ClaimStoryCorrectionWrite):
+        user = write_guard(request)
+        if payload.story_id is None:
+            raise DomainValidation("story_id is required for reassignment")
+        return corrections.reassign_claim(
+            identifier,
+            payload.story_id,
+            actor=user.user_id,
+            reason=payload.reason,
+            expected_from_story_id=payload.expected_from_story_id,
+        )
+
+    @router.post("/claims/{identifier}/unassign")
+    async def unassign_claim(request: Request, identifier: str, payload: ClaimStoryCorrectionWrite | None = None):
+        user = write_guard(request)
+        values = payload or ClaimStoryCorrectionWrite()
+        return corrections.unassign_claim(
+            identifier,
+            actor=user.user_id,
+            reason=values.reason,
+            expected_from_story_id=values.expected_from_story_id,
+        )
+
     @router.get("/stories/{story_id}/evidence")
     async def story_evidence(request: Request, story_id: str):
         read_guard(request)
@@ -1857,6 +1923,66 @@ def create_domain_router(
     async def story_corroboration(request: Request, story_id: str, claim_id: Optional[str] = None):
         read_guard(request)
         return evolution.corroboration(story_id, claim_id=claim_id)
+
+    @router.get("/stories/{story_id}/corrections")
+    async def story_corrections(request: Request, story_id: str, limit: int = Query(100, ge=1, le=500)):
+        read_guard(request)
+        return {"items": corrections.correction_history(story_id, limit=limit)}
+
+    @router.get("/stories/{story_id}/lineage")
+    async def story_lineage(request: Request, story_id: str):
+        read_guard(request)
+        return corrections.lineage(story_id)
+
+    @router.get("/stories/{story_id}/duplicates")
+    async def story_duplicates(request: Request, story_id: str, limit: int = Query(20, ge=1, le=100)):
+        read_guard(request)
+        return {"items": corrections.suggest_duplicates(story_id, limit=limit)}
+
+    @router.get("/story-intelligence/metrics")
+    async def story_intelligence_metrics(request: Request):
+        read_guard(request)
+        return corrections.metrics()
+
+    @router.get("/stories/{story_id}/entities")
+    async def story_entities(request: Request, story_id: str):
+        read_guard(request)
+        return corrections.story_entities(story_id)
+
+    @router.post("/stories/{story_id}/entities", status_code=201)
+    async def set_story_entity(request: Request, story_id: str, payload: StoryEntityWrite):
+        user = write_guard(request)
+        return corrections.set_manual_entity(story_id, payload.entity_id, origin=payload.origin)
+
+    @router.delete("/stories/{story_id}/entities/{entity_id}", status_code=204)
+    async def remove_story_entity(request: Request, story_id: str, entity_id: str):
+        write_guard(request)
+        corrections.remove_manual_entity(story_id, entity_id)
+        return Response(status_code=204)
+
+    @router.post("/stories/{story_id}/duplicates/approve")
+    async def approve_duplicate(request: Request, story_id: str, payload: DuplicateDecisionWrite):
+        user = write_guard(request)
+        return corrections.approve_duplicate(
+            story_id,
+            payload.destination_story_id,
+            evidence_hash=payload.evidence_hash,
+            actor=user.user_id,
+            reason=payload.reason,
+            expected_source_updated_at=payload.expected_source_updated_at,
+            metadata_decisions=payload.metadata_decisions,
+        )
+
+    @router.post("/stories/{story_id}/duplicates/dismiss")
+    async def dismiss_duplicate(request: Request, story_id: str, payload: DuplicateDecisionWrite):
+        user = write_guard(request)
+        return corrections.dismiss_duplicate(
+            story_id,
+            payload.destination_story_id,
+            evidence_hash=payload.evidence_hash,
+            actor=user.user_id,
+            reason=payload.reason,
+        )
 
     @router.get("/stories/{story_id}/review")
     async def story_review(request: Request, story_id: str):
@@ -1907,6 +2033,57 @@ def create_domain_router(
             story_id=story_id,
             update_class=update_class,
             revision_id=revision_id,
+        )
+
+    @router.post("/stories/{identifier}/merge-preview")
+    async def merge_story_preview(request: Request, identifier: str, payload: StoryMergeWrite):
+        read_guard(request)
+        return corrections.preview_merge(identifier, payload.destination_story_id)
+
+    @router.post("/stories/{identifier}/merge")
+    async def merge_stories(request: Request, identifier: str, payload: StoryMergeWrite):
+        user = write_guard(request)
+        return corrections.merge_stories(
+            identifier,
+            payload.destination_story_id,
+            actor=user.user_id,
+            reason=payload.reason,
+            expected_source_updated_at=payload.expected_source_updated_at,
+            metadata_decisions=payload.metadata_decisions,
+        )
+
+    @router.get("/stories/{identifier}/split-preview")
+    async def split_story_preview(request: Request, identifier: str):
+        read_guard(request)
+        return corrections.preview_split(identifier)
+
+    @router.post("/stories/{identifier}/split")
+    async def split_story(request: Request, identifier: str, payload: StorySplitWrite):
+        user = write_guard(request)
+        preview = corrections.preview_split(identifier)
+        if payload.expected_source_updated_at is not None and payload.expected_source_updated_at != preview["source"]["updated_at"]:
+            raise DomainConflict("split preview is stale")
+        expected = set(payload.expected_claim_ids or preview["expected_claim_ids"])
+        actual = {item for group in payload.groups for item in group}
+        if actual != expected:
+            raise DomainConflict("split preview is stale")
+        return corrections.split_story(
+            identifier,
+            payload.groups,
+            actor=user.user_id,
+            reason=payload.reason,
+            child_metadata=[item.model_dump() for item in payload.child_metadata],
+        )
+
+    @router.post("/stories/{identifier}/extract")
+    async def extract_story_claims(request: Request, identifier: str, payload: StoryExtractWrite):
+        user = write_guard(request)
+        return corrections.extract_claims(
+            identifier,
+            payload.claim_ids,
+            payload.story.model_dump(),
+            actor=user.user_id,
+            reason=payload.reason,
         )
 
     @router.get("/stories/{identifier}")

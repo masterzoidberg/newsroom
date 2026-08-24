@@ -44,6 +44,7 @@ from .story_automation import (
     automatic_story_stage_completion_hook,
     automatic_story_stage_rerun_factory,
 )
+from .story_corrections import StoryCorrectionReconciliationService
 from .worker import WorkerProcess, merge_handlers
 
 
@@ -134,6 +135,7 @@ def build_worker_handlers(db_path: str | Path) -> dict[str, Any]:
         ResearchQuestionExecutionService(db_path, router=research_router).handlers(),
         DocumentProcessingExecutionService(db_path).handlers(),
         AutomaticStoryStageExecutionService(db_path).handlers(),
+        StoryCorrectionReconciliationService(db_path).handlers(),
         AutomaticReportStageExecutionService(db_path).handlers(),
         AutomaticAlertStageExecutionService(db_path).handlers(),
         WatchMaintenanceService(db_path).handlers(),

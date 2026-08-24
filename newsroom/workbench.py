@@ -874,16 +874,13 @@ class DiagnosticsService:
                 source_ids = [row[0] for row in conn.execute(
                     """
                     SELECT DISTINCT d.source_id FROM documents d
-                    WHERE d.id IN (SELECT document_id FROM story_documents WHERE story_id = ?)
-                    OR d.id IN (
-                        SELECT dv.document_id FROM document_versions dv
-                        JOIN evidence_spans es ON es.document_version_id = dv.id
-                        JOIN claim_evidence ce ON ce.evidence_span_id = es.id
-                        JOIN claims c ON c.id = ce.claim_id AND c.story_id = ?
-                    )
+                    JOIN document_versions dv ON dv.document_id = d.id
+                    JOIN evidence_spans es ON es.document_version_id = dv.id
+                    JOIN claim_evidence ce ON ce.evidence_span_id = es.id
+                    JOIN claims c ON c.id = ce.claim_id AND c.story_id = ?
                     ORDER BY d.source_id
                     """,
-                    (monitor["target_id"], monitor["target_id"]),
+                    (monitor["target_id"],),
                 )]
             elif monitor["target_type"] == "subject":
                 source_ids = [row[0] for row in conn.execute(

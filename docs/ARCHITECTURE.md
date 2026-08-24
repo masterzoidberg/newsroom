@@ -107,6 +107,16 @@ Story and immutable StoryRevision records plus Topics/Subjects/review metadata.
 Review status remains independent from revision attention; a material revision
 sets `review.new_update` without changing saved/dismissed/not-useful state.
 
+Phase 27 adds correctable Story organization without rewriting evidence:
+`claims.story_id` is the current membership pointer, while
+`claim_story_assignment_history` records append-only transitions. Current Story
+Documents are derived through Claim → ClaimEvidence → EvidenceSpan →
+DocumentVersion → Document; `story_documents` is historical observation
+provenance only. Story Entities distinguish explicit manual decisions from a
+reconciled Claim-derived projection. Merge and split operations persist only
+`merged_into` and `split_into` lineage, and all corrections enqueue a durable
+reconciliation Job.
+
 ### Research Questions
 Persistent gaps that can generate targeted follow-up jobs. Question status,
 reopen/abandon history, Claim/Evidence links, notes, and bounded attempts are
@@ -645,7 +655,7 @@ manual evidence; automatic Claims begin story-less and may only receive a
 controlled, audited initial Story association. No Story matching, Story
 creation, Story evolution, Report, or Alert automation is introduced here.
 
-The current applied schema is migration 0023 / schema version 23 (see
+The current applied schema is migration 0030 / schema version 30 (see
 `newsroom/migrations.py`). Migration 0015 added the Phase 18 content artifact
 substrate; migration 0016 added the Phase 19 processing-ownership column
 (`jobs.document_version_id`), the durable result column (`jobs.result_json`),
@@ -659,7 +669,11 @@ post-audit reconciliation (Phase 17) added no migration; migration 0021 added
 the original verified Evidence/Claim substrate, migration 0022 separated
 manual/automatic EvidenceSpan identity and added controlled Claim Story
 history, and migration 0023 hardened the remaining promotion/evidence insert
-contracts without starting Story automation.
+contracts without starting Story automation. Migrations 0029 and 0030 add the
+append-only Story correction aggregate, transition-capable Claim membership
+history, manual/derived Story Entity authority, merge/split lineage, duplicate
+decisions, Watch resolution state, and nullable current Claim Story pointers
+needed for Advanced Story Intelligence.
 
 Due Research Questions use a separate bounded scheduler path: each tick can
 enqueue at most one durable `research_question` Job per due Question, and the

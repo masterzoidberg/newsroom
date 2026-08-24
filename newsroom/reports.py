@@ -254,7 +254,15 @@ class LivingReportService:
         queries = {
             "topic": ("SELECT story_id FROM story_topics WHERE topic_id = ?", target_id),
             "subject": ("SELECT story_id FROM story_subjects WHERE subject_id = ?", target_id),
-            "source": ("SELECT DISTINCT sd.story_id FROM story_documents sd JOIN documents d ON d.id = sd.document_id WHERE d.source_id = ?", target_id),
+            "source": ("""
+                SELECT DISTINCT c.story_id
+                FROM claims c
+                JOIN claim_evidence ce ON ce.claim_id = c.id
+                JOIN evidence_spans es ON es.id = ce.evidence_span_id
+                JOIN document_versions dv ON dv.id = es.document_version_id
+                JOIN documents d ON d.id = dv.document_id
+                WHERE d.source_id = ? AND c.story_id IS NOT NULL
+            """, target_id),
             "research_question": ("SELECT DISTINCT c.story_id FROM research_question_claims rqc JOIN claims c ON c.id = rqc.claim_id JOIN research_questions rq ON rq.id = rqc.question_id WHERE rq.id = ? AND c.story_id IS NOT NULL", target_id),
         }
         if target_type not in queries:

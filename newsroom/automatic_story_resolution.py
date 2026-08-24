@@ -43,6 +43,7 @@ MAX_STORY_SUBJECTS = 50
 MAX_STORY_TEXT_CHARS = 4_000
 MAX_RETRIEVAL_TERMS = 32
 STORY_TIME_WINDOW_HOURS = 72
+AUTOMATIC_STORY_RESOLVER_VERSION = "automatic_story_resolver_v1"
 STRONG_PROPOSITION_OVERLAP = 0.75
 MIN_STRONG_PROPOSITION_TOKENS = 3
 ENTITY_BACKED_PROPOSITION_OVERLAP = 0.40
@@ -375,6 +376,16 @@ class AutomaticStoryResolutionService:
                 story_resolution_reason_code="claim_unqualified",
             )
 
+        if self._claim_has_human_unassignment(claim_id, conn=conn):
+            return AutomaticStoryResolutionResult(
+                promotion_id=promotion_id,
+                claim_id=claim_id,
+                qualification=DEFERRED,
+                qualification_reason_code="human_unassignment_authoritative",
+                story_resolution=DEFERRED,
+                story_resolution_reason_code="human_unassignment_authoritative",
+            )
+
         incoming = self._incoming_candidate(graph)
         retrieval = self._retrieve_candidates(incoming, conn=conn)
         if retrieval.terms_truncated:
@@ -419,6 +430,25 @@ class AutomaticStoryResolutionService:
             selected_story_id=decision.selected_story_id,
             match_signals=decision.signals,
         )
+
+    def _claim_has_human_unassignment(self, claim_id: str, *, conn=None) -> bool:
+        owns_connection = conn is None
+        conn = conn or storage.connect(self.db_path)
+        try:
+            row = conn.execute(
+                """
+                SELECT origin, to_story_id
+                FROM claim_story_assignment_history
+                WHERE claim_id = ?
+                ORDER BY occurred_at DESC, id DESC
+                LIMIT 1
+                """,
+                (claim_id,),
+            ).fetchone()
+            return bool(row and row["origin"] == "human" and row["to_story_id"] is None)
+        finally:
+            if owns_connection:
+                conn.close()
 
     @staticmethod
     def _deferred_result(
@@ -509,7 +539,22 @@ class AutomaticStoryResolutionService:
             return _CandidateRetrieval(())
 
         query = f"""
-            WITH active_stories AS (
+            WITH current_story_documents AS (
+                SELECT DISTINCT c.story_id, d.id AS document_id,
+                       d.published_at, d.source_id,
+                       COALESCE(sd.event_key, '') AS event_key,
+                       COALESCE(sd.entities_json, '[]') AS entities_json,
+                       COALESCE(sd.locations_json, '[]') AS locations_json
+                FROM claims c
+                JOIN claim_evidence ce ON ce.claim_id = c.id
+                JOIN evidence_spans es ON es.id = ce.evidence_span_id
+                JOIN document_versions dv ON dv.id = es.document_version_id
+                JOIN documents d ON d.id = dv.document_id
+                LEFT JOIN story_documents sd
+                  ON sd.story_id = c.story_id AND sd.document_id = d.id
+                WHERE c.story_id IS NOT NULL
+            ),
+            active_stories AS (
                 SELECT id
                 FROM stories
                 WHERE deleted_at IS NULL
@@ -540,13 +585,13 @@ class AutomaticStoryResolutionService:
                 JOIN active_stories active ON active.id = c.story_id
                 WHERE c.story_id IS NOT NULL
                 UNION ALL
-                SELECT sd.story_id AS id,
-                       lower(COALESCE(sd.entities_json, '') || ' ' ||
-                             COALESCE(sd.locations_json, '')) AS search_text,
+                SELECT cd.story_id AS id,
+                       lower(COALESCE(cd.entities_json, '') || ' ' ||
+                             COALESCE(cd.locations_json, '')) AS search_text,
                        '' AS id_text
-                FROM story_documents sd
-                JOIN active_stories active ON active.id = sd.story_id
-                JOIN documents doc ON doc.id = sd.document_id
+                FROM current_story_documents cd
+                JOIN active_stories active ON active.id = cd.story_id
+                JOIN documents doc ON doc.id = cd.document_id
                 JOIN sources source_row
                   ON source_row.id = doc.source_id
                  AND source_row.deleted_at IS NULL
@@ -569,12 +614,12 @@ class AutomaticStoryResolutionService:
                   ON subject_row.id = ss.subject_id
                  AND subject_row.deleted_at IS NULL
                 UNION ALL
-                SELECT sd.story_id AS id,
+                SELECT cd.story_id AS id,
                        '' AS search_text,
                        char(31) || doc.source_id || char(31) AS id_text
-                FROM story_documents sd
-                JOIN active_stories active ON active.id = sd.story_id
-                JOIN documents doc ON doc.id = sd.document_id
+                FROM current_story_documents cd
+                JOIN active_stories active ON active.id = cd.story_id
+                JOIN documents doc ON doc.id = cd.document_id
                 JOIN sources source_row
                   ON source_row.id = doc.source_id
                  AND source_row.deleted_at IS NULL
@@ -609,16 +654,16 @@ class AutomaticStoryResolutionService:
                 GROUP BY story_id
             ),
             ranked_documents AS (
-                SELECT sd.story_id, sd.event_key, sd.entities_json,
-                       sd.locations_json, d.published_at, d.source_id,
+                SELECT cd.story_id, cd.event_key, cd.entities_json,
+                       cd.locations_json, cd.published_at, cd.source_id,
                        ROW_NUMBER() OVER (
-                           PARTITION BY sd.story_id
-                           ORDER BY sd.linked_at DESC, sd.document_id DESC
+                           PARTITION BY cd.story_id
+                           ORDER BY cd.published_at DESC, cd.document_id DESC
                        ) AS document_rank,
-                       COUNT(*) OVER (PARTITION BY sd.story_id) AS document_total
-                FROM story_documents sd
-                JOIN candidate_story_ids selected ON selected.id = sd.story_id
-                JOIN documents d ON d.id = sd.document_id
+                       COUNT(*) OVER (PARTITION BY cd.story_id) AS document_total
+                FROM current_story_documents cd
+                JOIN candidate_story_ids selected ON selected.id = cd.story_id
+                JOIN documents d ON d.id = cd.document_id
                 JOIN sources source_row
                   ON source_row.id = d.source_id
                  AND source_row.deleted_at IS NULL

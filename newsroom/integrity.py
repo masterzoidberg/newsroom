@@ -501,17 +501,16 @@ def check_database(db_path: Optional[str] = None) -> IntegrityReport:
                 if valid and result.get("stage_status") == "completed":
                     chain = conn.execute(
                         """
-                        SELECT c.story_id, p.id AS promotion_id,
+                        SELECT e.story_id, p.id AS promotion_id,
                                src.revision_id, srd.document_id, e.id AS event_id
                         FROM article_analysis_promotions p
                         JOIN claims c ON c.id = p.claim_id
                         JOIN story_revision_claims src ON src.claim_id = c.id
-                        JOIN story_revisions sr
-                          ON sr.id = src.revision_id AND sr.story_id = c.story_id
+                        JOIN story_revisions sr ON sr.id = src.revision_id
                         JOIN story_revision_documents srd
                           ON srd.revision_id = sr.id
                         JOIN story_evolution_events e
-                          ON e.story_id = c.story_id
+                          ON e.story_id = sr.story_id
                          AND e.document_id = srd.document_id
                          AND json_extract(e.decision_json, '$.automatic_story_stage.job_id') = ?
                          AND json_extract(e.decision_json, '$.automatic_story_stage.promotion_id') = p.id
@@ -973,7 +972,7 @@ def check_database(db_path: Optional[str] = None) -> IntegrityReport:
                 "story": "stories", "claim": "claims", "evidence": "evidence_spans", "document": "documents",
                 "report": "living_reports", "report_revision": "report_revisions", "question": "research_questions",
                 "subject": "subjects", "monitor": "monitors", "note": "notes", "question_note": "research_question_notes",
-                "source": "sources", "entity": "entities", "research_gap": "research_question_gaps", "research_task": "research_tasks", "watch": "watches", "article_analysis": "article_analyses",
+                "source": "sources", "entity": "entities", "research_gap": "research_question_gaps", "research_task": "research_tasks", "watch": "watches", "article_analysis": "article_analyses", "story_correction": "story_corrections",
             }
             for run in conn.execute("SELECT id, citations_json FROM ask_runs WHERE citations_json IS NOT NULL ORDER BY id"):
                 try:
@@ -987,6 +986,105 @@ def check_database(db_path: Optional[str] = None) -> IntegrityReport:
                     table = citation_tables.get(citation.get("object_type")) if isinstance(citation, dict) else None
                     if table and _table_exists(conn, table) and conn.execute(f"SELECT 1 FROM {table} WHERE id = ?", (citation.get("object_id"),)).fetchone() is None:
                         issues.append(IntegrityIssue("orphan_ask_citation", f"run={run[0]} target={citation.get('object_type')}:{citation.get('object_id')}"))
+
+        # Phase 27 — Story identity corrections are append-only and must be
+        # replayable from their correction, transition, and lineage records.
+        if _table_exists(conn, "story_corrections"):
+            allowed_operations = {"reassign", "unassign", "merge", "split", "extract", "duplicate_dismissal"}
+            for correction in conn.execute("SELECT * FROM story_corrections ORDER BY occurred_at, id"):
+                if correction["operation_type"] not in allowed_operations:
+                    issues.append(IntegrityIssue("invalid_story_correction_operation", f"correction={correction['id']} operation={correction['operation_type']}"))
+                try:
+                    metadata = json.loads(correction["metadata_json"] or "{}")
+                except (TypeError, ValueError, json.JSONDecodeError):
+                    metadata = None
+                if not isinstance(metadata, dict):
+                    issues.append(IntegrityIssue("invalid_story_correction_metadata", f"correction={correction['id']}"))
+
+        if _table_exists(conn, "claim_story_assignment_history") and _table_exists(conn, "claims"):
+            for claim in conn.execute("SELECT id, story_id FROM claims ORDER BY id"):
+                transitions = conn.execute(
+                    "SELECT * FROM claim_story_assignment_history WHERE claim_id = ? ORDER BY occurred_at, created_at, id",
+                    (claim["id"],),
+                ).fetchall()
+                sentinel = object()
+                previous = sentinel
+                for transition in transitions:
+                    if transition["from_story_id"] == transition["to_story_id"]:
+                        issues.append(IntegrityIssue("invalid_story_transition", f"claim={claim['id']} transition={transition['id']} is a no-op"))
+                    if previous is not sentinel and transition["from_story_id"] != previous:
+                        issues.append(IntegrityIssue("broken_story_transition_chain", f"claim={claim['id']} transition={transition['id']}"))
+                    previous = transition["to_story_id"]
+                    if transition["correction_id"] and _table_exists(conn, "story_corrections") and conn.execute(
+                        "SELECT 1 FROM story_corrections WHERE id = ?", (transition["correction_id"],)
+                    ).fetchone() is None:
+                        issues.append(IntegrityIssue("orphan_story_correction_reference", f"transition={transition['id']} correction={transition['correction_id']}"))
+                if transitions and previous != claim["story_id"]:
+                    issues.append(IntegrityIssue("story_pointer_history_mismatch", f"claim={claim['id']} current={claim['story_id']} history={previous}"))
+
+        if _table_exists(conn, "story_lineage"):
+            for lineage in conn.execute("SELECT * FROM story_lineage ORDER BY created_at, id"):
+                if lineage["source_story_id"] == lineage["target_story_id"]:
+                    issues.append(IntegrityIssue("invalid_story_lineage", f"lineage={lineage['id']} self-edge"))
+                if lineage["relationship"] not in {"merged_into", "split_into"}:
+                    issues.append(IntegrityIssue("invalid_story_lineage", f"lineage={lineage['id']} relationship={lineage['relationship']}"))
+                if lineage["correction_id"] and _table_exists(conn, "story_corrections") and conn.execute(
+                    "SELECT 1 FROM story_corrections WHERE id = ?", (lineage["correction_id"],)
+                ).fetchone() is None:
+                    issues.append(IntegrityIssue("orphan_story_correction_reference", f"lineage={lineage['id']} correction={lineage['correction_id']}"))
+            for source in conn.execute(
+                "SELECT source_story_id, COUNT(*) AS count FROM story_lineage WHERE relationship = 'merged_into' GROUP BY source_story_id HAVING COUNT(*) > 1"
+            ):
+                issues.append(IntegrityIssue("multiple_story_merge_destinations", f"story={source[0]} count={source[1]}"))
+            for source in conn.execute(
+                """
+                SELECT sl.source_story_id, COUNT(*) AS count, s.lifecycle
+                FROM story_lineage sl
+                JOIN stories s ON s.id = sl.source_story_id
+                WHERE sl.relationship = 'split_into'
+                GROUP BY sl.source_story_id, s.lifecycle
+                HAVING COUNT(*) < 2 OR s.lifecycle <> 'archived'
+                """
+            ):
+                issues.append(IntegrityIssue("invalid_story_split_lineage", f"story={source[0]} children={source[1]} lifecycle={source[2]}"))
+
+        if _table_exists(conn, "story_duplicate_decisions"):
+            for decision in conn.execute("SELECT * FROM story_duplicate_decisions ORDER BY created_at, id"):
+                if decision["source_story_id"] > decision["destination_story_id"]:
+                    issues.append(IntegrityIssue("unordered_duplicate_decision", f"decision={decision['id']}"))
+                if decision["correction_id"] and _table_exists(conn, "story_corrections") and conn.execute(
+                    "SELECT 1 FROM story_corrections WHERE id = ?", (decision["correction_id"],)
+                ).fetchone() is None:
+                    issues.append(IntegrityIssue("orphan_story_correction_reference", f"decision={decision['id']} correction={decision['correction_id']}"))
+
+        if _table_exists(conn, "story_entities"):
+            invalid_entities = conn.execute(
+                "SELECT story_id, entity_id, authority FROM story_entities WHERE authority NOT IN ('manual', 'derived')"
+            )
+            issues.extend(
+                IntegrityIssue("invalid_story_entity_authority", f"story={row[0]} entity={row[1]} authority={row[2]}")
+                for row in invalid_entities
+            )
+
+        if _table_exists(conn, "jobs") and _table_exists(conn, "story_corrections"):
+            for job in conn.execute(
+                "SELECT id, payload_json, result_json FROM jobs WHERE job_type = 'story_correction_reconcile' AND status IN ('succeeded', 'partial') ORDER BY id"
+            ):
+                try:
+                    payload = json.loads(job["payload_json"] or "{}")
+                    result = json.loads(job["result_json"] or "{}")
+                except (TypeError, ValueError, json.JSONDecodeError):
+                    payload = result = None
+                valid = bool(
+                    isinstance(payload, dict)
+                    and isinstance(result, dict)
+                    and payload.get("correction_id")
+                    and result.get("correction_id") == payload.get("correction_id")
+                    and result.get("reconciled") is True
+                    and conn.execute("SELECT 1 FROM story_corrections WHERE id = ?", (payload.get("correction_id"),)).fetchone()
+                )
+                if not valid:
+                    issues.append(IntegrityIssue("invalid_story_correction_checkpoint", f"job={job['id']}"))
 
         return IntegrityReport(not issues, tuple(issues))
     finally:

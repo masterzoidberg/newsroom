@@ -2886,6 +2886,335 @@ MIGRATION_0028_CHECKSUM = hashlib.sha256(
 ).hexdigest()
 
 
+# 0029: make Story organization correctable without rewriting historical
+# evidence or Story observations.  The Claim pointer remains the current
+# membership authority; the rebuilt history table records every transition.
+MIGRATION_0029_STATEMENTS: tuple[str, ...] = (
+    "DROP TRIGGER claims_story_association_immutable",
+    "DROP TRIGGER claim_story_assignment_history_insert",
+    "DROP TRIGGER claim_story_assignment_history_immutable_update",
+    "DROP TRIGGER claim_story_assignment_history_immutable_delete",
+    "CREATE TABLE story_corrections ("
+    "id TEXT PRIMARY KEY, "
+    "operation_type TEXT NOT NULL CHECK (operation_type IN ('reassign','unassign','merge','split','extract','duplicate_dismissal')), "
+    "origin TEXT NOT NULL CHECK (origin IN ('human','automatic','import','repair')), "
+    "actor TEXT, reason_code TEXT NOT NULL, reason TEXT NOT NULL DEFAULT '', "
+    "cause_class TEXT NOT NULL CHECK (cause_class IN ('new_evidence','reprocessing','human_correction','administrative')), "
+    "caused_by_type TEXT, caused_by_id TEXT, occurred_at TEXT NOT NULL, metadata_json TEXT NOT NULL DEFAULT '{}'"
+    ")",
+    "CREATE INDEX story_corrections_operation_idx ON story_corrections(operation_type, occurred_at, id)",
+    "CREATE INDEX story_corrections_cause_idx ON story_corrections(caused_by_type, caused_by_id)",
+    """
+    CREATE TRIGGER story_corrections_immutable_update
+    BEFORE UPDATE ON story_corrections
+    BEGIN SELECT RAISE(ABORT, 'Story corrections are append-only'); END
+    """,
+    """
+    CREATE TRIGGER story_corrections_immutable_delete
+    BEFORE DELETE ON story_corrections
+    BEGIN SELECT RAISE(ABORT, 'Story corrections are append-only'); END
+    """,
+    "CREATE TABLE story_transition_authorizations ("
+    "id TEXT PRIMARY KEY, claim_id TEXT NOT NULL REFERENCES claims(id) ON DELETE CASCADE"
+    ")",
+    "CREATE INDEX story_transition_authorizations_claim_idx ON story_transition_authorizations(claim_id)",
+    "PRAGMA legacy_alter_table = ON",
+    "ALTER TABLE claim_story_assignment_history RENAME TO claim_story_assignment_history_legacy_0029",
+    """
+    CREATE TABLE claim_story_assignment_history (
+        id TEXT PRIMARY KEY,
+        claim_id TEXT NOT NULL REFERENCES claims(id) ON DELETE CASCADE,
+        from_story_id TEXT REFERENCES stories(id) ON DELETE SET NULL,
+        to_story_id TEXT REFERENCES stories(id) ON DELETE RESTRICT,
+        correction_id TEXT REFERENCES story_corrections(id) ON DELETE SET NULL,
+        origin TEXT NOT NULL DEFAULT 'automatic' CHECK (origin IN ('human','automatic','import','repair')),
+        reason_code TEXT NOT NULL DEFAULT 'initial_assignment',
+        reason TEXT NOT NULL DEFAULT '',
+        occurred_at TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        CHECK (from_story_id IS NOT to_story_id),
+        CHECK (from_story_id IS NOT NULL OR to_story_id IS NOT NULL)
+    )
+    """,
+    """
+    INSERT INTO claim_story_assignment_history
+        (id, claim_id, from_story_id, to_story_id, correction_id, origin,
+         reason_code, reason, occurred_at, created_at)
+    SELECT h.id, h.claim_id, h.from_story_id, h.to_story_id, NULL,
+           CASE WHEN EXISTS (
+               SELECT 1 FROM claims c
+               WHERE c.id = h.claim_id AND c.article_analysis_id IS NOT NULL
+           ) THEN 'automatic' ELSE 'human' END,
+           'initial_assignment', h.reason, h.created_at, h.created_at
+    FROM claim_story_assignment_history_legacy_0029 h
+    """,
+    "DROP TABLE claim_story_assignment_history_legacy_0029",
+    "PRAGMA legacy_alter_table = OFF",
+    "CREATE INDEX claim_story_assignment_history_claim_idx ON claim_story_assignment_history(claim_id, occurred_at, id)",
+    "CREATE INDEX claim_story_assignment_history_from_idx ON claim_story_assignment_history(from_story_id, occurred_at, id)",
+    "CREATE INDEX claim_story_assignment_history_to_idx ON claim_story_assignment_history(to_story_id, occurred_at, id)",
+    "CREATE INDEX claim_story_assignment_history_correction_idx ON claim_story_assignment_history(correction_id, occurred_at, id)",
+    """
+    CREATE TRIGGER claim_story_assignment_history_immutable_update
+    BEFORE UPDATE ON claim_story_assignment_history
+    BEGIN SELECT RAISE(ABORT, 'Claim Story assignment history is append-only'); END
+    """,
+    """
+    CREATE TRIGGER claim_story_assignment_history_immutable_delete
+    BEFORE DELETE ON claim_story_assignment_history
+    BEGIN SELECT RAISE(ABORT, 'Claim Story assignment history is append-only'); END
+    """,
+    """
+    CREATE TRIGGER claims_story_association_controlled
+    BEFORE UPDATE OF story_id ON claims
+    WHEN OLD.story_id IS NOT NEW.story_id
+         AND NOT EXISTS (
+             SELECT 1 FROM story_transition_authorizations a
+             WHERE a.claim_id = NEW.id
+         )
+    BEGIN SELECT RAISE(ABORT, 'Claim Story membership requires a controlled correction'); END
+    """,
+    "DROP INDEX story_entities_entity_idx",
+    "ALTER TABLE story_entities RENAME TO story_entities_legacy_0029",
+    """
+    CREATE TABLE story_entities (
+        story_id TEXT NOT NULL REFERENCES stories(id) ON DELETE CASCADE,
+        entity_id TEXT NOT NULL REFERENCES entities(id) ON DELETE RESTRICT,
+        origin TEXT NOT NULL CHECK (origin IN ('user','deterministic','provider','import','backfill')),
+        authority TEXT NOT NULL DEFAULT 'derived' CHECK (authority IN ('manual','derived')),
+        created_at TEXT NOT NULL,
+        PRIMARY KEY (story_id, entity_id, authority)
+    )
+    """,
+    """
+    INSERT INTO story_entities(story_id, entity_id, origin, authority, created_at)
+    SELECT story_id, entity_id, origin,
+           CASE WHEN origin IN ('user','import') THEN 'manual' ELSE 'derived' END,
+           created_at
+    FROM story_entities_legacy_0029
+    """,
+    "DROP TABLE story_entities_legacy_0029",
+    "CREATE INDEX story_entities_entity_idx ON story_entities(entity_id, story_id, authority)",
+    "CREATE INDEX story_entities_story_idx ON story_entities(story_id, authority, entity_id)",
+    *tuple(
+        f"""
+        CREATE TRIGGER search_dirty_story_entities_{operation}
+        AFTER {operation.upper()} ON story_entities
+        BEGIN
+            UPDATE search_index_meta SET dirty = 1, updated_at = CURRENT_TIMESTAMP WHERE id = 1;
+        END
+        """
+        for operation in ("insert", "update", "delete")
+    ),
+    """
+    CREATE TABLE story_lineage (
+        id TEXT PRIMARY KEY,
+        source_story_id TEXT NOT NULL REFERENCES stories(id) ON DELETE RESTRICT,
+        target_story_id TEXT NOT NULL REFERENCES stories(id) ON DELETE RESTRICT,
+        relationship TEXT NOT NULL CHECK (relationship IN ('merged_into','split_into')),
+        correction_id TEXT NOT NULL REFERENCES story_corrections(id) ON DELETE RESTRICT,
+        created_at TEXT NOT NULL,
+        UNIQUE(source_story_id, target_story_id, relationship),
+        CHECK(source_story_id <> target_story_id)
+    )
+    """,
+    "CREATE INDEX story_lineage_source_idx ON story_lineage(source_story_id, relationship, created_at, id)",
+    "CREATE INDEX story_lineage_target_idx ON story_lineage(target_story_id, relationship, created_at, id)",
+    "CREATE INDEX story_lineage_correction_idx ON story_lineage(correction_id, created_at, id)",
+    """
+    CREATE TRIGGER story_lineage_immutable_update
+    BEFORE UPDATE ON story_lineage
+    BEGIN SELECT RAISE(ABORT, 'Story lineage is append-only'); END
+    """,
+    """
+    CREATE TRIGGER story_lineage_immutable_delete
+    BEFORE DELETE ON story_lineage
+    BEGIN SELECT RAISE(ABORT, 'Story lineage is append-only'); END
+    """,
+    """
+    CREATE TABLE story_duplicate_decisions (
+        id TEXT PRIMARY KEY,
+        source_story_id TEXT NOT NULL REFERENCES stories(id) ON DELETE RESTRICT,
+        destination_story_id TEXT NOT NULL REFERENCES stories(id) ON DELETE RESTRICT,
+        evidence_hash TEXT NOT NULL,
+        decision TEXT NOT NULL CHECK (decision IN ('dismissed','approved')),
+        correction_id TEXT REFERENCES story_corrections(id) ON DELETE SET NULL,
+        reason TEXT NOT NULL DEFAULT '',
+        created_at TEXT NOT NULL,
+        CHECK(source_story_id <> destination_story_id),
+        UNIQUE(source_story_id, destination_story_id, evidence_hash)
+    )
+    """,
+    "CREATE INDEX story_duplicate_decisions_pair_idx ON story_duplicate_decisions(source_story_id, destination_story_id, decision, created_at DESC)",
+    """
+    CREATE TRIGGER story_duplicate_decisions_immutable_update
+    BEFORE UPDATE ON story_duplicate_decisions
+    BEGIN SELECT RAISE(ABORT, 'Story duplicate decisions are append-only'); END
+    """,
+    """
+    CREATE TRIGGER story_duplicate_decisions_immutable_delete
+    BEFORE DELETE ON story_duplicate_decisions
+    BEGIN SELECT RAISE(ABORT, 'Story duplicate decisions are append-only'); END
+    """,
+    "ALTER TABLE watches ADD COLUMN historical_target_id TEXT",
+    "ALTER TABLE watches ADD COLUMN resolution_state TEXT NOT NULL DEFAULT 'active' CHECK (resolution_state IN ('active','needs_review','merged_into_existing'))",
+    "ALTER TABLE watches ADD COLUMN resolution_options_json TEXT NOT NULL DEFAULT '[]'",
+    "ALTER TABLE monitors ADD COLUMN historical_target_id TEXT",
+    "ALTER TABLE monitors ADD COLUMN resolution_state TEXT NOT NULL DEFAULT 'active' CHECK (resolution_state IN ('active','needs_review','merged_into_existing'))",
+    "ALTER TABLE monitors ADD COLUMN resolution_options_json TEXT NOT NULL DEFAULT '[]'",
+)
+
+MIGRATION_0029_CHECKSUM = hashlib.sha256(
+    "\n".join(MIGRATION_0029_STATEMENTS).encode("utf-8")
+).hexdigest()
+
+
+# 0030: manual Claims may be intentionally unassigned.  The Phase 22 check
+# accidentally coupled manual Claim provenance to a non-null Story pointer;
+# rebuild only the Claims table so Story correction can change organization
+# without weakening automatic provenance immutability.
+MIGRATION_0030_STATEMENTS: tuple[str, ...] = (
+    "DROP TRIGGER claims_automatic_provenance_immutable",
+    "DROP TRIGGER claims_accepted_text_immutable",
+    "DROP TRIGGER claims_acceptance_immutable",
+    "DROP TRIGGER claims_immutable_delete",
+    "DROP TRIGGER claims_automatic_insert_pending",
+    "DROP TRIGGER claim_evidence_automatic_contract_insert",
+    "DROP TRIGGER article_analysis_promotions_verified_contract_insert",
+    "DROP TRIGGER claims_story_association_controlled",
+    "PRAGMA legacy_alter_table = ON",
+    "ALTER TABLE claims RENAME TO claims_legacy_0030",
+    """
+    CREATE TABLE claims (
+        id TEXT PRIMARY KEY,
+        story_id TEXT REFERENCES stories(id) ON DELETE CASCADE,
+        proposition TEXT NOT NULL,
+        proposition_hash TEXT NOT NULL,
+        importance TEXT NOT NULL DEFAULT 'relevant' CHECK (importance IN ('major', 'relevant', 'peripheral')),
+        state TEXT NOT NULL DEFAULT 'pending' CHECK (state IN ('pending', 'supported', 'partially_supported', 'disputed', 'unsubstantiated', 'superseded')),
+        supersedes_claim_id TEXT REFERENCES claims(id),
+        article_analysis_id TEXT REFERENCES article_analyses(id),
+        candidate_claim_index INTEGER,
+        created_at TEXT NOT NULL,
+        accepted_at TEXT,
+        CHECK ((article_analysis_id IS NULL AND candidate_claim_index IS NULL)
+            OR (article_analysis_id IS NOT NULL AND candidate_claim_index IS NOT NULL AND candidate_claim_index >= 0)),
+        UNIQUE (article_analysis_id, candidate_claim_index)
+    )
+    """,
+    """
+    INSERT INTO claims
+        (id, story_id, proposition, proposition_hash, importance, state,
+         supersedes_claim_id, article_analysis_id, candidate_claim_index,
+         created_at, accepted_at)
+    SELECT id, story_id, proposition, proposition_hash, importance, state,
+           supersedes_claim_id, article_analysis_id, candidate_claim_index,
+           created_at, accepted_at
+    FROM claims_legacy_0030
+    """,
+    "DROP TABLE claims_legacy_0030",
+    "PRAGMA legacy_alter_table = OFF",
+    """
+    CREATE TRIGGER claims_accepted_text_immutable
+    BEFORE UPDATE OF proposition, proposition_hash ON claims
+    WHEN OLD.accepted_at IS NOT NULL
+         AND (NEW.proposition IS NOT OLD.proposition OR NEW.proposition_hash IS NOT OLD.proposition_hash)
+    BEGIN SELECT RAISE(ABORT, 'accepted claim text is immutable'); END
+    """,
+    """
+    CREATE TRIGGER claims_automatic_provenance_immutable
+    BEFORE UPDATE OF story_id, proposition, proposition_hash, article_analysis_id, candidate_claim_index ON claims
+    WHEN OLD.article_analysis_id IS NOT NULL
+         AND (OLD.proposition IS NOT NEW.proposition
+              OR OLD.proposition_hash IS NOT NEW.proposition_hash
+              OR OLD.article_analysis_id IS NOT NEW.article_analysis_id
+              OR OLD.candidate_claim_index IS NOT NEW.candidate_claim_index)
+    BEGIN SELECT RAISE(ABORT, 'automatic claim provenance is immutable'); END
+    """,
+    """
+    CREATE TRIGGER claims_acceptance_immutable
+    BEFORE UPDATE OF accepted_at ON claims
+    WHEN OLD.accepted_at IS NOT NULL AND NEW.accepted_at IS NOT OLD.accepted_at
+    BEGIN SELECT RAISE(ABORT, 'claim acceptance is immutable'); END
+    """,
+    """
+    CREATE TRIGGER claims_immutable_delete
+    BEFORE DELETE ON claims
+    BEGIN SELECT RAISE(ABORT, 'claims are append-only'); END
+    """,
+    """
+    CREATE TRIGGER claims_automatic_insert_pending
+    BEFORE INSERT ON claims
+    WHEN NEW.article_analysis_id IS NOT NULL
+         AND (NEW.story_id IS NOT NULL OR NEW.state IS NOT 'pending' OR NEW.accepted_at IS NOT NULL)
+    BEGIN SELECT RAISE(ABORT, 'automatic Claims must begin pending and without a Story'); END
+    """,
+    """
+    CREATE TRIGGER claims_story_association_controlled
+    BEFORE UPDATE OF story_id ON claims
+    WHEN OLD.story_id IS NOT NEW.story_id
+         AND NOT EXISTS (SELECT 1 FROM story_transition_authorizations a WHERE a.claim_id = NEW.id)
+         AND NOT (
+             OLD.article_analysis_id IS NOT NULL
+             AND (OLD.proposition IS NOT NEW.proposition
+                  OR OLD.proposition_hash IS NOT NEW.proposition_hash
+                  OR OLD.article_analysis_id IS NOT NEW.article_analysis_id
+                  OR OLD.candidate_claim_index IS NOT NEW.candidate_claim_index)
+         )
+    BEGIN SELECT RAISE(ABORT, 'Claim Story association membership requires a controlled correction'); END
+    """,
+    """
+    CREATE TRIGGER claim_evidence_automatic_contract_insert
+    BEFORE INSERT ON claim_evidence
+    WHEN EXISTS (SELECT 1 FROM claims c WHERE c.id = NEW.claim_id AND c.article_analysis_id IS NOT NULL)
+    BEGIN
+        SELECT CASE WHEN NOT EXISTS (
+            SELECT 1 FROM claims c
+            JOIN evidence_spans es ON es.id = NEW.evidence_span_id
+            JOIN article_analyses a ON a.id = c.article_analysis_id
+            WHERE c.id = NEW.claim_id
+              AND es.article_analysis_id IS c.article_analysis_id
+              AND es.verification_method IS 'exact_analyzed_slice_v1'
+              AND json_extract(es.provenance_json, '$.candidate_claim_index') IS c.candidate_claim_index
+              AND a.input_view_version IS es.view_version
+              AND a.input_content_hash IS es.view_content_hash
+        ) THEN RAISE(ABORT, 'automatic Claims require verified evidence') END;
+    END
+    """,
+    """
+    CREATE TRIGGER article_analysis_promotions_verified_contract_insert
+    BEFORE INSERT ON article_analysis_promotions
+    WHEN NEW.outcome_code = 'verified'
+    BEGIN
+        SELECT CASE WHEN NEW.claim_id IS NULL
+                          OR json_valid(NEW.evidence_span_ids_json) != 1
+                          OR json_type(NEW.evidence_span_ids_json) != 'array'
+                          OR json_array_length(NEW.evidence_span_ids_json) < 1
+                    THEN RAISE(ABORT, 'invalid verified promotion outcome') END;
+        SELECT CASE WHEN NOT EXISTS (
+            SELECT 1 FROM claims c
+            WHERE c.id = NEW.claim_id
+              AND c.article_analysis_id = NEW.article_analysis_id
+              AND c.candidate_claim_index = NEW.candidate_claim_index
+              AND c.story_id IS NULL
+        ) THEN RAISE(ABORT, 'verified promotion Claim does not match analysis') END;
+        SELECT CASE WHEN EXISTS (
+            SELECT 1 FROM json_each(NEW.evidence_span_ids_json) ids
+            LEFT JOIN evidence_spans es ON es.id = ids.value
+            LEFT JOIN claim_evidence ce ON ce.claim_id = NEW.claim_id AND ce.evidence_span_id = ids.value
+            WHERE es.id IS NULL OR es.article_analysis_id IS NOT NEW.article_analysis_id
+               OR es.verification_method IS NOT 'exact_analyzed_slice_v1'
+               OR ce.id IS NULL
+        ) THEN RAISE(ABORT, 'verified promotion evidence does not match analysis') END;
+    END
+    """,
+)
+
+MIGRATION_0030_CHECKSUM = hashlib.sha256(
+    "\n".join(MIGRATION_0030_STATEMENTS).encode("utf-8")
+).hexdigest()
+
+
 @dataclass(frozen=True)
 class MigrationResult:
     applied_versions: tuple[int, ...]
@@ -2961,6 +3290,8 @@ def apply_migrations(db_path: Optional[str | Path] = None) -> MigrationResult:
                 26: MIGRATION_0026_STATEMENTS,
                 27: MIGRATION_0027_STATEMENTS,
                 28: MIGRATION_0028_STATEMENTS,
+                29: MIGRATION_0029_STATEMENTS,
+                30: MIGRATION_0030_STATEMENTS,
             }
             for version, statements in migrations.items():
                 if version in existing:

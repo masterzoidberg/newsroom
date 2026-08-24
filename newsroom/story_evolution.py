@@ -21,6 +21,7 @@ from . import storage
 from .domain import DomainConflict, DomainNotFound, DomainValidation, new_id, normalized_text, utc_now
 from .event_sig import normalize_event_signature
 from .similarity import headline_similarity
+from .story_context import current_story_documents, current_story_document_ids
 from .url_norm import normalize_url
 
 
@@ -733,19 +734,33 @@ class StoryEvolutionService:
                     frontier.append(related)
         return min(seen)
 
+    @staticmethod
+    def _current_or_legacy_documents(conn: sqlite3.Connection, story_id: str) -> list[sqlite3.Row]:
+        """Keep legacy document-only Story APIs without reviving stale rows."""
+        rows = current_story_documents(conn, story_id)
+        if rows:
+            return rows
+        has_membership_history = conn.execute(
+            "SELECT 1 FROM claim_story_assignment_history WHERE from_story_id = ? OR to_story_id = ? LIMIT 1",
+            (story_id, story_id),
+        ).fetchone()
+        if has_membership_history:
+            return []
+        return conn.execute(
+            """
+            SELECT sd.*, d.canonical_url, d.published_at, d.source_id
+            FROM story_documents sd JOIN documents d ON d.id = sd.document_id
+            WHERE sd.story_id = ? ORDER BY sd.linked_at DESC, sd.document_id DESC
+            """,
+            (story_id,),
+        ).fetchall()
+
     def corroboration(self, story_id: str, claim_id: str | None = None) -> dict[str, Any]:
         conn = storage.connect(self.db_path)
         try:
             self._require(conn, "stories", story_id, "story")
             if claim_id is None:
-                rows = conn.execute(
-                    """
-                    SELECT sd.document_id, d.source_id
-                    FROM story_documents sd JOIN documents d ON d.id = sd.document_id
-                    WHERE sd.story_id = ? ORDER BY sd.document_id
-                    """,
-                    (story_id,),
-                ).fetchall()
+                rows = self._current_or_legacy_documents(conn, story_id)
             else:
                 self._require(conn, "claims", claim_id, "claim")
                 rows = conn.execute(
@@ -755,11 +770,11 @@ class StoryEvolutionService:
                     JOIN document_versions dv ON dv.document_id = d.id
                     JOIN evidence_spans es ON es.document_version_id = dv.id
                     JOIN claim_evidence ce ON ce.evidence_span_id = es.id
-                    JOIN story_documents sd ON sd.document_id = d.id
-                    WHERE ce.claim_id = ? AND sd.story_id = ?
+                    JOIN claims c ON c.id = ce.claim_id AND c.story_id = ?
+                    WHERE ce.claim_id = ?
                     ORDER BY d.id
                     """,
-                    (claim_id, story_id),
+                    (story_id, claim_id),
                 ).fetchall()
             document_ids = [row["document_id"] for row in rows]
             groups = {self._lineage_group(conn, identifier) for identifier in document_ids}
@@ -773,6 +788,7 @@ class StoryEvolutionService:
             return {
                 "publication_count": len(document_ids),
                 "independent_source_count": len(independent_keys),
+                "distinct_source_count": len({row["source_id"] for row in rows}),
                 "lineage_group_count": len(groups),
                 "document_ids": document_ids,
             }
@@ -894,14 +910,7 @@ class StoryEvolutionService:
             revision = conn.execute(
                 "SELECT * FROM story_revisions WHERE story_id = ? ORDER BY revision_number DESC LIMIT 1", (story["id"],)
             ).fetchone()
-            docs = conn.execute(
-                """
-                SELECT sd.*, d.canonical_url, d.published_at, d.source_id
-                FROM story_documents sd JOIN documents d ON d.id = sd.document_id
-                WHERE sd.story_id = ? ORDER BY sd.linked_at DESC, sd.document_id DESC
-                """,
-                (story["id"],),
-            ).fetchall()
+            docs = self._current_or_legacy_documents(conn, story["id"])
             event_key = docs[0]["event_key"] if docs else None
             canonical_url = docs[0]["canonical_url"] if docs else None
             published_at = docs[0]["published_at"] if docs else None
@@ -979,17 +988,30 @@ class StoryEvolutionService:
                     same_source = conn.execute(
                         """
                         SELECT 1
-                        FROM story_documents sd
-                        JOIN documents existing_doc ON existing_doc.id = sd.document_id
+                        FROM claims current_claim
+                        JOIN claim_evidence current_ce ON current_ce.claim_id = current_claim.id
+                        JOIN evidence_spans current_es ON current_es.id = current_ce.evidence_span_id
+                        JOIN document_versions existing_dv ON existing_dv.id = current_es.document_version_id
+                        JOIN documents existing_doc ON existing_doc.id = existing_dv.document_id
                         JOIN documents incoming_doc ON incoming_doc.id = ?
-                        WHERE sd.story_id = ? AND existing_doc.source_id = incoming_doc.source_id
+                        WHERE current_claim.story_id = ? AND existing_doc.source_id = incoming_doc.source_id
                         LIMIT 1
                         """,
                         (document_id, selected_story_id),
                     ).fetchone() is not None
                     same_lineage = False
                     incoming_group = self._lineage_group(conn, document_id)
-                    for row in conn.execute("SELECT document_id FROM story_documents WHERE story_id = ?", (selected_story_id,)):
+                    for row in conn.execute(
+                        """
+                        SELECT DISTINCT dv.document_id
+                        FROM claims c
+                        JOIN claim_evidence ce ON ce.claim_id = c.id
+                        JOIN evidence_spans es ON es.id = ce.evidence_span_id
+                        JOIN document_versions dv ON dv.id = es.document_version_id
+                        WHERE c.story_id = ?
+                        """,
+                        (selected_story_id,),
+                    ):
                         if self._lineage_group(conn, row[0]) == incoming_group and incoming_group != document_id:
                             same_lineage = True
                             break

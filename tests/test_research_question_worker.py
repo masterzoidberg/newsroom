@@ -20,6 +20,7 @@ from newsroom.jobs import (
     SchedulerService,
     WATCH_SOURCE_DISCOVERY_JOB_TYPE,
     WATCH_VOCABULARY_SUGGESTION_JOB_TYPE,
+    STORY_CORRECTION_RECONCILIATION_JOB_TYPE,
     compose_completion_hooks,
 )
 from newsroom.migrations import apply_migrations
@@ -102,6 +103,7 @@ def test_production_handler_coverage(tmp_db):
         AUTOMATIC_ALERT_STAGE_JOB_TYPE,
         WATCH_SOURCE_DISCOVERY_JOB_TYPE,
         WATCH_VOCABULARY_SUGGESTION_JOB_TYPE,
+        STORY_CORRECTION_RECONCILIATION_JOB_TYPE,
     }
     missing = produced - set(handlers)
     assert not missing, f"enqueue producers without a production handler: {sorted(missing)}"

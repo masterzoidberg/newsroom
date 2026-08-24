@@ -22,6 +22,7 @@ from .automatic_story_resolution import (
     QUALIFIED,
     AutomaticStoryResolutionResult,
     AutomaticStoryResolutionService,
+    AUTOMATIC_STORY_RESOLVER_VERSION,
 )
 from .domain import DomainConflict, DomainNotFound, DomainValidation, new_id, utc_now
 from .evidence import EvidenceService
@@ -459,7 +460,14 @@ class AutomaticStoryStageExecutionService:
             raise DomainConflict("automatic Claim changed after verification")
         if claim["story_id"] is not None:
             raise DomainConflict("Claim Story association cannot be reassigned")
-        self.evidence._assign_claim_to_story_tx(conn, claim_id, story_id)
+        self.evidence._assign_claim_to_story_tx(
+            conn,
+            claim_id,
+            story_id,
+            origin="automatic",
+            reason_code=AUTOMATIC_STORY_RESOLVER_VERSION,
+            reason=f"automatic Story assignment via {AUTOMATIC_STORY_RESOLVER_VERSION}",
+        )
         self._ensure_story_document_tx(conn, story_id, document_id, incoming)
 
         verified_evidence = tuple(
