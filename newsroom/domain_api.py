@@ -16,7 +16,7 @@ from .acquisition import (
     SourceSuggestionService,
 )
 from .article_analysis import ArticleAnalysisService
-from .domain import CoreService, DomainValidation
+from .domain import CoreService, DomainNotFound, DomainValidation
 from .evidence import EvidenceService
 from .jobs import BudgetService, JobService, SchedulerService, compose_completion_hooks
 from .intelligent_monitoring import WatchMaintenanceService, WatchService
@@ -370,6 +370,9 @@ class ResearchQuestionCreate(StrictModel):
     local_model_budget: int = Field(default=0, ge=0, le=100_000)
     paid_budget_usd: float = Field(default=0.0, ge=0.0, le=1_000_000)
     next_attempt_at: Optional[str] = Field(default=None, max_length=64)
+    criteria: dict[str, Any] = Field(default_factory=dict)
+    pursuit_policy: str = Field(default="manual", pattern="^(disabled|manual|automatic)$")
+    pursuit_cooldown_seconds: int = Field(default=3600, ge=0, le=31_536_000)
 
 
 class ResearchQuestionPatch(StrictModel):
@@ -380,6 +383,9 @@ class ResearchQuestionPatch(StrictModel):
     local_model_budget: Optional[int] = Field(default=None, ge=0, le=100_000)
     paid_budget_usd: Optional[float] = Field(default=None, ge=0.0, le=1_000_000)
     next_attempt_at: Optional[str] = Field(default=None, max_length=64)
+    criteria: Optional[dict[str, Any]] = None
+    pursuit_policy: Optional[str] = Field(default=None, pattern="^(disabled|manual|automatic)$")
+    pursuit_cooldown_seconds: Optional[int] = Field(default=None, ge=0, le=31_536_000)
 
     @model_validator(mode="after")
     def reject_empty_patch(self):
@@ -415,6 +421,19 @@ class ResearchQuestionPursuitCreate(StrictModel):
     local_model_units: int = Field(default=0, ge=0, le=100_000)
     estimated_cost_usd: float = Field(default=0.0, ge=0.0, le=1_000_000)
     query: Optional[str] = Field(default=None, max_length=4_000)
+    gap_id: Optional[str] = Field(default=None, max_length=200)
+    limits: dict[str, int] = Field(default_factory=dict)
+
+
+class ResearchQuestionClaimCorrection(StrictModel):
+    relationship: str = Field(pattern="^(supports|contradicts|contextualizes|resolves)$")
+    action: str = Field(default="exclude", pattern="^(exclude|restore)$")
+    reason: str = Field(min_length=1, max_length=2_000)
+
+
+class ResearchQuestionGapReview(StrictModel):
+    status: str = Field(pattern="^(dismissed|open)$")
+    reason: str = Field(min_length=1, max_length=4_000)
 
 
 class ResearchQuestionAttemptWrite(StrictModel):
@@ -1375,10 +1394,69 @@ def create_domain_router(
         read_guard(request)
         return {"items": research.get(identifier)["history"]}
 
+    @router.get("/research-questions/{identifier}/assessment")
+    async def research_question_assessment(request: Request, identifier: str):
+        read_guard(request)
+        item = research.get(identifier)
+        return {
+            "question_id": identifier,
+            "state": item.get("assessment_state"),
+            "assessment_hash": item.get("assessment_hash"),
+            "assessment_at": item.get("assessment_at"),
+            "explanation": item.get("assessment_explanation", ""),
+            "history": item.get("assessment_history", []),
+        }
+
+    @router.post("/research-questions/{identifier}/evaluate")
+    async def evaluate_research_question(request: Request, identifier: str):
+        write_guard(request)
+        return research.evaluate(identifier, origin="manual")
+
+    @router.get("/research-questions/{identifier}/gaps")
+    async def research_question_gaps(
+        request: Request,
+        identifier: str,
+        status: Optional[str] = None,
+        page: int = Query(1, ge=1),
+        page_size: int = Query(50, ge=1, le=200),
+    ):
+        read_guard(request)
+        return research.list_gaps(identifier, status=status, page=page, page_size=page_size)
+
+    @router.post("/research-questions/{identifier}/gaps/{gap_id}/review")
+    async def review_research_question_gap(request: Request, identifier: str, gap_id: str, payload: ResearchQuestionGapReview):
+        user = write_guard(request)
+        gap = research.set_gap_status(gap_id, payload.status, actor=user.user_id, reason=payload.reason)
+        if gap["question_id"] != identifier:
+            raise DomainNotFound("research question gap not found")
+        return gap
+
+    @router.post("/research-questions/{identifier}/gaps/{gap_id}/pursue", status_code=201)
+    async def pursue_research_question_gap(request: Request, identifier: str, gap_id: str, payload: ResearchQuestionPursuitCreate):
+        write_guard(request)
+        values = payload.model_dump()
+        values["gap_id"] = gap_id
+        return research.pursue(identifier, **values)
+
     @router.get("/research-questions/{identifier}/attempts")
     async def research_question_attempts(request: Request, identifier: str):
         read_guard(request)
         return {"items": research.get(identifier)["attempts"]}
+
+    @router.get("/research-questions/{identifier}/tasks")
+    async def research_question_tasks(
+        request: Request,
+        identifier: str,
+        page: int = Query(1, ge=1),
+        page_size: int = Query(50, ge=1, le=200),
+    ):
+        read_guard(request)
+        return research.list_tasks(identifier, page=page, page_size=page_size)
+
+    @router.get("/research-questions/{identifier}/tasks/{task_id}")
+    async def research_question_task(request: Request, identifier: str, task_id: str):
+        read_guard(request)
+        return research.get_task(identifier, task_id)
 
     @router.get("/research-questions/{identifier}/notes")
     async def research_question_notes(request: Request, identifier: str):
@@ -1418,6 +1496,14 @@ def create_domain_router(
     async def link_research_question_claim(request: Request, identifier: str, payload: ResearchQuestionClaimLinkCreate):
         write_guard(request)
         return research.link_claim(identifier, payload.claim_id, payload.relationship)
+
+    @router.post("/research-questions/{identifier}/claims/{claim_id}/correction")
+    async def correct_research_question_claim(request: Request, identifier: str, claim_id: str, payload: ResearchQuestionClaimCorrection):
+        user = write_guard(request)
+        return research.correct_claim_link(
+            identifier, claim_id, payload.relationship,
+            action=payload.action, actor=user.user_id, reason=payload.reason,
+        )
 
     @router.post("/research-questions/{identifier}/evidence", status_code=201)
     async def link_research_question_evidence(request: Request, identifier: str, payload: ResearchQuestionEvidenceLinkCreate):

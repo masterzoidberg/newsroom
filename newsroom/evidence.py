@@ -546,6 +546,9 @@ class EvidenceService:
                 self._set_claim_state_tx(conn, claim_id, state, reason.strip())
         finally:
             conn.close()
+        from .research_questions import ResearchQuestionService
+
+        ResearchQuestionService(self.db_path).reevaluate_for_claim(claim_id)
         return self.get_claim(claim_id)
 
     def _accept_claim_tx(self, conn, claim_id: str) -> None:
@@ -593,6 +596,9 @@ class EvidenceService:
                 )
         finally:
             conn.close()
+        from .research_questions import ResearchQuestionService
+
+        ResearchQuestionService(self.db_path).reevaluate_for_claim(claim_id)
         return self.get_claim(claim_id)
 
     def _audit_revision_tx(

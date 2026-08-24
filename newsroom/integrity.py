@@ -200,6 +200,85 @@ def check_database(db_path: Optional[str] = None) -> IntegrityReport:
                     for row in rows
                 )
 
+        # Phase 25 — durable assessment, Gap, and Task relationships. Foreign
+        # keys protect row existence; these checks cover the cross-table
+        # invariants SQLite cannot express without weakening compatibility.
+        if _table_exists(conn, "research_question_gaps") and _table_exists(conn, "research_questions"):
+            rows = conn.execute(
+                """
+                SELECT g.id, g.question_id
+                FROM research_question_gaps AS g
+                LEFT JOIN research_questions AS q ON q.id = g.question_id
+                WHERE q.id IS NULL OR q.deleted_at IS NOT NULL
+                ORDER BY g.id
+                """
+            )
+            issues.extend(
+                IntegrityIssue("orphan_research_question_gap", f"gap={row[0]} question={row[1]}")
+                for row in rows
+            )
+            rows = conn.execute(
+                """
+                SELECT g.id, g.question_id
+                FROM research_question_gaps AS g
+                WHERE g.status = 'satisfied'
+                  AND g.gap_type = 'supporting_evidence'
+                  AND NOT EXISTS (
+                      SELECT 1
+                      FROM research_question_claims AS rqc
+                      JOIN claims AS c ON c.id = rqc.claim_id
+                      JOIN claim_evidence AS ce ON ce.claim_id = c.id AND ce.relationship = 'supports'
+                      JOIN evidence_spans AS es ON es.id = ce.evidence_span_id
+                      WHERE rqc.question_id = g.question_id
+                        AND rqc.relationship IN ('supports','resolves')
+                        AND c.state IN ('supported','partially_supported')
+                  )
+                  AND NOT EXISTS (
+                      SELECT 1
+                      FROM research_question_evidence AS rqe
+                      JOIN evidence_spans AS es ON es.id = rqe.evidence_span_id
+                      WHERE rqe.question_id = g.question_id
+                        AND rqe.relationship IN ('supports','resolves')
+                  )
+                ORDER BY g.id
+                """
+            )
+            issues.extend(
+                IntegrityIssue("satisfied_gap_without_evidence", f"gap={row[0]} question={row[1]}")
+                for row in rows
+            )
+
+        if _table_exists(conn, "research_tasks") and _table_exists(conn, "research_question_gaps"):
+            rows = conn.execute(
+                """
+                SELECT t.id, t.question_id, t.gap_id
+                FROM research_tasks AS t
+                JOIN research_question_gaps AS g ON g.id = t.gap_id
+                WHERE t.question_id <> g.question_id
+                ORDER BY t.id
+                """
+            )
+            issues.extend(
+                IntegrityIssue("research_task_question_gap_mismatch", f"task={row[0]} question={row[1]} gap={row[2]}")
+                for row in rows
+            )
+            rows = conn.execute(
+                """
+                SELECT t.id, t.snapshot_hash
+                FROM research_tasks AS t
+                WHERE t.snapshot_hash IS NOT NULL
+                  AND NOT EXISTS (
+                      SELECT 1 FROM research_question_assessments AS a
+                      WHERE a.question_id = t.question_id AND a.snapshot_hash = t.snapshot_hash
+                  )
+                ORDER BY t.id
+                """
+            )
+            issues.extend(
+                IntegrityIssue("orphan_research_task_snapshot", f"task={row[0]} snapshot={row[1]}")
+                for row in rows
+            )
+
         if _table_exists(conn, "story_review") and _table_exists(conn, "story_revisions"):
             rows = conn.execute(
                 """

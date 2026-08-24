@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+from fastapi.testclient import TestClient
+
+from newsroom.app import create_app
+from newsroom.config import RuntimeConfig
 from newsroom.domain import CoreService
 from newsroom.evidence import EvidenceService
 from newsroom.jobs import JobService
@@ -147,3 +151,33 @@ def test_duplicate_pursuit_converges_on_one_active_task_per_gap(tmp_db):
     assert second["id"] == first["id"]
     assert len(service.get(question["id"])["tasks"]) == 1
 
+
+def test_research_question_workspace_api_exposes_bounded_assessment_gaps_and_tasks(tmp_path):
+    client = TestClient(
+        create_app(
+            config=RuntimeConfig.for_environment("dev", root=tmp_path / "dev"),
+            frontend_dist=tmp_path / "missing-dist",
+        )
+    )
+    assert client.post("/api/v1/auth/setup", json={"username": "admin", "password": "a-long-test-password-12345"}).status_code == 201
+    assert client.post("/api/v1/auth/login", json={"username": "admin", "password": "a-long-test-password-12345"}).status_code == 200
+    headers = {"X-CSRF-Token": client.cookies.get("newsroom_csrf")}
+    response = client.post(
+        "/api/v1/research-questions",
+        headers=headers,
+        json={"question": "Did a controlled test occur?", "search_attempt_budget": 1, "query_budget": 2},
+    )
+    assert response.status_code == 201, response.text
+    identifier = response.json()["id"]
+    assert client.get(f"/api/v1/research-questions/{identifier}/assessment").json()["state"] == "open"
+    gaps = client.get(f"/api/v1/research-questions/{identifier}/gaps").json()
+    assert gaps["total"] == 1
+    pursued = client.post(
+        f"/api/v1/research-questions/{identifier}/gaps/{gaps['items'][0]['id']}/pursue",
+        headers=headers,
+        json={"mode": "manual", "query_units": 1, "limits": {"max_queries": 2, "max_candidates": 3, "max_documents": 1}},
+    )
+    assert pursued.status_code == 201, pursued.text
+    tasks = client.get(f"/api/v1/research-questions/{identifier}/tasks").json()
+    assert tasks["total"] == 1
+    assert tasks["items"][0]["limits"]["max_candidates"] == 3
