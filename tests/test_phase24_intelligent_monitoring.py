@@ -1,15 +1,32 @@
 from __future__ import annotations
 
 import sqlite3
+import json
+from concurrent.futures import ThreadPoolExecutor
 
 import pytest
+from fastapi.testclient import TestClient
 
 from newsroom import storage
+from newsroom.ai import AIRouter, CapabilityBundle, RoutePolicy
+from newsroom.app import create_app
+from newsroom.config import RuntimeConfig
 from newsroom.domain import CoreService, DomainConflict, DomainNotFound, DomainValidation
+from newsroom.evidence_promotion import ArticleAnalysisPromotionService
 from newsroom.integrity import check_database
 from newsroom.intelligent_monitoring import WatchMaintenanceService, WatchService
-from newsroom.migrations import apply_migrations
-from newsroom.monitoring import MonitoringPolicyService
+from newsroom.jobs import BudgetService, SchedulerService
+from newsroom import migrations
+from newsroom.migrations import apply_migrations, migration_status
+from newsroom.monitoring import MonitorService, MonitoringPolicyService
+from newsroom.operations import backup_database, export_logical, restore_database
+from newsroom.report_automation import AutomaticReportStageExecutionService
+from newsroom.reports import AlertService
+from newsroom.runtime import build_worker_queue
+
+from test_phase22_evidence_promotion import _analysis
+from test_phase23c_report_automation import _complete_story_stage
+from test_phase23d_alert_automation import _alert_stage_job, _run_alert_stage
 
 
 def _fixture(db_path):
@@ -301,6 +318,34 @@ def test_provider_failure_does_not_break_vocabulary_suggestion(tmp_db):
     # Deterministic suggestions survive an unavailable optional provider.
     assert suggestions
     assert all(item["origin"] != "ai" for item in suggestions)
+    assert watches.get(watch["id"])["status"] == "active"
+
+
+def test_structured_provider_output_is_validated_and_cannot_mutate_watch(tmp_db):
+    _core, topic, policy = _fixture(tmp_db)
+
+    class InvalidProvider:
+        def suggest(self, _request):
+            return {
+                "suggestions": [
+                    {"term": "x" * 301, "kind": "alias", "rationale": "too long"},
+                    {"term": "unsafe", "kind": "not-a-kind", "rationale": "bad kind"},
+                ],
+                "confidence": 1.0,
+            }
+
+    router = AIRouter(
+        local=CapabilityBundle(vocabulary=InvalidProvider()),
+        policy=RoutePolicy(local_enabled=True, paid_enabled=False),
+    )
+    watches = WatchService(tmp_db, router=router)
+    watch = _watch(watches, topic, policy)
+    baseline = watches.suggest_vocabulary(watch["id"], limit=20)
+
+    after = watches.suggest_vocabulary(watch["id"], limit=20)
+
+    assert after == baseline
+    assert all(item["origin"] != "ai" for item in after)
     assert watches.get(watch["id"])["status"] == "active"
 
 
@@ -765,6 +810,48 @@ def test_duplicate_dispatch_coalesces_but_a_later_run_is_allowed(tmp_db):
     assert later["id"] != first["id"]
 
 
+def test_scheduler_coalesces_due_watch_monitor_work(tmp_db):
+    core, topic, policy = _fixture(tmp_db)
+    source = core.create_source(
+        {
+            "name": "NASA News",
+            "slug": "nasa-news",
+            "homepage_url": "https://www.nasa.gov/news/",
+        }
+    )
+    watches = WatchService(tmp_db)
+    watch = _watch(watches, topic, policy)
+    candidate = watches.add_source_candidate(
+        watch["id"],
+        {
+            "name": "NASA News",
+            "homepage_url": source["homepage_url"],
+            "rationale": "Existing source",
+            "discovery_method": "manual",
+        },
+    )
+    watches.review_source_candidate(watch["id"], candidate["id"], "approved", "editor")
+    monitor_id = watches.get(watch["id"])["sources"][0]["monitor"]["id"]
+    MonitorService(tmp_db).update(
+        monitor_id,
+        {"next_check_at": "2026-08-23T12:00:00Z"},
+    )
+
+    scheduler = SchedulerService(tmp_db)
+    first = scheduler.tick(now="2026-08-23T12:00:00Z")
+    second = scheduler.tick(now="2026-08-23T12:00:00Z")
+
+    assert first["enqueued"] == 1
+    assert second["enqueued"] == 0
+    conn = storage.connect(tmp_db)
+    try:
+        assert conn.execute(
+            "SELECT COUNT(*) FROM jobs WHERE job_type = 'monitor_check'"
+        ).fetchone()[0] == 1
+    finally:
+        conn.close()
+
+
 def test_empty_discovery_job_succeeds_rather_than_failing(tmp_db):
     _core, topic, policy = _fixture(tmp_db)
     watches = WatchService(tmp_db)
@@ -833,3 +920,538 @@ def test_integrity_detects_an_orphan_watch_target(tmp_db):
     report = check_database(tmp_db)
     assert not report.ok
     assert any(issue.code == "orphan_watch_target" for issue in report.issues)
+
+
+class _VocabularyProvider:
+    model_name = "test-vocabulary-provider"
+
+    def __init__(self):
+        self.calls = 0
+
+    def suggest(self, request):
+        self.calls += 1
+        assert len(request.approved_terms) <= 200
+        assert request.max_suggestions <= 50
+        return {
+            "suggestions": [
+                {
+                    "term": "unidentified flying object",
+                    "kind": "synonym",
+                    "expansion_of": "UAP",
+                    "rationale": "Provider-assisted alternate terminology",
+                }
+            ],
+            "confidence": 0.95,
+        }
+
+
+def test_provider_vocabulary_uses_airouter_and_existing_paid_controls(tmp_db):
+    _core, topic, policy = _fixture(tmp_db)
+    policy = MonitoringPolicyService(tmp_db).update(
+        policy["id"], {"paid_budget_usd": 0.01}
+    )
+    provider = _VocabularyProvider()
+    router = AIRouter(
+        local=CapabilityBundle.local_defaults(),
+        paid=CapabilityBundle(vocabulary=provider),
+        policy=RoutePolicy(
+            paid_enabled=True,
+            max_paid_calls=1,
+            max_paid_cost_usd=0.01,
+            max_paid_calls_per_work=1,
+            max_paid_cost_usd_per_work=0.01,
+            paid_request_cost_usd=0.01,
+        ),
+    )
+    BudgetService(tmp_db).set_paid_enabled(True)
+    watches = WatchService(tmp_db, router=router)
+    watch = _watch(watches, topic, policy)
+
+    suggestions = watches.suggest_vocabulary(watch["id"], limit=20)
+
+    assert provider.calls == 1
+    provider_terms = [item for item in suggestions if item["origin"] == "ai"]
+    assert provider_terms[0]["term"] == "unidentified flying object"
+    assert provider_terms[0]["status"] == "suggested"
+    assert provider_terms[0]["enabled"] == 0
+
+
+def test_provider_vocabulary_is_not_called_when_paid_budget_is_disabled(tmp_db):
+    _core, topic, policy = _fixture(tmp_db)
+    provider = _VocabularyProvider()
+    router = AIRouter(
+        local=CapabilityBundle.local_defaults(),
+        paid=CapabilityBundle(vocabulary=provider),
+        policy=RoutePolicy(paid_enabled=True, max_paid_calls=1),
+    )
+    BudgetService(tmp_db).set_paid_enabled(False)
+    watches = WatchService(tmp_db, router=router)
+    watch = _watch(watches, topic, policy)
+
+    suggestions = watches.suggest_vocabulary(watch["id"], limit=20)
+
+    assert provider.calls == 0
+    assert suggestions
+    assert all(item["origin"] != "ai" for item in suggestions)
+
+
+def test_watch_query_plan_is_bounded_and_excludes_pending_terms(tmp_db):
+    _core, topic, policy = _fixture(tmp_db)
+    watches = WatchService(tmp_db)
+    watch = _watch(watches, topic, policy)
+    watches.add_vocabulary(
+        watch["id"],
+        {
+            "term": "AARO",
+            "kind": "include",
+            "rationale": "Approved institutional term",
+        },
+    )
+    watches.add_vocabulary(
+        watch["id"],
+        {
+            "term": "fiction",
+            "kind": "exclude",
+            "rationale": "Avoid entertainment coverage",
+        },
+    )
+    pending = next(
+        item["term"]
+        for item in watches.suggest_vocabulary(watch["id"], limit=20)
+        if item["status"] == "suggested"
+    )
+
+    plan = watches.query_plan(watch["id"], limit=100)
+
+    assert plan["variant_count"] <= policy["query_budget"]
+    assert plan["variant_count"] <= 12
+    assert "fiction" in plan["excluded_terms"]
+    assert pending not in {term for variant in plan["variants"] for term in variant["terms"]}
+    assert all(len(variant["terms"]) <= 2 for variant in plan["variants"])
+
+
+def test_watch_health_and_collection_views_are_bounded(tmp_db):
+    _core, topic, policy = _fixture(tmp_db)
+    watches = WatchService(tmp_db)
+    watch = _watch(watches, topic, policy)
+    watches.add_vocabulary(
+        watch["id"],
+        {"term": "AARO", "kind": "include", "rationale": "Agency"},
+    )
+    suggestions = watches.suggest_vocabulary(watch["id"], limit=20)
+    pending = next(item for item in suggestions if item["status"] == "suggested")
+    watches.review_vocabulary(watch["id"], pending["id"], "rejected", "editor")
+    watches.add_source_candidate(
+        watch["id"],
+        {
+            "name": "NASA News",
+            "homepage_url": "https://www.nasa.gov/news/",
+            "rationale": "Agency publication",
+            "discovery_method": "manual",
+        },
+    )
+
+    health = watches.health(watch["id"])
+    vocabulary = watches.list_vocabulary(watch["id"], page=1, page_size=1)
+    candidates = watches.list_source_candidates(watch["id"], page=1, page_size=1)
+
+    assert health["status"] == "active"
+    assert health["active_source_count"] == 0
+    assert health["pending_source_candidate_count"] == 1
+    assert health["pending_vocabulary_suggestion_count"] >= 0
+    assert health["discovery_enabled"] is True
+    assert vocabulary["page_size"] == 1
+    assert vocabulary["total"] >= 2
+    assert candidates["page_size"] == 1
+    assert candidates["total"] == 1
+
+    with pytest.raises(DomainValidation):
+        watches.list_vocabulary(watch["id"], page_size=101)
+
+
+def test_watch_management_api_exposes_health_and_bounded_collections(tmp_path):
+    config = RuntimeConfig.for_environment("dev", root=tmp_path / "dev")
+    app = create_app(config=config, frontend_dist=tmp_path / "missing-dist")
+    with TestClient(app) as client:
+        assert client.post(
+            "/api/v1/auth/setup",
+            json={"username": "admin", "password": "a-long-test-password-12345"},
+        ).status_code == 201
+        assert client.post(
+            "/api/v1/auth/login",
+            json={"username": "admin", "password": "a-long-test-password-12345"},
+        ).status_code == 200
+        csrf = {"X-CSRF-Token": client.cookies.get("newsroom_csrf")}
+        category = client.post(
+            "/api/v1/categories",
+            json={"slug": "aerospace", "name": "Aerospace"},
+            headers=csrf,
+        ).json()
+        topic = client.post(
+            "/api/v1/topics",
+            json={
+                "category_id": category["id"],
+                "slug": "uap",
+                "name": "UAP disclosure",
+            },
+            headers=csrf,
+        ).json()
+        policy = client.post(
+            "/api/v1/monitoring-policies",
+            json={
+                "name": "Watch policy",
+                "allowed_channels": ["direct_http"],
+                "base_cadence_seconds": 3600,
+                "min_cadence_seconds": 900,
+                "max_cadence_seconds": 86400,
+                "query_budget": 10,
+            },
+            headers=csrf,
+        ).json()
+        created = client.post(
+            "/api/v1/watches",
+            json={
+                "name": "UAP disclosure",
+                "target_type": "topic",
+                "target_id": topic["id"],
+                "policy_id": policy["id"],
+            },
+            headers=csrf,
+        )
+        assert created.status_code == 201
+        watch_id = created.json()["id"]
+
+        assert client.patch(
+            f"/api/v1/watches/{watch_id}",
+            json={"name": "UAP disclosure updates"},
+            headers=csrf,
+        ).status_code == 200
+        health = client.get(f"/api/v1/watches/{watch_id}/health")
+        vocabulary = client.get(
+            f"/api/v1/watches/{watch_id}/vocabulary?page_size=1"
+        )
+        plan = client.get(f"/api/v1/watches/{watch_id}/query-plan?limit=100")
+
+        assert health.status_code == 200
+        assert health.json()["watch_id"] == watch_id
+        assert vocabulary.status_code == 200
+        assert vocabulary.json()["page_size"] == 1
+        assert plan.status_code == 200
+        assert plan.json()["variant_count"] <= 12
+
+
+def test_concurrent_candidate_creation_and_approval_converge(tmp_db):
+    _core, topic, policy = _fixture(tmp_db)
+    watches = WatchService(tmp_db)
+    watch = _watch(watches, topic, policy)
+    payload = {
+        "name": "NASA News",
+        "homepage_url": "https://www.nasa.gov/news/",
+        "rationale": "Agency publication",
+        "discovery_method": "manual",
+    }
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        candidates = list(
+            pool.map(lambda _item: watches.add_source_candidate(watch["id"], payload), range(2))
+        )
+    assert len({candidate["id"] for candidate in candidates}) == 1
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        reviewed = list(
+            pool.map(
+                lambda _item: watches.review_source_candidate(
+                    watch["id"], candidates[0]["id"], "approved", "editor"
+                ),
+                range(2),
+            )
+        )
+    assert all(candidate["status"] == "approved" for candidate in reviewed)
+    assert len(watches.get(watch["id"])["sources"]) == 1
+
+
+def test_concurrent_suggestion_runs_converge_without_duplicate_terms(tmp_db):
+    _core, topic, policy = _fixture(tmp_db)
+    watches = WatchService(tmp_db)
+    watch = _watch(watches, topic, policy)
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        results = list(
+            pool.map(lambda _item: watches.suggest_vocabulary(watch["id"], limit=20), range(2))
+        )
+
+    assert results[0] and results[1]
+    conn = storage.connect(tmp_db)
+    try:
+        duplicate_count = conn.execute(
+            """
+            SELECT COUNT(*) FROM (
+                SELECT term_normalized, kind, COUNT(*) AS count
+                FROM watch_vocabulary
+                WHERE watch_id = ?
+                GROUP BY term_normalized, kind
+                HAVING COUNT(*) > 1
+            )
+            """,
+            (watch["id"],),
+        ).fetchone()[0]
+    finally:
+        conn.close()
+    assert duplicate_count == 0
+
+
+def test_logical_export_reconstructs_watch_configuration(tmp_db, tmp_path):
+    _core, topic, policy = _fixture(tmp_db)
+    watches = WatchService(tmp_db)
+    watch = _watch(watches, topic, policy)
+    active = watches.add_vocabulary(
+        watch["id"],
+        {"term": "AARO", "kind": "include", "rationale": "Agency"},
+    )
+    rejected = next(
+        item
+        for item in watches.suggest_vocabulary(watch["id"], limit=20)
+        if item["status"] == "suggested"
+    )
+    watches.review_vocabulary(watch["id"], rejected["id"], "rejected", "editor")
+    approved_candidate = watches.add_source_candidate(
+        watch["id"],
+        {
+            "name": "NASA News",
+            "homepage_url": "https://www.nasa.gov/news/",
+            "rationale": "Agency publication",
+            "discovery_method": "manual",
+        },
+    )
+    watches.review_source_candidate(
+        watch["id"], approved_candidate["id"], "approved", "editor"
+    )
+    rejected_candidate = watches.add_source_candidate(
+        watch["id"],
+        {
+            "name": "Example Research",
+            "homepage_url": "https://research.example/",
+            "rationale": "Research archive",
+            "discovery_method": "manual",
+        },
+    )
+    watches.review_source_candidate(
+        watch["id"], rejected_candidate["id"], "rejected", "editor"
+    )
+
+    destination = export_logical(tmp_db, tmp_path / "watch.jsonl")
+    rows = [
+        json.loads(line)
+        for line in destination.read_text(encoding="utf-8").splitlines()
+        if line.startswith('{"data"')
+    ]
+    by_table: dict[str, list[dict[str, object]]] = {}
+    for row in rows:
+        by_table.setdefault(str(row["table"]), []).append(row["data"])
+
+    exported_watch = next(row for row in by_table["watches"] if row["id"] == watch["id"])
+    exported_active = next(row for row in by_table["watch_vocabulary"] if row["id"] == active["id"])
+    exported_rejected = next(row for row in by_table["watch_vocabulary"] if row["id"] == rejected["id"])
+    exported_candidates = {row["id"]: row for row in by_table["source_candidates"]}
+
+    assert exported_watch["target_id"] == topic["id"]
+    assert exported_active["status"] == "approved"
+    assert exported_active["enabled"] == 1
+    assert exported_rejected["status"] == "rejected"
+    assert exported_rejected["enabled"] == 0
+    assert exported_candidates[approved_candidate["id"]]["status"] == "approved"
+    assert exported_candidates[rejected_candidate["id"]]["status"] == "rejected"
+    assert len([row for row in by_table["watch_sources"] if row["watch_id"] == watch["id"]]) == 1
+    monitor = next(row for row in by_table["monitors"] if row["id"] == watches.get(watch["id"])["sources"][0]["monitor"]["id"])
+    assert monitor["need_type"] == "topic"
+    assert monitor["need_id"] == topic["id"]
+
+
+def test_backup_restore_preserves_watch_state(tmp_db, tmp_path):
+    _core, topic, policy = _fixture(tmp_db)
+    watches = WatchService(tmp_db)
+    watch = _watch(watches, topic, policy)
+    active = watches.add_vocabulary(
+        watch["id"],
+        {"term": "AARO", "kind": "include", "rationale": "Agency"},
+    )
+    candidate = watches.add_source_candidate(
+        watch["id"],
+        {
+            "name": "NASA News",
+            "homepage_url": "https://www.nasa.gov/news/",
+            "rationale": "Agency publication",
+            "discovery_method": "manual",
+        },
+    )
+
+    backup = backup_database(tmp_db, tmp_path / "backups", label="phase24")
+    restored_path = tmp_path / "restored" / "newsroom.db"
+    restored = restore_database(backup["path"], restored_path)
+
+    assert backup["verified"] is True
+    assert restored["verified"] is True
+    restored_watch = WatchService(restored_path).get(watch["id"])
+    assert restored_watch["name"] == watch["name"]
+    assert any(item["id"] == active["id"] and item["enabled"] == 1 for item in restored_watch["vocabulary"])
+    assert any(item["id"] == candidate["id"] and item["status"] == "suggested" for item in restored_watch["source_candidates"])
+    assert check_database(restored_path).ok
+
+
+def _apply_phase23_schema(db_path):
+    conn = storage.connect(db_path)
+    try:
+        conn.execute("PRAGMA foreign_keys = OFF")
+        with storage.write_tx(conn):
+            migrations._ensure_ledger(conn)
+            for version in range(1, 24):
+                statements = getattr(migrations, f"MIGRATION_{version:04d}_STATEMENTS")
+                for statement in statements:
+                    conn.execute(statement)
+                now = migrations.utc_now()
+                conn.execute(
+                    "INSERT INTO schema_migrations(version, applied_at) VALUES (?, ?)",
+                    (version, now),
+                )
+                if version == 1:
+                    conn.execute(
+                        "INSERT INTO app_meta(key, value) VALUES ('schema_version', '1')"
+                    )
+                    conn.execute(
+                        "INSERT INTO app_meta(key, value) VALUES ('schema_seeded_at', ?)",
+                        (now,),
+                    )
+                else:
+                    conn.execute(
+                        "UPDATE app_meta SET value = ? WHERE key = 'schema_version'",
+                        (str(version),),
+                    )
+        conn.execute("PRAGMA foreign_keys = ON")
+    finally:
+        conn.close()
+
+
+def test_phase23_database_upgrades_to_phase24_without_recreating_monitors(tmp_db):
+    _apply_phase23_schema(tmp_db)
+    core = CoreService(tmp_db)
+    source = core.create_source(
+        {
+            "name": "Legacy NASA",
+            "slug": "legacy-nasa",
+            "homepage_url": "https://www.nasa.gov/",
+        }
+    )
+    policy = MonitoringPolicyService(tmp_db).create(
+        {
+            "name": "Legacy policy",
+            "allowed_channels": ["direct_http"],
+            "base_cadence_seconds": 3600,
+            "min_cadence_seconds": 900,
+            "max_cadence_seconds": 86400,
+            "query_budget": 3,
+        }
+    )
+    legacy_monitor = MonitorService(tmp_db).create(
+        {
+            "target_type": "source",
+            "target_id": source["id"],
+            "policy_id": policy["id"],
+            "enabled": True,
+        }
+    )
+
+    result = apply_migrations(tmp_db)
+
+    assert result.applied_versions == (24,)
+    assert migration_status(tmp_db) == tuple(range(1, 25))
+    assert apply_migrations(tmp_db).applied_versions == ()
+    preserved = MonitorService(tmp_db).get(legacy_monitor["id"])
+    assert preserved["target_id"] == source["id"]
+    assert preserved["need_type"] is None
+    assert preserved["need_id"] is None
+    watches = WatchService(tmp_db)
+    watch = watches.create(
+        {
+            "name": "Legacy source Watch",
+            "target_type": "source",
+            "target_id": source["id"],
+            "policy_id": policy["id"],
+        }
+    )
+    candidate = watches.add_source_candidate(
+        watch["id"],
+        {
+            "name": "Legacy NASA",
+            "homepage_url": "https://www.nasa.gov/",
+            "rationale": "Existing source",
+            "discovery_method": "manual",
+        },
+    )
+    watches.review_source_candidate(watch["id"], candidate["id"], "approved", "editor")
+    assert watches.get(watch["id"])["status"] == "active"
+    assert watches.get(watch["id"])["sources"][0]["monitor"]["id"] == legacy_monitor["id"]
+
+
+def test_watch_source_preserves_phase23_evidence_story_report_alert_chain(tmp_db):
+    analysis = _analysis(
+        tmp_db,
+        text="The agency released a UAP report.",
+        excerpt="The agency released a UAP report.",
+        proposition="The agency released a UAP report",
+    )
+    promotion = ArticleAnalysisPromotionService(tmp_db).promote(analysis["id"])
+    promotion_id = promotion["outcomes"][0]["id"]
+
+    conn = storage.connect(tmp_db)
+    try:
+        topic = conn.execute("SELECT id FROM topics WHERE slug = 'uap'").fetchone()
+        source = conn.execute("SELECT id FROM sources WHERE slug = 'example'").fetchone()
+        policy = conn.execute("SELECT id FROM monitoring_policies WHERE name = 'Policy'").fetchone()
+    finally:
+        conn.close()
+
+    watches = WatchService(tmp_db)
+    watch = watches.create(
+        {
+            "name": "UAP Watch",
+            "target_type": "topic",
+            "target_id": topic["id"],
+            "policy_id": policy["id"],
+        }
+    )
+    candidate = watches.add_source_candidate(
+        watch["id"],
+        {
+            "name": "Example",
+            "homepage_url": "https://example.test",
+            "rationale": "Existing source carrying relevant material",
+            "discovery_method": "existing_source",
+        },
+    )
+    watches.review_source_candidate(watch["id"], candidate["id"], "approved", "editor")
+    assert watches.get(watch["id"])["sources"][0]["source"]["id"] == source["id"]
+
+    _story_job, report_job = _complete_story_stage(tmp_db, promotion_id)
+    queue = build_worker_queue(tmp_db)
+    claimed_report = queue.claim(report_job["id"], "report-worker", now="2026-08-23T12:01:00Z")
+    report_outcome = AutomaticReportStageExecutionService(tmp_db).handle(claimed_report)
+    queue.complete(
+        report_job["id"],
+        "report-worker",
+        "succeeded",
+        outcome=report_outcome,
+    )
+    rule = AlertService(tmp_db).create_rule(
+        {
+            "name": "Watch chain alert",
+            "target_type": "report",
+            "target_id": report_outcome["report_id"],
+        }
+    )
+    alert_job = _alert_stage_job(tmp_db, report_job["id"])
+    alert_outcome, _completed_alert = _run_alert_stage(tmp_db, alert_job)
+
+    assert rule["id"] in alert_outcome["evaluated_rule_ids"]
+    assert alert_outcome["stage_status"] == "completed"
+    assert len(alert_outcome["alert_ids"]) == len(alert_outcome["delivery_ids"]) == 1
+    assert check_database(tmp_db).ok

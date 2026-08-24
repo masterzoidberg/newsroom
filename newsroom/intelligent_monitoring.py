@@ -24,6 +24,14 @@ from typing import Any, Callable, Mapping, Sequence
 from urllib.parse import urlparse
 
 from . import storage
+from .ai import (
+    AIError,
+    AIRouter,
+    CapabilityBundle,
+    SQLiteTelemetrySink,
+    VocabularyOutput,
+    VocabularyRequest,
+)
 from .domain import (
     CoreService,
     DomainConflict,
@@ -35,6 +43,7 @@ from .domain import (
     utc_now,
 )
 from .jobs import (
+    BudgetService,
     JobService,
     WATCH_SOURCE_DISCOVERY_JOB_TYPE,
     WATCH_VOCABULARY_SUGGESTION_JOB_TYPE,
@@ -77,6 +86,9 @@ MAX_TERM_LENGTH = 300
 MAX_RATIONALE_LENGTH = 2000
 MAX_SUGGESTIONS_PER_RUN = 50
 MAX_CANDIDATES_PER_RUN = 25
+MAX_QUERY_VARIANTS = 12
+MAX_ACTIVE_QUERY_TERMS = 100
+MAX_PAGE_SIZE = 100
 
 # A Watch target of 'source' is pure acquisition: 'source' is not a valid
 # monitor information-need type, so such a Watch produces acquisition-only
@@ -143,8 +155,9 @@ def _initialism(term: str) -> str | None:
 class WatchService:
     """Higher-level monitoring intent backed by ordinary source Monitors."""
 
-    def __init__(self, db_path: str | Path):
+    def __init__(self, db_path: str | Path, *, router: AIRouter | None = None):
         self.db_path = Path(db_path)
+        self.router = router
 
     # ------------------------------------------------------------------
     # Watch lifecycle
@@ -326,6 +339,283 @@ class WatchService:
             "total": total,
         }
 
+    @staticmethod
+    def _page_bounds(page: int, page_size: int) -> None:
+        if (
+            isinstance(page, bool)
+            or isinstance(page_size, bool)
+            or page < 1
+            or not 1 <= page_size <= MAX_PAGE_SIZE
+        ):
+            raise DomainValidation(
+                f"page must be >= 1 and page_size must be between 1 and {MAX_PAGE_SIZE}"
+            )
+
+    def list_vocabulary(
+        self,
+        watch_id: str,
+        *,
+        status: str | None = None,
+        page: int = 1,
+        page_size: int = 25,
+    ) -> dict[str, Any]:
+        if status is not None and status not in {"suggested", "approved", "rejected"}:
+            raise DomainValidation("invalid vocabulary status")
+        self._page_bounds(page, page_size)
+        conn = storage.connect(self.db_path)
+        try:
+            self._require_watch(conn, watch_id)
+            where = "watch_id = ?"
+            params: list[Any] = [watch_id]
+            if status is not None:
+                where += " AND status = ?"
+                params.append(status)
+            total = conn.execute(
+                f"SELECT COUNT(*) FROM watch_vocabulary WHERE {where}", params
+            ).fetchone()[0]
+            rows = conn.execute(
+                f"""
+                SELECT * FROM watch_vocabulary
+                WHERE {where}
+                ORDER BY created_at, id
+                LIMIT ? OFFSET ?
+                """,
+                [*params, page_size, (page - 1) * page_size],
+            ).fetchall()
+            return {
+                "items": [_row(row) for row in rows],
+                "page": page,
+                "page_size": page_size,
+                "total": total,
+            }
+        finally:
+            conn.close()
+
+    def list_source_candidates(
+        self,
+        watch_id: str,
+        *,
+        status: str | None = None,
+        page: int = 1,
+        page_size: int = 25,
+    ) -> dict[str, Any]:
+        if status is not None and status not in {"suggested", "approved", "rejected"}:
+            raise DomainValidation("invalid source candidate status")
+        self._page_bounds(page, page_size)
+        conn = storage.connect(self.db_path)
+        try:
+            self._require_watch(conn, watch_id)
+            where = "watch_id = ?"
+            params: list[Any] = [watch_id]
+            if status is not None:
+                where += " AND status = ?"
+                params.append(status)
+            total = conn.execute(
+                f"SELECT COUNT(*) FROM source_candidates WHERE {where}", params
+            ).fetchone()[0]
+            rows = conn.execute(
+                f"""
+                SELECT * FROM source_candidates
+                WHERE {where}
+                ORDER BY created_at, id
+                LIMIT ? OFFSET ?
+                """,
+                [*params, page_size, (page - 1) * page_size],
+            ).fetchall()
+            return {
+                "items": [self._candidate_payload(row) for row in rows],
+                "page": page,
+                "page_size": page_size,
+                "total": total,
+            }
+        finally:
+            conn.close()
+
+    def list_sources(
+        self, watch_id: str, *, page: int = 1, page_size: int = 25
+    ) -> dict[str, Any]:
+        self._page_bounds(page, page_size)
+        conn = storage.connect(self.db_path)
+        try:
+            self._require_watch(conn, watch_id)
+            total = conn.execute(
+                "SELECT COUNT(*) FROM watch_sources WHERE watch_id = ?", (watch_id,)
+            ).fetchone()[0]
+            rows = conn.execute(
+                """
+                SELECT ws.created_at AS linked_at, ws.source_id, ws.monitor_id,
+                       s.name, s.slug, s.domain, s.homepage_url, s.feed_url,
+                       s.source_kind, m.enabled, m.next_check_at, m.last_run_at,
+                       m.last_result, m.need_type, m.need_id
+                FROM watch_sources AS ws
+                JOIN sources AS s ON s.id = ws.source_id
+                JOIN monitors AS m ON m.id = ws.monitor_id
+                WHERE ws.watch_id = ?
+                ORDER BY s.name, s.id
+                LIMIT ? OFFSET ?
+                """,
+                (watch_id, page_size, (page - 1) * page_size),
+            ).fetchall()
+            items = [
+                {
+                    "source": {
+                        "id": row["source_id"],
+                        "name": row["name"],
+                        "slug": row["slug"],
+                        "domain": row["domain"],
+                        "homepage_url": row["homepage_url"],
+                        "feed_url": row["feed_url"],
+                        "source_kind": row["source_kind"],
+                    },
+                    "monitor": {
+                        "id": row["monitor_id"],
+                        "enabled": row["enabled"],
+                        "next_check_at": row["next_check_at"],
+                        "last_run_at": row["last_run_at"],
+                        "last_result": row["last_result"],
+                        "need_type": row["need_type"],
+                        "need_id": row["need_id"],
+                    },
+                    "linked_at": row["linked_at"],
+                }
+                for row in rows
+            ]
+            return {"items": items, "page": page, "page_size": page_size, "total": total}
+        finally:
+            conn.close()
+
+    def health(self, watch_id: str) -> dict[str, Any]:
+        """Return a bounded coverage and operational summary derived from state."""
+        conn = storage.connect(self.db_path)
+        try:
+            watch = self._require_watch(conn, watch_id)
+            monitor_summary = conn.execute(
+                """
+                SELECT COUNT(*) AS attached_source_count,
+                       SUM(CASE WHEN m.enabled = 1 THEN 1 ELSE 0 END) AS active_source_count,
+                       MAX(m.last_run_at) AS last_attempt,
+                       MAX(CASE WHEN m.last_result <> 'error' THEN m.last_run_at END) AS last_success,
+                       MIN(CASE WHEN m.enabled = 1 THEN m.next_check_at END) AS next_scheduled_run,
+                       MAX(CASE WHEN m.last_result = 'error' THEN m.last_run_at END) AS last_monitor_error
+                FROM watch_sources AS ws
+                JOIN monitors AS m ON m.id = ws.monitor_id
+                WHERE ws.watch_id = ?
+                """,
+                (watch_id,),
+            ).fetchone()
+            pending_vocabulary = conn.execute(
+                """
+                SELECT COUNT(*) FROM watch_vocabulary
+                WHERE watch_id = ? AND status = 'suggested'
+                """,
+                (watch_id,),
+            ).fetchone()[0]
+            pending_candidates = conn.execute(
+                """
+                SELECT COUNT(*) FROM source_candidates
+                WHERE watch_id = ? AND status = 'suggested'
+                """,
+                (watch_id,),
+            ).fetchone()[0]
+            jobs = conn.execute(
+                """
+                SELECT job_type, status, payload_json, created_at, updated_at,
+                       failure_cause
+                FROM jobs
+                WHERE job_type IN ('monitor_check', 'watch_source_discovery',
+                                   'watch_vocabulary_suggestion')
+                ORDER BY updated_at DESC, id DESC
+                LIMIT 100
+                """
+            ).fetchall()
+        finally:
+            conn.close()
+
+        discovery_job: sqlite3.Row | None = None
+        recent_error = None
+        for job in jobs:
+            try:
+                payload = json.loads(job["payload_json"] or "{}")
+            except (TypeError, ValueError, json.JSONDecodeError):
+                payload = {}
+            if not isinstance(payload, Mapping) or payload.get("watch_id") != watch_id:
+                continue
+            if job["job_type"] == WATCH_SOURCE_DISCOVERY_JOB_TYPE and discovery_job is None:
+                discovery_job = job
+            if job["status"] in {"failed", "cancelled"} and recent_error is None:
+                recent_error = job["failure_cause"] or job["status"]
+
+        if watch["discovery_error"]:
+            recent_error = watch["discovery_error"]
+        elif monitor_summary["last_monitor_error"] and recent_error is None:
+            recent_error = "monitor_error"
+        return {
+            "watch_id": watch_id,
+            "status": watch["status"],
+            "discovery_enabled": bool(watch["discovery_enabled"]),
+            "attached_source_count": int(monitor_summary["attached_source_count"] or 0),
+            "active_source_count": int(monitor_summary["active_source_count"] or 0),
+            "pending_source_candidate_count": int(pending_candidates),
+            "pending_vocabulary_suggestion_count": int(pending_vocabulary),
+            "last_attempt": monitor_summary["last_attempt"],
+            "last_success": monitor_summary["last_success"],
+            "next_scheduled_run": monitor_summary["next_scheduled_run"],
+            "last_discovery_run": watch["last_discovery_at"],
+            "last_discovery_status": discovery_job["status"] if discovery_job else None,
+            "last_error": recent_error,
+        }
+
+    def update(self, watch_id: str, data: Mapping[str, Any]) -> dict[str, Any]:
+        """Update mutable Watch intent without changing its target identity."""
+        allowed = {"name", "policy_id", "priority", "discovery_enabled"}
+        unknown = set(data) - allowed
+        if unknown:
+            raise DomainValidation(f"unsupported watch fields: {sorted(unknown)}")
+        conn = storage.connect(self.db_path)
+        try:
+            with storage.write_tx(conn):
+                current = self._require_watch(conn, watch_id)
+                values: dict[str, Any] = {}
+                if "name" in data:
+                    name = str(data["name"]).strip()
+                    if not name or len(name) > 200:
+                        raise DomainValidation("watch name must be between 1 and 200 characters")
+                    values["name"] = name
+                if "priority" in data:
+                    priority = str(data["priority"]).strip()
+                    if priority not in WATCH_PRIORITIES:
+                        raise DomainValidation("invalid watch priority")
+                    values["priority"] = priority
+                if "discovery_enabled" in data:
+                    if not isinstance(data["discovery_enabled"], bool):
+                        raise DomainValidation("discovery_enabled must be a boolean")
+                    values["discovery_enabled"] = int(data["discovery_enabled"])
+                policy_id = str(data.get("policy_id", current["policy_id"])).strip()
+                if not policy_id:
+                    raise DomainValidation("watch policy_id must not be empty")
+                if conn.execute(
+                    "SELECT 1 FROM monitoring_policies WHERE id = ?", (policy_id,)
+                ).fetchone() is None:
+                    raise DomainNotFound("monitoring policy not found")
+                values["policy_id"] = policy_id
+                values["updated_at"] = utc_now()
+                assignments = ", ".join(f"{field} = ?" for field in values)
+                conn.execute(
+                    f"UPDATE watches SET {assignments} WHERE id = ?",
+                    [*values.values(), watch_id],
+                )
+                if policy_id != current["policy_id"]:
+                    conn.execute(
+                        """
+                        UPDATE monitors SET policy_id = ?, updated_at = ?
+                        WHERE id IN (SELECT monitor_id FROM watch_sources WHERE watch_id = ?)
+                        """,
+                        (policy_id, values["updated_at"], watch_id),
+                    )
+        finally:
+            conn.close()
+        return self.get(watch_id)
+
     def _set_status(self, watch_id: str, status: str) -> dict[str, Any]:
         """Pause/resume only the Monitors this Watch owns.
 
@@ -421,6 +711,10 @@ class WatchService:
         Invalid provider output must never mutate Watch state, so anything that
         is not a well-formed suggestion is dropped rather than persisted.
         """
+        if isinstance(payload, VocabularyOutput):
+            payload = [item.model_dump() for item in payload.suggestions]
+        elif isinstance(payload, Mapping) and "suggestions" in payload:
+            payload = payload["suggestions"]
         if not isinstance(payload, Sequence) or isinstance(payload, (str, bytes)):
             raise DomainValidation("vocabulary provider must return a sequence")
         validated: list[tuple[str, str, str | None, str, str]] = []
@@ -447,6 +741,7 @@ class WatchService:
         *,
         limit: int = 20,
         provider: Callable[[Mapping[str, Any]], Any] | None = None,
+        work_id: str | None = None,
     ) -> list[dict[str, Any]]:
         """Propose terminology for review.
 
@@ -463,7 +758,42 @@ class WatchService:
         try:
             watch = self._require_watch(conn, watch_id)
             candidates = self._deterministic_terms(conn, watch)
-            if provider is not None:
+            if self.router is not None and provider is None:
+                policy = conn.execute(
+                    "SELECT paid_budget_usd FROM monitoring_policies WHERE id = ?",
+                    (watch["policy_id"],),
+                ).fetchone()
+                paid_route_allowed = not self.router.policy.paid_enabled
+                if self.router.policy.paid_enabled:
+                    paid_route_allowed = bool(
+                        policy is not None
+                        and float(policy["paid_budget_usd"] or 0.0) >= self.router.policy.paid_request_cost_usd
+                        and BudgetService(self.db_path).paid_enabled()
+                    )
+                if paid_route_allowed:
+                    scope = _scope_for_target(
+                        conn, watch["target_type"], watch["target_id"]
+                    )
+                    request = VocabularyRequest(
+                        watch_name=str(watch["name"]),
+                        target_type=str(watch["target_type"]),
+                        approved_terms=tuple(dict.fromkeys(scope.all_terms()))[:200],
+                        max_suggestions=limit,
+                    )
+                    try:
+                        payload = self.router.vocabulary(
+                            request, work_id=work_id or f"watch:{watch_id}"
+                        )
+                    except AIError:
+                        payload = None
+                    if payload is not None:
+                        try:
+                            candidates.extend(
+                                self._validated_provider_terms(payload, limit)
+                            )
+                        except DomainValidation:
+                            pass
+            elif provider is not None:
                 # Provider failure is isolated: the deterministic suggestions
                 # and the existing Watch configuration must survive it.
                 try:
@@ -673,6 +1003,90 @@ class WatchService:
                     )
         finally:
             conn.close()
+
+    def query_plan(self, watch_id: str, *, limit: int = MAX_QUERY_VARIANTS) -> dict[str, Any]:
+        """Build a bounded deterministic plan from approved Watch vocabulary.
+
+        Each variant contains one selected term. This intentionally avoids a
+        Cartesian product of primary, alias, and contextual terms. The
+        existing policy query budget is the first cap; the hard Phase 24 cap
+        remains in force even when a policy is configured more generously.
+        """
+        if isinstance(limit, bool) or not 1 <= limit <= 100:
+            raise DomainValidation("query plan limit must be between 1 and 100")
+        conn = storage.connect(self.db_path)
+        try:
+            watch = self._require_watch(conn, watch_id)
+            policy = conn.execute(
+                "SELECT query_budget FROM monitoring_policies WHERE id = ?",
+                (watch["policy_id"],),
+            ).fetchone()
+            policy_budget = int(policy["query_budget"] or 0) if policy else 0
+            variant_limit = min(MAX_QUERY_VARIANTS, limit, policy_budget)
+            scope = _scope_for_target(conn, watch["target_type"], watch["target_id"])
+            rows = conn.execute(
+                """
+                SELECT term, kind
+                FROM watch_vocabulary
+                WHERE watch_id = ? AND status = 'approved' AND enabled = 1
+                ORDER BY created_at, id
+                LIMIT ?
+                """,
+                (watch_id, MAX_ACTIVE_QUERY_TERMS),
+            ).fetchall()
+        finally:
+            conn.close()
+
+        primary = list(scope.exact_terms)
+        supporting = [
+            *scope.vocabulary,
+            *scope.entities,
+            *scope.concepts,
+            *scope.semantic_terms,
+        ]
+        exclusions = list(scope.exclusions)
+        for row in rows:
+            if row["kind"] in {"primary", "acronym", "acronym_expansion", "include"}:
+                primary.append(row["term"])
+            elif row["kind"] in {"alias", "synonym", "related"}:
+                supporting.append(row["term"])
+            elif row["kind"] == "exclude":
+                exclusions.append(row["term"])
+
+        def unique(values: Sequence[str], cap: int) -> list[str]:
+            result: list[str] = []
+            seen: set[str] = set()
+            for value in values:
+                term = str(value).strip()
+                identity = normalized_text(term)
+                if not identity or identity in seen:
+                    continue
+                seen.add(identity)
+                result.append(term)
+                if len(result) >= cap:
+                    break
+            return result
+
+        primary_terms = unique(primary, MAX_ACTIVE_QUERY_TERMS)
+        supporting_terms = unique(supporting, MAX_ACTIVE_QUERY_TERMS)
+        excluded_terms = unique(exclusions, MAX_ACTIVE_QUERY_TERMS)
+        variants: list[dict[str, Any]] = []
+        for category, terms in (("primary", primary_terms), ("supporting", supporting_terms)):
+            for term in terms:
+                if len(variants) >= variant_limit:
+                    break
+                variants.append({"query": term, "category": category, "terms": [term]})
+            if len(variants) >= variant_limit:
+                break
+        return {
+            "watch_id": watch_id,
+            "query_budget": policy_budget,
+            "requested_limit": limit,
+            "variant_count": len(variants),
+            "variants": variants,
+            "active_terms": unique([*primary_terms, *supporting_terms], MAX_ACTIVE_QUERY_TERMS),
+            "excluded_terms": excluded_terms,
+        }
 
     # ------------------------------------------------------------------
     # Source candidates
@@ -1181,7 +1595,13 @@ class WatchMaintenanceService:
 
     def __init__(self, db_path: str | Path, *, watches: WatchService | None = None):
         self.db_path = Path(db_path)
-        self.watches = watches or WatchService(db_path)
+        self.watches = watches or WatchService(
+            db_path,
+            router=AIRouter(
+                local=CapabilityBundle.local_defaults(),
+                telemetry=SQLiteTelemetrySink(db_path),
+            ),
+        )
 
     def handlers(self) -> dict[str, Any]:
         return {
@@ -1270,7 +1690,9 @@ class WatchMaintenanceService:
         watch_id = self._watch_id(job)
         payload = job["payload"]
         limit = int(payload.get("limit") or 20)
-        terms = self.watches.suggest_vocabulary(watch_id, limit=limit)
+        terms = self.watches.suggest_vocabulary(
+            watch_id, limit=limit, work_id=str(job.get("id") or "") or None
+        )
         pending = [item for item in terms if item["status"] == "suggested"]
         return {
             "watch_id": watch_id,

@@ -199,6 +199,13 @@ class WatchCreate(StrictModel):
     discovery_enabled: bool = True
 
 
+class WatchPatch(StrictModel):
+    name: Optional[str] = Field(default=None, min_length=1, max_length=200)
+    policy_id: Optional[str] = Field(default=None, min_length=1, max_length=200)
+    priority: Optional[str] = Field(default=None, pattern="^(low|normal|high|urgent)$")
+    discovery_enabled: Optional[bool] = None
+
+
 class WatchReview(StrictModel):
     """Shared approve/reject envelope for vocabulary and Source candidates."""
 
@@ -830,7 +837,13 @@ def create_domain_router(
     scheduler = SchedulerService(service.db_path)
     policies = MonitoringPolicyService(service.db_path)
     monitors = MonitorService(service.db_path)
-    watches = WatchService(service.db_path)
+    watches = WatchService(
+        service.db_path,
+        router=AIRouter(
+            local=CapabilityBundle.local_defaults(),
+            telemetry=SQLiteTelemetrySink(service.db_path),
+        ),
+    )
     watch_maintenance = WatchMaintenanceService(service.db_path, watches=watches)
     vocabulary_service = ScopeSuggestionService(service.db_path)
     evolution = StoryEvolutionService(service.db_path)
@@ -1830,6 +1843,59 @@ def create_domain_router(
     async def get_watch(request: Request, identifier: str):
         read_guard(request)
         return watches.get(identifier)
+
+    @router.patch("/watches/{identifier}")
+    async def update_watch(request: Request, identifier: str, payload: WatchPatch):
+        write_guard(request)
+        return watches.update(identifier, payload.model_dump(exclude_unset=True))
+
+    @router.get("/watches/{identifier}/health")
+    async def get_watch_health(request: Request, identifier: str):
+        read_guard(request)
+        return watches.health(identifier)
+
+    @router.get("/watches/{identifier}/query-plan")
+    async def get_watch_query_plan(
+        request: Request, identifier: str, limit: int = Query(12, ge=1, le=100)
+    ):
+        read_guard(request)
+        return watches.query_plan(identifier, limit=limit)
+
+    @router.get("/watches/{identifier}/vocabulary")
+    async def list_watch_vocabulary(
+        request: Request,
+        identifier: str,
+        status: Optional[str] = None,
+        page: int = Query(1, ge=1),
+        page_size: int = Query(25, ge=1, le=100),
+    ):
+        read_guard(request)
+        return watches.list_vocabulary(
+            identifier, status=status, page=page, page_size=page_size
+        )
+
+    @router.get("/watches/{identifier}/sources")
+    async def list_watch_sources(
+        request: Request,
+        identifier: str,
+        page: int = Query(1, ge=1),
+        page_size: int = Query(25, ge=1, le=100),
+    ):
+        read_guard(request)
+        return watches.list_sources(identifier, page=page, page_size=page_size)
+
+    @router.get("/watches/{identifier}/source-candidates")
+    async def list_watch_source_candidates(
+        request: Request,
+        identifier: str,
+        status: Optional[str] = None,
+        page: int = Query(1, ge=1),
+        page_size: int = Query(25, ge=1, le=100),
+    ):
+        read_guard(request)
+        return watches.list_source_candidates(
+            identifier, status=status, page=page, page_size=page_size
+        )
 
     @router.post("/watches/{identifier}/pause")
     async def pause_watch(request: Request, identifier: str):

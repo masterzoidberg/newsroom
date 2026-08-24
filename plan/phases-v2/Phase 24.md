@@ -139,13 +139,13 @@ are now fixed:
 [DONE] JobService-backed discovery + suggestion runs (§49, §50)
 [DONE] discovery audit fields (last_discovery_at / discovery_error)
 
-[TODO] provider-assisted vocabulary via the AIRouter + budget controls
-       (currently a validated, failure-isolated injectable callable)
-[TODO] bounded vocabulary query planning (§33, §84)
-[TODO] Watch health / coverage summary (§60, §61)
-[TODO] frontend vocabulary + Source-candidate management surfaces
-[TODO] export reconstruction regression (§77) and Watch->Alert
-       integration test (§103, §104)
+[DONE] provider-assisted vocabulary via the existing AIRouter + budget controls
+[DONE] bounded vocabulary query planning (§33, §84)
+[DONE] Watch health / coverage summary (§60, §61)
+[DONE] frontend Watch, vocabulary, Source, and candidate management surfaces
+[DONE] logical export/backup reconstruction regression (§77)
+[DONE] Watch->Phase 23 evidence, Story, Report, and Alert integration (§103, §104)
+[DONE] concurrency, scheduler idempotency, migration, and external-input regressions
 ```
 
 ## 0.7 Source discovery is corpus-derived, not crawled
@@ -189,6 +189,47 @@ one requested run coalesces while a genuinely later user-triggered run is still
 allowed (§50). Discovery failure raises `RetryableJobFailure`, records
 `watches.discovery_error`, and leaves approved Sources monitoring normally
 (§82/§83).
+
+## 0.9 Final implementation reconciliation
+
+The repository's completed implementation makes the following codebase-driven
+adjustments to the original product plan:
+
+* A Watch is a persistent user-intent row. It does not replace `Monitor`:
+  approved Watch Sources are represented by ordinary Source Monitors, with
+  `need_type`/`need_id` preserving the Watch target's relevance scope. Source
+  sharing therefore creates one Monitor per Watch, preserving independent
+  cadence, pause/resume state, and immutable scope history while retaining the
+  Phase 23 acquisition-to-evidence path.
+* Provider-assisted vocabulary is an optional `vocabulary` capability on the
+  existing `AIRouter`. Inputs and outputs are bounded structured models;
+  policy `paid_budget_usd`, the existing global paid-enabled control, and the
+  router's call/cost limits gate paid escalation. The default application
+  composition remains local-first and deterministic when no paid provider is
+  configured. Provider terms are persisted only as inert `suggested` rows and
+  never directly change Watch configuration.
+* Query planning is deterministic and deliberately conservative: approved
+  terms only, no Cartesian expansion, one term per variant, a hard cap of 12
+  variants, and the existing policy query budget as the lower cap. Pending and
+  rejected vocabulary cannot enter the plan.
+* Source discovery is corpus-derived rather than crawled. Because the
+  immutable Phase 18 artifacts retain visible content but not outbound
+  anchors, the supported methods are `existing_source`, `document_link`, and
+  `feed_discovery`; all are bounded and require a confirmed Phase 20 relevant
+  decision. No new network or crawler abstraction was introduced.
+* The frontend replaces the prior monitor-management placeholder with a
+  bounded Watch workflow using the existing authenticated API: create/edit,
+  pause/resume, vocabulary review, Source discovery, candidate review, and
+  health/coverage inspection.
+* Logical export now includes the Watch configuration, full monitoring policy
+  controls, Monitor provenance/scope history, vocabulary, candidates, and
+  Watch-Source relationships. Migration 0024 adds Watch state while preserving
+  existing Phase 23 Monitors unchanged; repeat application is idempotent.
+
+The completed focused suite covers these adjustments, including provider
+failure and malformed output isolation, concurrent candidate/suggestion
+convergence, scheduler coalescing, backup/restore, and a controlled
+Watch-linked Phase 23 Alert path. Phase 25 work is not included.
 
 ---
 

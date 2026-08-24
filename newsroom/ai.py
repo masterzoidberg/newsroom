@@ -227,6 +227,63 @@ class ArticleAnalysisRequest:
             raise ValueError("article analysis text is unreasonably large")
 
 
+class VocabularySuggestion(AIModel):
+    """One bounded, reviewable vocabulary proposal."""
+
+    term: str = Field(min_length=1, max_length=300)
+    kind: str = Field(
+        pattern="^(primary|alias|synonym|acronym|acronym_expansion|related|include|exclude)$"
+    )
+    expansion_of: str | None = Field(default=None, max_length=300)
+    rationale: str = Field(default="Provider suggestion", max_length=2000)
+
+    @field_validator("term", "rationale")
+    @classmethod
+    def _nonblank_text(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("vocabulary text must not be blank")
+        return value
+
+
+class VocabularyOutput(AIModel):
+    """Structured provider output for optional vocabulary assistance."""
+
+    suggestions: list[VocabularySuggestion] = Field(default_factory=list, max_length=50)
+    confidence: float = Field(ge=0.0, le=1.0)
+
+    @model_validator(mode="after")
+    def _unique_suggestions(self) -> "VocabularyOutput":
+        identities = set()
+        for suggestion in self.suggestions:
+            identity = (" ".join(suggestion.term.casefold().split()), suggestion.kind)
+            if identity in identities:
+                raise ValueError("vocabulary suggestions must be unique")
+            identities.add(identity)
+        return self
+
+
+@dataclass(frozen=True)
+class VocabularyRequest:
+    """Bounded Watch context supplied to a vocabulary provider."""
+
+    watch_name: str
+    target_type: str
+    approved_terms: Sequence[str]
+    max_suggestions: int
+
+    def __post_init__(self) -> None:
+        if not str(self.watch_name).strip() or len(str(self.watch_name)) > 200:
+            raise ValueError("vocabulary watch_name must be bounded and nonblank")
+        if not str(self.target_type).strip() or len(str(self.target_type)) > 50:
+            raise ValueError("vocabulary target_type must be bounded and nonblank")
+        if isinstance(self.approved_terms, (str, bytes)) or len(self.approved_terms) > 200:
+            raise ValueError("vocabulary approved_terms must contain at most 200 items")
+        if any(not str(term).strip() or len(str(term)) > 300 for term in self.approved_terms):
+            raise ValueError("vocabulary approved_terms contain invalid text")
+        if isinstance(self.max_suggestions, bool) or not 1 <= self.max_suggestions <= 50:
+            raise ValueError("vocabulary max_suggestions must be between 1 and 50")
+
+
 class EmbeddingProvider(Protocol):
     def embed(self, text: str) -> EmbeddingOutput | Mapping[str, Any]: ...
 
@@ -253,6 +310,10 @@ class SynthesisProvider(Protocol):
 
 class ArticleAnalysisProvider(Protocol):
     def analyze(self, request: ArticleAnalysisRequest) -> ArticleAnalysisOutput | Mapping[str, Any]: ...
+
+
+class VocabularyProvider(Protocol):
+    def suggest(self, request: VocabularyRequest) -> VocabularyOutput | Mapping[str, Any]: ...
 
 
 def _tokens(text: str) -> set[str]:
@@ -542,6 +603,15 @@ class DeterministicArticleAnalysisProvider:
         return LocalArticleAnalysisProvider().analyze(request)
 
 
+class LocalVocabularyProvider:
+    """Zero-cost local route; deterministic Watch derivation owns the terms."""
+
+    model_name = "local-vocabulary"
+
+    def suggest(self, request: VocabularyRequest) -> VocabularyOutput:
+        return VocabularyOutput(suggestions=[], confidence=0.0)
+
+
 @dataclass(frozen=True)
 class CapabilityBundle:
     embedding: EmbeddingProvider | None = None
@@ -551,6 +621,7 @@ class CapabilityBundle:
     extraction: ExtractionProvider | None = None
     synthesis: SynthesisProvider | None = None
     article_analysis: ArticleAnalysisProvider | None = None
+    vocabulary: VocabularyProvider | None = None
 
     @classmethod
     def local_defaults(cls) -> "CapabilityBundle":
@@ -562,6 +633,7 @@ class CapabilityBundle:
             extraction=LocalExtractionProvider(),
             synthesis=LocalSynthesisProvider(),
             article_analysis=LocalArticleAnalysisProvider(),
+            vocabulary=LocalVocabularyProvider(),
         )
 
 
@@ -688,6 +760,7 @@ _OUTPUT_TYPES: dict[str, type[AIModel]] = {
     "extraction": ExtractionOutput,
     "synthesis": SynthesisOutput,
     "article_analysis": ArticleAnalysisOutput,
+    "vocabulary": VocabularyOutput,
 }
 
 
@@ -731,6 +804,9 @@ class AIRouter:
 
     def article_analysis(self, request: ArticleAnalysisRequest, *, work_id: str | None = None) -> ArticleAnalysisOutput:
         return self._execute("article_analysis", lambda provider: provider.analyze(request), work_id=work_id)
+
+    def vocabulary(self, request: VocabularyRequest, *, work_id: str | None = None) -> VocabularyOutput:
+        return self._execute("vocabulary", lambda provider: provider.suggest(request), work_id=work_id)
 
     def _execute(self, capability: str, call: Callable[[Any], Any], *, work_id: str | None) -> Any:
         local_provider = getattr(self.local, capability)
@@ -918,6 +994,10 @@ __all__ = [
     "ExtractionProvider",
     "SynthesisProvider",
     "ArticleAnalysisProvider",
+    "VocabularySuggestion",
+    "VocabularyOutput",
+    "VocabularyRequest",
+    "VocabularyProvider",
     "LocalEmbeddingProvider",
     "LocalRerankerProvider",
     "LocalEntailmentProvider",
@@ -932,6 +1012,7 @@ __all__ = [
     "DeterministicExtractionProvider",
     "DeterministicSynthesisProvider",
     "DeterministicArticleAnalysisProvider",
+    "LocalVocabularyProvider",
     "CapabilityBundle",
     "RoutePolicy",
     "TelemetryEvent",
