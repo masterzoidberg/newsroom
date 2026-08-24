@@ -511,6 +511,88 @@ class KnowledgeService:
             output.append(self.assign_tag(tag["id"], object_type, object_id, origin="deterministic", reason=reason))
         return output
 
+    def start_backfill(self, kind: str, *, row_limit: int = 500, batch_size: int = 25) -> dict[str, Any]:
+        if kind not in {"article_analysis_entities", "smart_tags"}:
+            raise DomainValidation("unsupported knowledge backfill kind")
+        if not 1 <= row_limit <= 10_000 or not 1 <= batch_size <= 100:
+            raise DomainValidation("knowledge backfill bounds are invalid")
+        conn = storage.connect(self.db_path)
+        try:
+            with storage.write_tx(conn):
+                existing = conn.execute(
+                    "SELECT * FROM knowledge_backfills WHERE kind = ? AND status IN ('queued','running') ORDER BY id LIMIT 1",
+                    (kind,),
+                ).fetchone()
+                if existing is not None:
+                    return dict(existing)
+                identifier = new_id("backfill")
+                now = utc_now()
+                conn.execute(
+                    "INSERT INTO knowledge_backfills(id, kind, status, row_limit, batch_size, created_at, updated_at) VALUES (?, ?, 'queued', ?, ?, ?, ?)",
+                    (identifier, kind, row_limit, batch_size, now, now),
+                )
+        finally:
+            conn.close()
+        return self.get_backfill(identifier)
+
+    def get_backfill(self, identifier: str) -> dict[str, Any]:
+        conn = storage.connect(self.db_path)
+        try:
+            row = conn.execute("SELECT * FROM knowledge_backfills WHERE id = ?", (identifier,)).fetchone()
+            if row is None:
+                raise DomainNotFound("knowledge backfill not found")
+            return dict(row)
+        finally:
+            conn.close()
+
+    def run_backfill(self, identifier: str) -> dict[str, Any]:
+        run = self.get_backfill(identifier)
+        if run["status"] in {"completed", "failed", "cancelled"}:
+            return run
+        self._update_backfill(identifier, status="running")
+        processed = int(run["processed"])
+        cursor = run["cursor"]
+        try:
+            while processed < int(run["row_limit"]):
+                conn = storage.connect(self.db_path)
+                try:
+                    if run["kind"] == "article_analysis_entities":
+                        rows = conn.execute(
+                            "SELECT id FROM article_analyses WHERE (? IS NULL OR id > ?) ORDER BY id LIMIT ?",
+                            (cursor, cursor, min(int(run["batch_size"]), int(run["row_limit"]) - processed)),
+                        ).fetchall()
+                    else:
+                        rows = conn.execute(
+                            "SELECT id FROM entities WHERE status = 'active' AND (? IS NULL OR id > ?) ORDER BY id LIMIT ?",
+                            (cursor, cursor, min(int(run["batch_size"]), int(run["row_limit"]) - processed)),
+                        ).fetchall()
+                finally:
+                    conn.close()
+                if not rows:
+                    return self._update_backfill(identifier, status="completed", cursor=cursor, processed=processed, completed_at=utc_now())
+                for row in rows:
+                    if run["kind"] == "article_analysis_entities":
+                        self.index_article_analysis(row[0])
+                    else:
+                        self.deterministic_tags("entity", row[0])
+                    cursor = row[0]
+                    processed += 1
+                    self._update_backfill(identifier, cursor=cursor, processed=processed)
+            return self._update_backfill(identifier, status="completed", cursor=cursor, processed=processed, completed_at=utc_now())
+        except Exception as exc:
+            return self._update_backfill(identifier, status="failed", cursor=cursor, processed=processed, error_code=type(exc).__name__, error_detail=str(exc)[:500], completed_at=utc_now())
+
+    def _update_backfill(self, identifier: str, **values: Any) -> dict[str, Any]:
+        values["updated_at"] = utc_now()
+        assignments = ", ".join(f"{key} = ?" for key in values)
+        conn = storage.connect(self.db_path)
+        try:
+            with storage.write_tx(conn):
+                conn.execute(f"UPDATE knowledge_backfills SET {assignments} WHERE id = ?", [*values.values(), identifier])
+        finally:
+            conn.close()
+        return self.get_backfill(identifier)
+
     def _subject_resolution(self, conn: sqlite3.Connection, value: str) -> list[sqlite3.Row]:
         normalized = normalized_text(value)
         return conn.execute(

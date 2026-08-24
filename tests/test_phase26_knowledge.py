@@ -144,3 +144,17 @@ def test_smart_tags_are_deduplicated_and_assignments_are_cross_object_and_idempo
     assert second["id"] == first["id"]
     assert repeated["id"] == assignment["id"]
     assert service.get_entity(entity["id"])["tags"][0]["id"] == first["id"]
+
+
+def test_smart_tag_backfill_is_bounded_durable_and_restart_safe(tmp_db):
+    apply_migrations(tmp_db)
+    service = KnowledgeService(tmp_db)
+    entity = service.create_entity({"canonical_name": "AARO", "entity_type": "agency"})
+    run = service.start_backfill("smart_tags", row_limit=10, batch_size=1)
+    completed = service.run_backfill(run["id"])
+    repeated = service.run_backfill(run["id"])
+
+    assert completed["status"] == "completed"
+    assert completed["processed"] == 1
+    assert repeated == completed
+    assert service.get_entity(entity["id"])["tags"][0]["assignment_origin"] == "deterministic"
