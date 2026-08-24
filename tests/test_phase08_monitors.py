@@ -802,7 +802,7 @@ def test_phase14_migration_widens_outcome_and_preserves_existing_rows(tmp_db):
         conn.close()
 
     result = apply_migrations(tmp_db)
-    assert result.applied_versions == (14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30)
+    assert result.applied_versions == (14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31)
 
     conn = storage.connect(tmp_db)
     try:
