@@ -12,8 +12,11 @@ type SearchItem = {
   score: number;
   state?: string | null;
   lifecycle?: string | null;
+  assessment_state?: string | null;
+  match_reason?: string;
+  rank?: number;
 };
-type SearchResponse = { items: SearchItem[]; total: number; page: number; page_size: number; has_more: boolean };
+type SearchResponse = { items: SearchItem[]; total: number; page: number; page_size: number; has_more: boolean; ranking?: string; facets?: Record<string, number> };
 type Health = { status: string; database: string; counts: Record<string, number>; distinctions: Record<string, string> };
 type CoverageItem = { monitor: { id: string; target_type: string; target_id: string }; coverage: Record<string, number | string | null> };
 type CoverageResponse = { items: CoverageItem[]; total: number };
@@ -23,8 +26,21 @@ type SubjectPage = {
   timeline: Array<{ id: string; event_type: string; label: string; at: string; story_id: string }>;
   historical_context: { evidence: Array<{ id: string; excerpt: string; document_title: string; source_name: string; retrieved_at: string }> };
 };
+type EntityDetail = {
+  id: string;
+  canonical_name: string;
+  entity_type: string;
+  description: string;
+  status: string;
+  aliases?: Array<{ alias: string; alias_type: string; origin: string }>;
+  claims?: Array<{ id: string; proposition: string; state: string; role: string; story_id?: string | null; evidence?: Array<{ id: string; document_id: string; source_name: string }> }>;
+  research_questions?: Array<{ id: string; question: string; status: string; assessment_state: string }>;
+  stories?: Array<{ id: string; headline?: string; lifecycle?: string }>;
+  sources?: Array<{ id: string; name: string }>;
+  tags?: Array<{ id: string; name: string; assignment_origin: string }>;
+};
 
-const ENTITY_OPTIONS = ["monitor", "source", "document", "story", "subject", "claim", "evidence", "tag", "question", "note"];
+const ENTITY_OPTIONS = ["monitor", "source", "document", "story", "subject", "claim", "evidence", "tag", "question", "note", "entity", "research_task", "report", "watch"];
 
 function asArray(value: unknown): Array<Record<string, unknown>> {
   return Array.isArray(value) ? value.filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === "object") : [];
@@ -37,6 +53,12 @@ function asText(value: unknown, fallback = "—"): string {
 export function WorkbenchView() {
   const [query, setQuery] = useState("");
   const [entityType, setEntityType] = useState("");
+  const [sourceId, setSourceId] = useState("");
+  const [storyFilter, setStoryFilter] = useState("");
+  const [questionFilter, setQuestionFilter] = useState("");
+  const [assessmentState, setAssessmentState] = useState("");
+  const [dateFrom, setDateFrom] = useState("");
+  const [dateTo, setDateTo] = useState("");
   const [searchResult, setSearchResult] = useState<SearchResponse | null>(null);
   const [searching, setSearching] = useState(false);
   const [compareIds, setCompareIds] = useState("");
@@ -44,6 +66,9 @@ export function WorkbenchView() {
   const [comparing, setComparing] = useState(false);
   const [subjectId, setSubjectId] = useState("");
   const [subject, setSubject] = useState<SubjectPage | null>(null);
+  const [entityId, setEntityId] = useState("");
+  const [entity, setEntity] = useState<EntityDetail | null>(null);
+  const [loadingEntity, setLoadingEntity] = useState(false);
   const [loadingSubject, setLoadingSubject] = useState(false);
   const [health, setHealth] = useState<Health | null>(null);
   const [coverage, setCoverage] = useState<CoverageResponse | null>(null);
@@ -66,9 +91,24 @@ export function WorkbenchView() {
     setSearching(true); setError(null);
     const params = new URLSearchParams({ q: query.trim(), page_size: "50" });
     if (entityType) params.set("entity_type", entityType);
+    if (sourceId.trim()) params.set("source_id", sourceId.trim());
+    if (storyFilter.trim()) params.set("story_id", storyFilter.trim());
+    if (questionFilter.trim()) params.set("question_id", questionFilter.trim());
+    if (assessmentState) params.set("assessment_state", assessmentState);
+    if (dateFrom) params.set("date_from", `${dateFrom}T00:00:00Z`);
+    if (dateTo) params.set("date_to", `${dateTo}T23:59:59Z`);
     try { setSearchResult(await apiFetch<SearchResponse>(`/search?${params.toString()}`)); }
     catch (caught) { setError(caught); }
     finally { setSearching(false); }
+  }
+
+  async function loadEntity(identifier: string) {
+    setEntityId(identifier);
+    setLoadingEntity(true);
+    setError(null);
+    try { setEntity(await apiFetch<EntityDetail>(`/entities/${encodeURIComponent(identifier)}`)); }
+    catch (caught) { setError(caught); }
+    finally { setLoadingEntity(false); }
   }
 
   async function runComparison(event: FormEvent) {
@@ -111,11 +151,17 @@ export function WorkbenchView() {
             <option value="">All indexed objects</option>
             {ENTITY_OPTIONS.map((option) => <option key={option} value={option}>{option}</option>)}
           </select>
+          <div className="inline-form"><label htmlFor="workbench-source">Source ID</label><input id="workbench-source" value={sourceId} onChange={(event) => setSourceId(event.target.value)} placeholder="Optional src_…" /><label htmlFor="workbench-story">Story ID</label><input id="workbench-story" value={storyFilter} onChange={(event) => setStoryFilter(event.target.value)} placeholder="Optional st_…" /></div>
+          <div className="inline-form"><label htmlFor="workbench-question">Question ID</label><input id="workbench-question" value={questionFilter} onChange={(event) => setQuestionFilter(event.target.value)} placeholder="Optional rq_…" /><label htmlFor="workbench-assessment">Assessment</label><select id="workbench-assessment" value={assessmentState} onChange={(event) => setAssessmentState(event.target.value)}><option value="">Any assessment</option><option value="open">Open</option><option value="partially_answered">Partially answered</option><option value="supported">Supported</option><option value="contradicted">Contradicted</option><option value="resolved">Resolved</option></select></div>
+          <div className="inline-form"><label htmlFor="workbench-date-from">From</label><input id="workbench-date-from" type="date" value={dateFrom} onChange={(event) => setDateFrom(event.target.value)} /><label htmlFor="workbench-date-to">To</label><input id="workbench-date-to" type="date" value={dateTo} onChange={(event) => setDateTo(event.target.value)} /></div>
           <button className="primary-button" type="submit" disabled={searching}>{searching ? "Searching…" : "Search workspace"}</button>
         </form>
         {searching && <LoadingState label="Searching evidence" />}
         {!searching && searchResult && !searchResult.items.length && <EmptyState title="No matches" description="Try fewer terms or remove the object-type filter." />}
-        {!searching && searchResult?.items.length ? <div className="workbench-result-list" aria-label="Search results">{searchResult.items.map((item) => <article className="workbench-result" key={`${item.entity_type}:${item.entity_id}`}><div><div className="workbench-result-meta"><Badge tone={item.entity_type === "evidence" ? "mint" : "neutral"}>{item.entity_type}</Badge><code>{shortId(item.entity_id)}</code></div><h3>{item.title}</h3><p>{item.snippet}</p></div><span className="workbench-score">{item.score.toFixed(2)}</span></article>)}</div> : null}
+        {!searching && searchResult?.items.length ? <div className="workbench-result-list" aria-label="Search results">{searchResult.items.map((item) => <article className="workbench-result" key={`${item.entity_type}:${item.entity_id}`}><div><div className="workbench-result-meta"><Badge tone={item.entity_type === "evidence" ? "mint" : "neutral"}>{item.entity_type}</Badge><code>{shortId(item.entity_id)}</code><small>{(item.match_reason ?? "fts_match").replace(/_/g, " ")} · rank {item.rank ?? "—"}</small></div><h3>{item.entity_type === "entity" ? <button className="link-button" type="button" onClick={() => void loadEntity(item.entity_id)}>{item.title}</button> : item.title}</h3><p>{item.snippet}</p></div><span className="workbench-score">{item.score.toFixed(2)}</span></article>)}</div> : null}
+        {searchResult && <p className="status-note">Ranking: {searchResult.ranking ?? "bounded typed retrieval"} · facets {Object.entries(searchResult.facets ?? {}).map(([key, value]) => `${key} ${value}`).join(" · ") || "none"}</p>}
+        {loadingEntity && <LoadingState label="Opening Entity detail" />}
+        {entity && !loadingEntity && <div className="subject-workbench"><div className="story-summary"><div><p className="eyebrow">{entity.entity_type} Entity · {shortId(entity.id)}</p><h2>{entity.canonical_name}</h2><p>{entity.description || "No description recorded."}</p></div><Badge tone={entity.status === "active" ? "mint" : "amber"}>{entity.status}</Badge></div><p><strong>Aliases:</strong> {(entity.aliases ?? []).map((alias) => `${alias.alias} (${alias.alias_type})`).join(" · ") || "none"}</p><div className="stats-grid"><Stat label="Claims" value={entity.claims?.length ?? 0} /><Stat label="Questions" value={entity.research_questions?.length ?? 0} /><Stat label="Sources" value={entity.sources?.length ?? 0} /><Stat label="Tags" value={entity.tags?.length ?? 0} /></div><h3>Claim pivots</h3>{entity.claims?.length ? <ul className="compact-list">{entity.claims.slice(0, 20).map((claim) => <li key={claim.id}><Badge tone={claim.state === "supported" ? "mint" : claim.state === "disputed" ? "coral" : "amber"}>{claim.state}</Badge> <code>{shortId(claim.id)}</code> {claim.proposition}</li>)}</ul> : <p className="muted">No Claims linked.</p>}<h3>Research Questions</h3>{entity.research_questions?.length ? <ul className="compact-list">{entity.research_questions.slice(0, 20).map((question) => <li key={question.id}><Badge tone={question.assessment_state === "supported" ? "mint" : "amber"}>{question.assessment_state} · {question.status}</Badge> {question.question}</li>)}</ul> : <p className="muted">No Questions linked.</p>}</div>}
       </SectionCard>
 
       <SectionCard title="Monitor coverage" description="Recorded state only. A quiet monitor and a failed run are different outcomes.">

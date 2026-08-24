@@ -351,10 +351,15 @@ class SearchService:
             if types:
                 clauses.append(f"r.entity_type IN ({', '.join('?' for _ in types)})")
                 params.extend(types)
-            for column, value in (("source_id", source_id), ("story_id", story_id), ("subject_id", subject_id), ("monitor_id", monitor_id), ("question_id", question_id), ("tag_id", tag_id), ("document_id", document_id), ("state", state), ("lifecycle", lifecycle), ("assessment_state", assessment_state)):
+            for column, value in (("source_id", source_id), ("story_id", story_id), ("subject_id", subject_id), ("monitor_id", monitor_id), ("question_id", question_id), ("document_id", document_id), ("state", state), ("lifecycle", lifecycle), ("assessment_state", assessment_state)):
                 if value is not None:
                     clauses.append(f"r.{column} = ?")
                     params.append(value)
+            if tag_id is not None:
+                clauses.append(
+                    "(r.tag_id = ? OR EXISTS (SELECT 1 FROM tag_assignments ta WHERE ta.tag_id = ? AND ta.object_type = r.entity_type AND ta.object_id = r.entity_id))"
+                )
+                params.extend((tag_id, tag_id))
             if date_from is not None:
                 clauses.append("r.created_at >= ?")
                 params.append(date_from)
@@ -386,7 +391,7 @@ class SearchService:
                 title_normalized = normalized_text(item.get("title", "")).casefold()
                 if title_normalized == query_normalized:
                     item["match_reason"] = "exact_canonical_name"
-                elif item.get("entity_type") == "entity" and query_normalized in str(item.get("body", "")).casefold().split():
+                elif item.get("entity_type") == "entity" and query_normalized and query_normalized in normalized_text(item.get("body", "")).casefold():
                     item["match_reason"] = "exact_alias"
                 else:
                     item["match_reason"] = "fts_match"
@@ -398,6 +403,72 @@ class SearchService:
             raise DomainValidation("search query could not be evaluated") from exc
         finally:
             conn.close()
+
+    def retrieve_typed(
+        self,
+        query: str,
+        *,
+        entity_types: Sequence[str] | None = None,
+        max_results: int = 100,
+        **filters: Any,
+    ) -> dict[str, Any]:
+        """Return a bounded, typed candidate set for all knowledge consumers.
+
+        The first query preserves exact multi-word matches. Individual terms
+        then provide predictable recall for questions such as ``what do we
+        know about AARO`` without introducing a second retrieval substrate.
+        Search remains the authority for filtering, ranking, and match
+        explanations; this method only merges its bounded result pages.
+        """
+        if isinstance(max_results, bool) or max_results < 1 or max_results > 100:
+            raise DomainValidation("max_results must be between 1 and 100")
+        if not isinstance(query, str) or not query.strip():
+            raise DomainValidation("retrieval query must not be empty")
+        tokens = _TOKEN_RE.findall(query.casefold())
+        queries = [query.strip(), *dict.fromkeys(token for token in tokens if len(token) >= 2)]
+        candidates: dict[tuple[str, str], dict[str, Any]] = {}
+        for candidate_query in queries[:13]:
+            try:
+                response = self.search(
+                    candidate_query,
+                    entity_types=entity_types,
+                    page_size=min(100, max_results),
+                    **filters,
+                )
+            except DomainValidation:
+                continue
+            for item in response["items"]:
+                key = (item["entity_type"], item["entity_id"])
+                existing = candidates.get(key)
+                if existing is None:
+                    candidates[key] = item
+                    continue
+                current_priority = (0 if existing.get("match_reason", "").startswith("exact_") else 1, float(existing.get("score", 0)), existing.get("rank", 0))
+                next_priority = (0 if item.get("match_reason", "").startswith("exact_") else 1, float(item.get("score", 0)), item.get("rank", 0))
+                if next_priority < current_priority:
+                    candidates[key] = item
+        items = sorted(
+            candidates.values(),
+            key=lambda item: (
+                0 if item.get("match_reason") == "exact_canonical_name" else 1 if item.get("match_reason") == "exact_alias" else 2,
+                float(item.get("score", 0)),
+                item["entity_type"],
+                item["entity_id"],
+            ),
+        )[:max_results]
+        for rank, item in enumerate(items, 1):
+            item["rank"] = rank
+        return {
+            "items": items,
+            "candidate_count": len(items),
+            "terms": list(dict.fromkeys(token.casefold() for token in tokens))[:12],
+            "bounded": True,
+            "ranking": "exact_match_then_bm25_then_entity_type_then_entity_id",
+        }
+
+
+class KnowledgeRetrievalService(SearchService):
+    """Named shared retrieval entry point for Workbench, Ask, and future pages."""
 
 
 def _placeholders(values: Sequence[str]) -> str:

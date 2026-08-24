@@ -12,6 +12,8 @@ const SCOPES = [
   { value: "question", label: "Research question" },
   { value: "subject", label: "Subject" },
   { value: "monitor", label: "Monitor" },
+  { value: "entity", label: "Entity" },
+  { value: "research_task", label: "Research task" },
 ] as const;
 
 function toneFor(statement: AskStatement): "mint" | "amber" | "coral" | "neutral" {
@@ -35,6 +37,7 @@ export function AskView() {
   const [conversation, setConversation] = useState<AskConversation | null>(null);
   const [working, setWorking] = useState(false);
   const [error, setError] = useState<unknown>(null);
+  const [researching, setResearching] = useState<string | null>(null);
 
   async function submit(event: FormEvent) {
     event.preventDefault();
@@ -105,13 +108,13 @@ export function AskView() {
       </div>
       {working && <LoadingState label="Retrieving and resolving citations" />}
       {error && <ErrorState error={error} />}
-      {conversation && <ConversationHistory conversation={conversation} />}
+      {conversation && <ConversationHistory conversation={conversation} onResearch={async (runId, option) => { setResearching(option.gap_id); setError(null); try { await apiFetch(`/ask/runs/${encodeURIComponent(runId)}/research`, { method: "POST", body: jsonBody({ gap_id: option.gap_id }) }); } catch (caught) { setError(caught); } finally { setResearching(null); } }} researching={researching} />}
       {!conversation && !working && <EmptyState title="No conversation yet" description="Start with a global question or narrow the conversation to a Story, Document, Subject, Report, or Question." />}
     </>
   );
 }
 
-function ConversationHistory({ conversation }: { conversation: AskConversation }) {
+function ConversationHistory({ conversation, onResearch, researching }: { conversation: AskConversation; onResearch: (runId: string, option: { question_id: string; gap_id: string; description: string; status: string }) => Promise<void>; researching: string | null }) {
   return (
     <SectionCard title="Conversation" description={`Scope: ${conversation.scope_type}${conversation.scope_id ? ` · ${shortId(conversation.scope_id)}` : ""}. Audit retains hashes, retrieval metadata, and citations—not raw prompts.`}>
       <div className="ask-history">
@@ -129,8 +132,9 @@ function ConversationHistory({ conversation }: { conversation: AskConversation }
           </div>}
           {turn.citations.length > 0 && <div className="ask-citations">
             <h3>Resolvable citations</h3>
-            <ul>{turn.citations.map((citation) => <li key={citation.id}><Badge tone={citation.resolvable ? "mint" : "coral"}>{citation.object_type}</Badge><span>{citation.label}</span><code>{shortId(citation.object_id)}</code></li>)}</ul>
+            <ul>{turn.citations.map((citation) => <li key={citation.id}><Badge tone={citation.resolvable ? "mint" : "coral"}>{citation.object_type}</Badge><span>{citation.label}</span><code>{shortId(citation.object_id)}</code><a className="quiet-button" href="#workbench">Open</a></li>)}</ul>
           </div>}
+          {turn.retrieval.research_options?.length ? <div className="ask-citations"><h3>Research this gap</h3><ul>{turn.retrieval.research_options.map((option) => <li key={option.gap_id}><span>{option.description}</span><button className="secondary-button" type="button" onClick={() => void onResearch(turn.run_id, option)} disabled={researching === option.gap_id}>{researching === option.gap_id ? "Queuing…" : "Research"}</button></li>)}</ul><p className="status-note">This explicitly queues the existing Phase 25 Research Task workflow; Ask itself does not treat candidate material as evidence.</p></div> : null}
           <p className="ask-audit">Retrieved {turn.retrieval.candidate_count ?? 0} candidates · context {turn.retrieval.context_units ?? 0}/{turn.retrieval.context_budget ?? "—"} units · provider {turn.provider_route ?? "local"}</p>
         </article>)}
       </div>

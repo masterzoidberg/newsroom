@@ -38,6 +38,7 @@ from .reports import AlertService, BriefingService, LivingReportService
 from .story_evolution import StoryCandidate, StoryEvolutionService
 from .workbench import ComparisonService, DiagnosticsService, SearchService, WorkbenchService
 from .ask import AskService
+from .knowledge import KnowledgeService
 
 
 class StrictModel(BaseModel):
@@ -677,6 +678,39 @@ class TagPatch(StrictModel):
     tag_type: Optional[str] = Field(default=None, pattern="^(user|smart)$")
 
 
+class EntityAliasInput(StrictModel):
+    alias: str = Field(min_length=1, max_length=500)
+    alias_type: str = Field(default="alternate_name", pattern="^(alternate_name|acronym|expanded_name|abbreviation|former_name|deterministic)$")
+    origin: Optional[str] = Field(default=None, pattern="^(user|subject|watch|article_analysis|deterministic|provider|import)$")
+
+
+class EntityCreate(StrictModel):
+    canonical_name: str = Field(min_length=1, max_length=500)
+    entity_type: str = Field(default="unknown", pattern="^(person|organization|agency|company|program|location|event|legislation|technology|publication|other|unknown)$")
+    description: str = Field(default="", max_length=5_000)
+    aliases: list[EntityAliasInput] = Field(default_factory=list, max_length=20)
+
+
+class EntityLinkCreate(StrictModel):
+    entity_id: str = Field(min_length=1, max_length=200)
+    role: str = Field(default="mentioned", pattern="^(subject|object|mentioned|context)$")
+
+
+class TagAssignmentCreate(StrictModel):
+    tag_id: Optional[str] = Field(default=None, max_length=200)
+    object_type: str = Field(pattern="^(entity|claim|evidence|document|story|research_question|research_gap|research_task|source|watch|article_analysis)$")
+    object_id: str = Field(min_length=1, max_length=200)
+    origin: str = Field(default="user", pattern="^(user|deterministic|provider|import|backfill)$")
+    confidence: Optional[float] = Field(default=None, ge=0.0, le=1.0)
+    reason: str = Field(default="", max_length=2_000)
+
+
+class KnowledgeBackfillCreate(StrictModel):
+    kind: str = Field(pattern="^(article_analysis_entities|smart_tags)$")
+    row_limit: int = Field(default=500, ge=1, le=10_000)
+    batch_size: int = Field(default=25, ge=1, le=100)
+
+
 class StoryTagCreate(StrictModel):
     tag_id: str = Field(min_length=1, max_length=200)
 
@@ -749,7 +783,7 @@ class NoteCreate(StrictModel):
 
 
 class AskConversationCreate(StrictModel):
-    scope_type: str = Field(default="global", pattern="^(global|story|claim|evidence|document|report|question|research_question|subject|monitor|note)$")
+    scope_type: str = Field(default="global", pattern="^(global|story|claim|evidence|document|report|question|research_question|subject|monitor|note|entity|research_task)$")
     scope_id: Optional[str] = Field(default=None, max_length=200)
 
 
@@ -761,7 +795,7 @@ class AskTurnCreate(StrictModel):
 
 
 class AskDirectCreate(AskTurnCreate):
-    scope_type: str = Field(default="global", pattern="^(global|story|claim|evidence|document|report|question|research_question|subject|monitor|note)$")
+    scope_type: str = Field(default="global", pattern="^(global|story|claim|evidence|document|report|question|research_question|subject|monitor|note|entity|research_task)$")
     scope_id: Optional[str] = Field(default=None, max_length=200)
 
 
@@ -876,6 +910,7 @@ def create_domain_router(
     workbench = WorkbenchService(service.db_path)
     ask = AskService(service.db_path)
     analyses = ArticleAnalysisService(service.db_path)
+    knowledge = KnowledgeService(service.db_path)
 
     def read_guard(request: Request):
         return require_user(request)
@@ -941,6 +976,20 @@ def create_domain_router(
         write_guard(request)
         return ask.cancel(identifier)
 
+    @router.post("/ask/runs/{identifier}/research", status_code=201)
+    async def research_from_ask(request: Request, identifier: str, payload: ResearchQuestionPursuitCreate):
+        write_guard(request)
+        run = ask.get_run(identifier)
+        options = run.get("retrieval", {}).get("research_options", [])
+        if not options and not payload.gap_id:
+            raise DomainValidation("Ask run did not identify an open Research Question or Evidence Gap")
+        question_id = next((item.get("question_id") for item in options if item.get("gap_id") == payload.gap_id), None) if payload.gap_id else next((item.get("question_id") for item in options), None)
+        if question_id is None:
+            raise DomainValidation("gap_id is not an open gap identified by this Ask run")
+        values = payload.model_dump()
+        values["gap_id"] = payload.gap_id or options[0].get("gap_id")
+        return research.pursue(question_id, **values)
+
     @router.get("/search")
     async def search_workspace(
         request: Request,
@@ -954,6 +1003,7 @@ def create_domain_router(
         tag_id: Optional[str] = None,
         document_id: Optional[str] = None,
         state: Optional[str] = None,
+        assessment_state: Optional[str] = None,
         lifecycle: Optional[str] = None,
         date_from: Optional[str] = None,
         date_to: Optional[str] = None,
@@ -972,12 +1022,82 @@ def create_domain_router(
             tag_id=tag_id,
             document_id=document_id,
             state=state,
+            assessment_state=assessment_state,
             lifecycle=lifecycle,
             date_from=date_from,
             date_to=date_to,
             page=page,
             page_size=page_size,
         )
+
+    @router.get("/entities")
+    async def entities(
+        request: Request,
+        q: Optional[str] = None,
+        entity_type: Optional[str] = None,
+        status: Optional[str] = None,
+        page: int = Query(1, ge=1),
+        page_size: int = Query(25, ge=1, le=100),
+    ):
+        read_guard(request)
+        return knowledge.list_entities(q=q, entity_type=entity_type, status=status, page=page, page_size=page_size)
+
+    @router.post("/entities", status_code=201)
+    async def create_entity(request: Request, payload: EntityCreate):
+        write_guard(request)
+        return knowledge.create_entity(payload.model_dump(exclude_none=True))
+
+    @router.get("/entities/{identifier}")
+    async def entity_detail(request: Request, identifier: str):
+        read_guard(request)
+        return knowledge.get_entity(identifier)
+
+    @router.post("/entities/{identifier}/aliases", status_code=201)
+    async def entity_alias(request: Request, identifier: str, payload: EntityAliasInput):
+        write_guard(request)
+        return knowledge.add_alias(identifier, payload.model_dump(exclude_none=True))
+
+    @router.post("/entities/{identifier}/tags", status_code=201)
+    async def entity_tag(request: Request, identifier: str, payload: TagAssignmentCreate):
+        write_guard(request)
+        if payload.tag_id is None or payload.object_type != "entity" or payload.object_id != identifier:
+            raise DomainValidation("Entity tag assignment must target the path Entity")
+        return knowledge.assign_tag(payload.tag_id, "entity", identifier, origin=payload.origin, confidence=payload.confidence, reason=payload.reason)
+
+    @router.post("/tags/{identifier}/assignments", status_code=201)
+    async def tag_assignment(request: Request, identifier: str, payload: TagAssignmentCreate):
+        write_guard(request)
+        return knowledge.assign_tag(identifier, payload.object_type, payload.object_id, origin=payload.origin, confidence=payload.confidence, reason=payload.reason)
+
+    @router.post("/claims/{claim_id}/entities", status_code=201)
+    async def claim_entity_link(request: Request, claim_id: str, payload: EntityLinkCreate):
+        write_guard(request)
+        return knowledge.link_claim_entity(claim_id, payload.entity_id, role=payload.role, origin="user")
+
+    @router.post("/research-questions/{identifier}/entities", status_code=201)
+    async def research_question_entity_link(request: Request, identifier: str, payload: EntityLinkCreate):
+        write_guard(request)
+        return knowledge.link_research_question_entity(identifier, payload.entity_id, origin="user")
+
+    @router.post("/watches/{identifier}/entities", status_code=201)
+    async def watch_entity_link(request: Request, identifier: str, payload: EntityLinkCreate):
+        write_guard(request)
+        return knowledge.link_watch_entity(identifier, payload.entity_id, origin="user")
+
+    @router.post("/entities/backfill", status_code=202)
+    async def start_knowledge_backfill(request: Request, payload: KnowledgeBackfillCreate):
+        write_guard(request)
+        return knowledge.start_backfill(payload.kind, row_limit=payload.row_limit, batch_size=payload.batch_size)
+
+    @router.get("/entities/backfill/{identifier}")
+    async def knowledge_backfill(request: Request, identifier: str):
+        read_guard(request)
+        return knowledge.get_backfill(identifier)
+
+    @router.post("/entities/backfill/{identifier}/run")
+    async def run_knowledge_backfill(request: Request, identifier: str):
+        write_guard(request)
+        return knowledge.run_backfill(identifier)
 
     @router.post("/comparisons")
     @router.post("/compare")

@@ -905,6 +905,89 @@ def check_database(db_path: Optional[str] = None) -> IntegrityReport:
                             f"job={job['id']}",
                         )
                     )
+        # Phase 26 — canonical knowledge relationships. Foreign keys protect
+        # most rows; these explicit checks cover polymorphic assignments and
+        # the provenance distinction between mentions and Evidence Spans.
+        if _table_exists(conn, "entities"):
+            rows = conn.execute(
+                """
+                SELECT a.id, a.entity_id
+                FROM entity_aliases a
+                LEFT JOIN entities e ON e.id = a.entity_id
+                WHERE e.id IS NULL
+                ORDER BY a.id
+                """
+            ) if _table_exists(conn, "entity_aliases") else []
+            issues.extend(IntegrityIssue("orphan_entity_alias", f"alias={row[0]} entity={row[1]}") for row in rows)
+
+            rows = conn.execute(
+                """
+                SELECT m.id, m.entity_id, m.source_type, m.source_id
+                FROM entity_mentions m
+                LEFT JOIN entities e ON e.id = m.entity_id
+                WHERE (m.entity_id IS NOT NULL AND e.id IS NULL)
+                   OR (m.source_type = 'article_analysis' AND NOT EXISTS (SELECT 1 FROM article_analyses a WHERE a.id = m.source_id))
+                   OR (m.source_type = 'document_version' AND NOT EXISTS (SELECT 1 FROM document_versions d WHERE d.id = m.source_id))
+                ORDER BY m.id
+                """
+            ) if _table_exists(conn, "entity_mentions") else []
+            issues.extend(IntegrityIssue("invalid_entity_mention", f"mention={row[0]} entity={row[1]} source={row[2]}:{row[3]}") for row in rows)
+
+        if _table_exists(conn, "tag_assignments"):
+            target_tables = {
+                "entity": "entities", "claim": "claims", "evidence": "evidence_spans",
+                "document": "documents", "story": "stories", "research_question": "research_questions",
+                "research_gap": "research_question_gaps", "research_task": "research_tasks",
+                "source": "sources", "watch": "watches", "article_analysis": "article_analyses",
+            }
+            for object_type, table in target_tables.items():
+                if not _table_exists(conn, table):
+                    continue
+                rows = conn.execute(
+                    f"""
+                    SELECT ta.id, ta.object_id
+                    FROM tag_assignments ta
+                    WHERE ta.object_type = ?
+                      AND NOT EXISTS (SELECT 1 FROM {table} target WHERE target.id = ta.object_id)
+                    ORDER BY ta.id
+                    """,
+                    (object_type,),
+                )
+                issues.extend(IntegrityIssue("orphan_tag_assignment", f"assignment={row[0]} type={object_type} object={row[1]}") for row in rows)
+
+        if _table_exists(conn, "entity_merges"):
+            rows = conn.execute(
+                """
+                SELECT m.id, m.from_entity_id, m.into_entity_id
+                FROM entity_merges m
+                LEFT JOIN entities source ON source.id = m.from_entity_id
+                LEFT JOIN entities target ON target.id = m.into_entity_id
+                WHERE source.id IS NULL OR target.id IS NULL OR m.from_entity_id = m.into_entity_id
+                ORDER BY m.id
+                """
+            )
+            issues.extend(IntegrityIssue("invalid_entity_merge", f"merge={row[0]} from={row[1]} into={row[2]}") for row in rows)
+
+        if _table_exists(conn, "ask_runs"):
+            citation_tables = {
+                "story": "stories", "claim": "claims", "evidence": "evidence_spans", "document": "documents",
+                "report": "living_reports", "report_revision": "report_revisions", "question": "research_questions",
+                "subject": "subjects", "monitor": "monitors", "note": "notes", "question_note": "research_question_notes",
+                "source": "sources", "entity": "entities", "research_gap": "research_question_gaps", "research_task": "research_tasks", "watch": "watches", "article_analysis": "article_analyses",
+            }
+            for run in conn.execute("SELECT id, citations_json FROM ask_runs WHERE citations_json IS NOT NULL ORDER BY id"):
+                try:
+                    citations = json.loads(run[1])
+                except (TypeError, ValueError, json.JSONDecodeError):
+                    citations = None
+                if not isinstance(citations, list):
+                    issues.append(IntegrityIssue("invalid_ask_citations", f"run={run[0]} citations_json is not a list"))
+                    continue
+                for citation in citations:
+                    table = citation_tables.get(citation.get("object_type")) if isinstance(citation, dict) else None
+                    if table and _table_exists(conn, table) and conn.execute(f"SELECT 1 FROM {table} WHERE id = ?", (citation.get("object_id"),)).fetchone() is None:
+                        issues.append(IntegrityIssue("orphan_ask_citation", f"run={run[0]} target={citation.get('object_type')}:{citation.get('object_id')}"))
+
         return IntegrityReport(not issues, tuple(issues))
     finally:
         conn.close()

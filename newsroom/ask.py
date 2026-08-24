@@ -9,11 +9,11 @@ from typing import Any, Callable, Mapping, Sequence
 
 from . import storage
 from .domain import DomainConflict, DomainNotFound, DomainValidation, new_id, utc_now
-from .workbench import SearchService
+from .workbench import KnowledgeRetrievalService
 
 
 SCOPE_TYPES = frozenset(
-    {"global", "story", "claim", "evidence", "document", "report", "question", "subject", "monitor", "note"}
+    {"global", "story", "claim", "evidence", "document", "report", "question", "subject", "monitor", "note", "entity", "research_task"}
 )
 PROMPT_LIMIT = 4_000
 CONTEXT_LIMIT = 12_000
@@ -43,6 +43,8 @@ OBJECT_TABLES = {
     "subject": ("subjects", True),
     "monitor": ("monitors", False),
     "note": ("notes", False),
+    "entity": ("entities", False),
+    "research_task": ("research_tasks", False),
 }
 
 
@@ -120,7 +122,7 @@ class AskService:
         self.max_context_units = max_context_units
         self.max_citations = max_citations
         self.hosted_enabled = hosted_enabled
-        self.search = SearchService(db_path)
+        self.search = KnowledgeRetrievalService(db_path)
 
     def create_conversation(self, *, scope_type: str = "global", scope_id: str | None = None) -> dict[str, Any]:
         scope_type = self._normalize_scope_type(scope_type)
@@ -329,19 +331,14 @@ class AskService:
     ) -> dict[str, Any]:
         terms = _tokens(prompt)
         if not terms:
-            return {"items": [], "claims": {}, "evidence": {}, "notes": [], "reports": [], "questions": [], "terms": []}
-        items: dict[tuple[str, str], dict[str, Any]] = {}
-        for query in [" ".join(terms[:6]), *terms[:8]]:
-            if self._cancelled(run_id, cancel_check):
-                return {"cancelled": True}
-            try:
-                response = self.search.search(query, page_size=100)
-            except DomainValidation:
-                continue
-            for item in response["items"]:
-                key = (item["entity_type"], item["entity_id"])
-                if key not in items or float(item.get("score", 0)) < float(items[key].get("score", 0)):
-                    items[key] = item
+            return {"items": [], "claims": {}, "evidence": {}, "notes": [], "reports": [], "questions": [], "gaps": [], "tasks": [], "terms": [], "packet_ids": []}
+        if self._cancelled(run_id, cancel_check):
+            return {"cancelled": True}
+        try:
+            shared = self.search.retrieve_typed(prompt, max_results=100)
+        except DomainValidation:
+            shared = {"items": [], "candidate_count": 0, "terms": terms}
+        items = {(item["entity_type"], item["entity_id"]): item for item in shared.get("items", [])}
 
         conn = storage.connect(self.db_path)
         try:
@@ -352,14 +349,17 @@ class AskService:
             evidence_ids: set[str] = set()
             note_ids: set[str] = set()
             question_ids: set[str] = set()
+            task_ids: set[str] = set()
             for item in items.values():
-                self._expand_item(conn, item, claim_ids, evidence_ids, note_ids, question_ids)
+                self._expand_item(conn, item, claim_ids, evidence_ids, note_ids, question_ids, task_ids)
             claims = self._load_claims(conn, sorted(claim_ids))
             evidence = self._load_evidence(conn, sorted(evidence_ids | {ev["id"] for claim in claims.values() for ev in claim["evidence"]}))
             notes = self._load_notes(conn, sorted(note_ids))
             notes.extend(self._load_question_notes(conn, sorted(question_ids)))
             questions = self._load_questions(conn, sorted(question_ids))
             reports = self._load_reports(conn, [item["entity_id"] for item in items.values() if item["entity_type"] == "report"])
+            gaps = self._load_gaps(conn, sorted(question_ids))
+            tasks = self._load_tasks(conn, sorted(task_ids | {gap["task_id"] for gap in gaps if gap.get("task_id")} | {item["entity_id"] for item in items.values() if item["entity_type"] == "research_task"}))
             context_units = 0
             selected_evidence: dict[str, dict[str, Any]] = {}
             for evidence_id, item in sorted(evidence.items(), key=lambda pair: (float(pair[1].get("score", 0)), pair[0])):
@@ -368,6 +368,32 @@ class AskService:
                     continue
                 selected_evidence[evidence_id] = item
                 context_units += units
+            packet_ids: set[str] = set()
+            for item in items.values():
+                packet_ids.add(f"{item['entity_type']}:{item['entity_id']}")
+            for identifier in claims:
+                packet_ids.add(f"claim:{identifier}")
+            for identifier, item in selected_evidence.items():
+                packet_ids.add(f"evidence:{identifier}")
+                if item.get("document_id"):
+                    packet_ids.add(f"document:{item['document_id']}")
+                if item.get("source_id"):
+                    packet_ids.add(f"source:{item['source_id']}")
+            for question in questions:
+                packet_ids.add(f"question:{question['id']}")
+            for note in notes:
+                note_type = note.get("citation_type", "note")
+                note_id = note.get("citation_id", note.get("id"))
+                if note_id:
+                    packet_ids.add(f"{note_type}:{note_id}")
+            for gap in gaps:
+                packet_ids.add(f"research_gap:{gap['id']}")
+            for task in tasks:
+                packet_ids.add(f"research_task:{task['id']}")
+            for report in reports:
+                packet_ids.add(f"report:{report['id']}")
+                if report.get("current_revision_id"):
+                    packet_ids.add(f"report_revision:{report['current_revision_id']}")
             return {
                 "items": list(items.values()),
                 "claims": claims,
@@ -375,16 +401,20 @@ class AskService:
                 "notes": notes,
                 "questions": questions,
                 "reports": reports,
+                "gaps": gaps,
+                "tasks": tasks,
                 "terms": terms,
                 "context_units": context_units,
                 "context_truncated": len(selected_evidence) < len(evidence),
                 "scope": {"type": scope_type, "id": scope_id},
+                "packet_ids": sorted(packet_ids),
+                "retrieval_ranking": shared.get("ranking", "exact_match_then_bm25_then_entity_type_then_entity_id"),
             }
         finally:
             conn.close()
 
     def _scope_sets(self, conn, scope_type: str, scope_id: str | None) -> dict[str, Any]:
-        empty = {key: set() for key in ("stories", "claims", "evidence", "documents", "subjects", "questions", "monitors", "reports", "notes")}
+        empty = {key: set() for key in ("stories", "claims", "evidence", "documents", "subjects", "questions", "monitors", "reports", "notes", "entities", "gaps", "tasks")}
         empty["_primary_type"] = scope_type
         empty["_primary_id"] = scope_id
         if scope_type == "global":
@@ -424,6 +454,19 @@ class AskService:
             empty["reports"].add(scope_id)
         elif scope_type == "note":
             empty["notes"].add(scope_id)
+        elif scope_type == "entity":
+            empty["entities"].add(scope_id)
+            empty["claims"].update(row[0] for row in conn.execute("SELECT claim_id FROM claim_entities WHERE entity_id = ?", (scope_id,)))
+            empty["stories"].update(row[0] for row in conn.execute("SELECT story_id FROM story_entities WHERE entity_id = ?", (scope_id,)))
+            empty["questions"].update(row[0] for row in conn.execute("SELECT question_id FROM research_question_entities WHERE entity_id = ?", (scope_id,)))
+            empty["gaps"].update(row[0] for row in conn.execute("SELECT gap_id FROM research_gap_entities WHERE entity_id = ?", (scope_id,)))
+            empty["tasks"].update(row[0] for row in conn.execute("SELECT task_id FROM research_task_entities WHERE entity_id = ?", (scope_id,)))
+        elif scope_type == "research_task":
+            empty["tasks"].add(scope_id)
+            row = conn.execute("SELECT question_id, gap_id FROM research_tasks WHERE id = ?", (scope_id,)).fetchone()
+            if row:
+                empty["questions"].add(row[0])
+                empty["gaps"].add(row[1])
         if empty["stories"]:
             empty["claims"].update(row[0] for row in conn.execute("SELECT id FROM claims WHERE story_id IN ({})".format(_placeholders(empty["stories"])), tuple(empty["stories"])))
         if empty["claims"]:
@@ -432,6 +475,12 @@ class AskService:
             empty["evidence"].update(row[0] for row in conn.execute("SELECT es.id FROM evidence_spans es JOIN document_versions dv ON dv.id = es.document_version_id WHERE dv.document_id IN ({})".format(_placeholders(empty["documents"])), tuple(empty["documents"])))
         if empty["evidence"]:
             empty["claims"].update(row[0] for row in conn.execute("SELECT claim_id FROM claim_evidence WHERE evidence_span_id IN ({})".format(_placeholders(empty["evidence"])), tuple(empty["evidence"])))
+        if empty["questions"]:
+            empty["claims"].update(row[0] for row in conn.execute("SELECT claim_id FROM research_question_claims WHERE question_id IN ({})".format(_placeholders(empty["questions"])), tuple(empty["questions"])))
+            empty["evidence"].update(row[0] for row in conn.execute("SELECT evidence_span_id FROM research_question_evidence WHERE question_id IN ({})".format(_placeholders(empty["questions"])), tuple(empty["questions"])))
+            empty["gaps"].update(row[0] for row in conn.execute("SELECT id FROM research_question_gaps WHERE question_id IN ({})".format(_placeholders(empty["questions"])), tuple(empty["questions"])))
+        if empty["gaps"]:
+            empty["tasks"].update(row[0] for row in conn.execute("SELECT id FROM research_tasks WHERE gap_id IN ({})".format(_placeholders(empty["gaps"])), tuple(empty["gaps"])))
         return empty
 
     def _item_in_scope(self, item: Mapping[str, Any], scope: Mapping[str, Any]) -> bool:
@@ -439,7 +488,7 @@ class AskService:
             return True
         entity = item["entity_type"]
         identifier = item["entity_id"]
-        mapping = {"story": "stories", "claim": "claims", "evidence": "evidence", "document": "documents", "subject": "subjects", "question": "questions", "monitor": "monitors", "note": "notes", "report": "reports"}
+        mapping = {"story": "stories", "claim": "claims", "evidence": "evidence", "document": "documents", "subject": "subjects", "question": "questions", "monitor": "monitors", "note": "notes", "report": "reports", "entity": "entities", "research_task": "tasks"}
         primary_type = scope.get("_primary_type")
         if primary_type == "claim":
             return (entity == "claim" and identifier == scope.get("_primary_id")) or (entity == "evidence" and identifier in scope.get("evidence", set())) or (entity == "document" and identifier in scope.get("documents", set()))
@@ -451,11 +500,15 @@ class AskService:
             return entity in {"question", "claim", "evidence", "note"} and (identifier in scope.get(mapping.get(entity, ""), set()) or item.get("question_id") in scope.get("questions", set()))
         if primary_type == "note":
             return entity == "note" and identifier == scope.get("_primary_id")
+        if primary_type == "entity":
+            return entity == "entity" and identifier == scope.get("_primary_id") or item.get("entity_id") in scope.get("entities", set()) or item.get("entity_id") in scope.get("claims", set()) and entity == "claim" or item.get("question_id") in scope.get("questions", set())
+        if primary_type == "research_task":
+            return entity == "research_task" and identifier == scope.get("_primary_id") or item.get("question_id") in scope.get("questions", set()) or item.get("entity_id") in scope.get("claims", set()) and entity == "claim"
         if primary_type == "report":
             return entity in {"report", "claim", "evidence"} and identifier in scope.get(mapping.get(entity, ""), set())
         if identifier in scope.get(mapping.get(entity, ""), set()):
             return True
-        for key, scope_key in (("story_id", "stories"), ("document_id", "documents"), ("subject_id", "subjects"), ("question_id", "questions"), ("monitor_id", "monitors")):
+        for key, scope_key in (("story_id", "stories"), ("document_id", "documents"), ("subject_id", "subjects"), ("question_id", "questions"), ("monitor_id", "monitors"), ("entity_id", "entities")):
             if item.get(key) and item[key] in scope.get(scope_key, set()):
                 return True
         return False
@@ -472,7 +525,7 @@ class AskService:
         for row in rows:
             items[("report", row["id"])] = {"entity_type": "report", "entity_id": row["id"], "title": row["name"], "body": "living report", "score": 0.0, "report_revision_id": row["current_revision_id"]}
 
-    def _expand_item(self, conn, item: Mapping[str, Any], claim_ids: set[str], evidence_ids: set[str], note_ids: set[str], question_ids: set[str]) -> None:
+    def _expand_item(self, conn, item: Mapping[str, Any], claim_ids: set[str], evidence_ids: set[str], note_ids: set[str], question_ids: set[str], task_ids: set[str]) -> None:
         entity, identifier = item["entity_type"], item["entity_id"]
         if entity == "claim":
             claim_ids.add(identifier)
@@ -498,12 +551,22 @@ class AskService:
             revision_id = item.get("report_revision_id")
             if revision_id:
                 claim_ids.update(row[0] for row in conn.execute("SELECT claim_id FROM report_revision_claims WHERE revision_id = ?", (revision_id,)))
+        elif entity == "entity":
+            claim_ids.update(row[0] for row in conn.execute("SELECT claim_id FROM claim_entities WHERE entity_id = ?", (identifier,)))
+            question_ids.update(row[0] for row in conn.execute("SELECT question_id FROM research_question_entities WHERE entity_id = ?", (identifier,)))
+        elif entity == "research_task":
+            task_ids.add(identifier)
+            row = conn.execute("SELECT question_id, gap_id FROM research_tasks WHERE id = ?", (identifier,)).fetchone()
+            if row:
+                question_ids.add(row[0])
+                claim_ids.update(item[0] for item in conn.execute("SELECT claim_id FROM research_question_claims WHERE question_id = ?", (row[0],)))
 
-    def _expand_scope(self, scope: Mapping[str, set[str]], claim_ids: set[str], evidence_ids: set[str], note_ids: set[str], question_ids: set[str]) -> None:
+    def _expand_scope(self, scope: Mapping[str, set[str]], claim_ids: set[str], evidence_ids: set[str], note_ids: set[str], question_ids: set[str], task_ids: set[str]) -> None:
         claim_ids.update(scope.get("claims", set()))
         evidence_ids.update(scope.get("evidence", set()))
         note_ids.update(scope.get("notes", set()))
         question_ids.update(scope.get("questions", set()))
+        task_ids.update(scope.get("tasks", set()))
 
     def _load_claims(self, conn, identifiers: Sequence[str]) -> dict[str, dict[str, Any]]:
         if not identifiers:
@@ -571,7 +634,30 @@ class AskService:
     def _load_questions(self, conn, identifiers: Sequence[str]) -> list[dict[str, Any]]:
         if not identifiers:
             return []
-        return [dict(row) for row in conn.execute("SELECT id, question, status, priority, resolution_note FROM research_questions WHERE id IN ({}) ORDER BY id".format(_placeholders(identifiers)), tuple(identifiers)).fetchall()]
+        return [dict(row) for row in conn.execute("SELECT id, question, status, priority, resolution_note, assessment_state, assessment_explanation FROM research_questions WHERE id IN ({}) ORDER BY id".format(_placeholders(identifiers)), tuple(identifiers)).fetchall()]
+
+    def _load_gaps(self, conn, identifiers: Sequence[str]) -> list[dict[str, Any]]:
+        if not identifiers:
+            return []
+        rows = conn.execute(
+            """
+            SELECT g.id, g.question_id, g.gap_type, g.description, g.status,
+                   (SELECT t.id FROM research_tasks t WHERE t.gap_id = g.id ORDER BY t.created_at DESC, t.id DESC LIMIT 1) AS task_id
+            FROM research_question_gaps g
+            WHERE g.question_id IN ({}) ORDER BY g.question_id, g.created_at, g.id
+            """.format(_placeholders(identifiers)),
+            tuple(identifiers),
+        ).fetchall()
+        return [dict(row) for row in rows]
+
+    def _load_tasks(self, conn, identifiers: Sequence[str]) -> list[dict[str, Any]]:
+        if not identifiers:
+            return []
+        rows = conn.execute(
+            "SELECT id, question_id, gap_id, task_no, mode, status, outcome_json, error_code FROM research_tasks WHERE id IN ({}) ORDER BY created_at, id".format(_placeholders(identifiers)),
+            tuple(identifiers),
+        ).fetchall()
+        return [{**dict(row), "outcome": _load_json(row["outcome_json"], {})} for row in rows]
 
     def _load_reports(self, conn, identifiers: Sequence[str]) -> list[dict[str, Any]]:
         if not identifiers:
@@ -582,8 +668,11 @@ class AskService:
     def _compose(self, run_id: str, conversation_id: str, turn_number: int, prompt: str, retrieved: Mapping[str, Any], context_budget: int) -> dict[str, Any]:
         citation_map: dict[tuple[str, str], dict[str, Any]] = {}
         statements: list[dict[str, Any]] = []
+        packet_ids = set(retrieved.get("packet_ids", []))
 
         def cite(object_type: str, object_id: str, label: str, *, kind: str, **extra: Any) -> str:
+            if packet_ids and f"{object_type}:{object_id}" not in packet_ids:
+                return ""
             key = (object_type, object_id)
             existing = citation_map.get(key)
             if existing:
@@ -602,6 +691,21 @@ class AskService:
 
         stale_count = 0
         story_ids: set[str] = set()
+        claims_list = list(retrieved.get("claims", {}).values())
+        conflicting_claim_ids: set[str] = set()
+        conflict_pairs: list[tuple[dict[str, Any], dict[str, Any]]] = []
+        for index, left in enumerate(claims_list):
+            left_tokens = set(TOKEN_RE.findall(left.get("proposition", "").casefold()))
+            left_negated = bool(left_tokens & {"no", "not", "never", "without", "denied", "denies"})
+            left_base = left_tokens - {"no", "not", "never", "without", "denied", "denies", "did", "does"}
+            for right in claims_list[index + 1:]:
+                right_tokens = set(TOKEN_RE.findall(right.get("proposition", "").casefold()))
+                right_negated = bool(right_tokens & {"no", "not", "never", "without", "denied", "denies"})
+                right_base = right_tokens - {"no", "not", "never", "without", "denied", "denies", "did", "does"}
+                overlap = len(left_base & right_base) / max(1, min(len(left_base), len(right_base)))
+                if left_negated != right_negated and overlap >= 0.7:
+                    conflicting_claim_ids.update((left["id"], right["id"]))
+                    conflict_pairs.append((left, right))
         for claim in retrieved.get("claims", {}).values():
             if claim.get("story_id") is not None:
                 story_ids.add(claim["story_id"])
@@ -622,13 +726,31 @@ class AskService:
                 (contradictions if evidence["relationship"] == "contradicts" else support).append(evidence)
                 if _is_stale(evidence["retrieved_at"], stale_after_days=self.stale_after_days):
                     stale_count += 1
-            all_citations = [claim_citation, *evidence_citations]
+            source_citations = []
+            source_pairs = {(evidence.get("source_id"), evidence.get("source_name")) for evidence in claim["evidence"] if evidence["id"] in retrieved.get("evidence", {}) and evidence.get("source_id")}
+            for source_id, source_name in sorted(source_pairs):
+                source_citations.append(cite("source", source_id, source_name or source_id, kind="source"))
+            all_citations = [claim_citation, *evidence_citations, *source_citations]
+            if claim["id"] in conflicting_claim_ids:
+                continue
             if contradictions or claim["state"] == "disputed":
                 add_statement(f"The record conflicts about: {claim['proposition']}", "contradiction", all_citations)
             elif support and claim["state"] in {"supported", "partially_supported"}:
                 add_statement(claim["proposition"], "fact", all_citations)
             elif all_citations:
                 add_statement(f"The record does not fully establish: {claim['proposition']}", "uncertainty", all_citations)
+
+        for left, right in conflict_pairs:
+            left_citation = cite("claim", left["id"], left["proposition"], kind="claim", state=left["state"])
+            right_citation = cite("claim", right["id"], right["proposition"], kind="claim", state=right["state"])
+            evidence_citations = []
+            for claim in (left, right):
+                evidence_citations.extend(
+                    cite("evidence", evidence["id"], evidence["excerpt"], kind="evidence", document_id=evidence.get("document_id"), document_version_id=evidence.get("document_version_id"), source_id=evidence.get("source_id"), retrieved_at=evidence.get("retrieved_at"), locator_type=evidence.get("locator_type"), locator_value=evidence.get("locator_value"))
+                    for evidence in claim["evidence"]
+                    if evidence["id"] in retrieved.get("evidence", {})
+                )
+            add_statement(f"The retrieved Claims disagree: {left['proposition']} / {right['proposition']}", "contradiction", [left_citation, right_citation, *evidence_citations])
 
         for note in retrieved.get("notes", []):
             citation_type = note.get("citation_type", "note")
@@ -640,9 +762,19 @@ class AskService:
                 add_statement(f"User note: {note['body']}", "context", [note_citation])
 
         for question in retrieved.get("questions", []):
-            question_citation = cite("question", question["id"], question["question"], kind="question", state=question["status"])
-            if question["status"] != "resolved":
-                add_statement(f"Uncertainty remains: {question['question']}", "uncertainty", [question_citation])
+            question_citation = cite("question", question["id"], question["question"], kind="question", state=question["status"], assessment_state=question.get("assessment_state"))
+            if question["status"] != "resolved" or question.get("assessment_state") not in {"supported", "resolved"}:
+                add_statement(f"Question lifecycle: {question['status']}. Evidence assessment: {question.get('assessment_state', 'open')}. {question['question']}", "uncertainty", [question_citation])
+
+        for gap in retrieved.get("gaps", []):
+            if gap.get("status") in {"open", "pursuing"}:
+                gap_citation = cite("research_gap", gap["id"], gap["description"], kind="research_gap", question_id=gap["question_id"], state=gap["status"])
+                add_statement(f"Open evidence gap: {gap['description']}", "uncertainty", [gap_citation])
+
+        for task in retrieved.get("tasks", []):
+            task_citation = cite("research_task", task["id"], f"Research task {task['task_no']}", kind="research_task", question_id=task["question_id"], gap_id=task["gap_id"], state=task["status"])
+            if task.get("status") not in {"completed", "completed_with_evidence"}:
+                add_statement(f"Research task state: {task['status']}", "uncertainty", [task_citation])
 
         for report in retrieved.get("reports", []):
             citation_type = "report_revision" if report["current_revision_id"] else "report"
@@ -653,8 +785,14 @@ class AskService:
                 add_statement(f"Report status: {status}", "fact", [report_citation])
 
         for item in retrieved.get("items", []):
-            if item["entity_type"] in {"story", "subject", "document"}:
+            if item["entity_type"] in {"story", "subject", "document", "entity", "source", "watch", "monitor"}:
                 cite(item["entity_type"], item["entity_id"], item.get("title", item["entity_id"]), kind=item["entity_type"])
+
+        source_ids = {evidence.get("source_id") for evidence in retrieved.get("evidence", {}).values() if evidence.get("source_id")}
+        document_ids = {evidence.get("document_id") for evidence in retrieved.get("evidence", {}).values() if evidence.get("document_id")}
+        if source_ids and statements:
+            source_citations = [cite("source", source_id, next((evidence.get("source_name") for evidence in retrieved.get("evidence", {}).values() if evidence.get("source_id") == source_id), source_id), kind="source") for source_id in sorted(source_ids)]
+            add_statement(f"The retrieved material represents {len(source_ids)} distinct Source record{'' if len(source_ids) == 1 else 's'} across {len(document_ids)} Document{'' if len(document_ids) == 1 else 's'}; multiple Documents from one Source are not independent confirmations.", "context", source_citations)
 
         fact_citations = [citation_id for statement in statements if statement["classification"] == "fact" for citation_id in statement["citation_ids"]]
         if fact_citations and re.search(r"\b(?:why|how|suggest|likely|mean|implication)\b", prompt.casefold()):
@@ -671,11 +809,11 @@ class AskService:
         citations = list(citation_map.values())
         conn = storage.connect(self.db_path)
         try:
-            citations = [self._resolve_citation(conn, citation) for citation in citations]
+            citations = [self._resolve_citation(conn, citation, packet_ids=packet_ids) for citation in citations]
         finally:
             conn.close()
         if not statements:
-            return self._refused_result(run_id, conversation_id, turn_number, "insufficient_evidence", "I could not find enough resolvable Newsroom evidence to answer that question.", retrieval=self._retrieval_metadata(retrieved, context_budget), citations=[])
+            return self._refused_result(run_id, conversation_id, turn_number, "insufficient_evidence", "Newsroom does not have enough qualifying Claim and Evidence records to answer that question.", retrieval=self._retrieval_metadata(retrieved, context_budget), citations=citations)
         status = "qualified" if any(item["classification"] in {"uncertainty", "contradiction"} for item in statements) else "answered"
         answer_lines = [f"{item['classification'].replace('_', ' ').capitalize()}: {item['text']} [{', '.join(item['citation_ids'])}]" for item in statements]
         return {
@@ -698,6 +836,7 @@ class AskService:
             "candidate_count": len(items),
             "entity_types": sorted({item["entity_type"] for item in items}),
             "retrieved_object_ids": [f"{item['entity_type']}:{item['entity_id']}" for item in items[:100]],
+            "packet_ids": sorted(retrieved.get("packet_ids", []))[:300],
             "context_units": int(retrieved.get("context_units", 0)),
             "context_budget": context_budget,
             "context_truncated": bool(retrieved.get("context_truncated")),
@@ -705,6 +844,11 @@ class AskService:
             "ambiguous": ambiguous,
             "scope": retrieved.get("scope", {}),
             "query_term_count": len(retrieved.get("terms", [])),
+            "research_options": [
+                {"question_id": gap["question_id"], "gap_id": gap["id"], "description": gap["description"], "status": gap["status"]}
+                for gap in retrieved.get("gaps", []) if gap.get("status") in {"open", "pursuing"}
+            ][:20],
+            "retrieval_ranking": retrieved.get("retrieval_ranking"),
         }
 
     def _refused_result(self, run_id: str, conversation_id: str, turn_number: int, code: str, message: str, *, retrieval: dict[str, Any] | None = None, citations: list[dict[str, Any]] | None = None) -> dict[str, Any]:
@@ -716,7 +860,7 @@ class AskService:
             "answer": message,
             "statements": [],
             "citations": citations or [],
-            "retrieval": retrieval or {"candidate_count": 0, "entity_types": [], "retrieved_object_ids": [], "context_units": 0, "context_budget": 0, "context_truncated": False, "stale_evidence_count": 0, "ambiguous": False, "scope": {}, "query_term_count": 0},
+            "retrieval": retrieval or {"candidate_count": 0, "entity_types": [], "retrieved_object_ids": [], "packet_ids": [], "context_units": 0, "context_budget": 0, "context_truncated": False, "stale_evidence_count": 0, "ambiguous": False, "scope": {}, "query_term_count": 0, "research_options": []},
             "provider_route": "local_deterministic",
             "estimated_cost_usd": 0.0,
             "refusal_code": code,
@@ -769,7 +913,9 @@ class AskService:
             "completed_at": row["completed_at"],
         }
 
-    def _resolve_citation(self, conn, citation: dict[str, Any]) -> dict[str, Any]:
+    def _resolve_citation(self, conn, citation: dict[str, Any], *, packet_ids: set[str] | None = None) -> dict[str, Any]:
+        if packet_ids and f"{citation.get('object_type')}:{citation.get('object_id')}" not in packet_ids:
+            raise DomainConflict(f"citation target {citation.get('object_id')} was not part of the retrieval packet")
         table_map = {
             "story": ("stories", "id", "deleted_at IS NULL"),
             "claim": ("claims", "id", "1 = 1"),
@@ -782,6 +928,12 @@ class AskService:
             "monitor": ("monitors", "id", "1 = 1"),
             "note": ("notes", "id", "1 = 1"),
             "question_note": ("research_question_notes", "id", "1 = 1"),
+            "source": ("sources", "id", "deleted_at IS NULL"),
+            "entity": ("entities", "id", "status <> 'merged'"),
+            "research_gap": ("research_question_gaps", "id", "1 = 1"),
+            "research_task": ("research_tasks", "id", "1 = 1"),
+            "watch": ("watches", "id", "1 = 1"),
+            "article_analysis": ("article_analyses", "id", "1 = 1"),
         }
         definition = table_map.get(citation.get("object_type"))
         if definition is None:

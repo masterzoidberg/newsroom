@@ -270,6 +270,7 @@ export type AskCitation = {
   resolvable: boolean;
   document_id?: string;
   document_version_id?: string;
+  source_id?: string;
   retrieved_at?: string;
   locator_type?: string | null;
   locator_value?: string | null;
@@ -299,6 +300,9 @@ export type AskRun = {
     context_budget?: number;
     stale_evidence_count?: number;
     ambiguous?: boolean;
+    packet_ids?: string[];
+    research_options?: Array<{ question_id: string; gap_id: string; description: string; status: string }>;
+    retrieval_ranking?: string;
   };
   refusal_code?: string | null;
   provider_route?: string;
