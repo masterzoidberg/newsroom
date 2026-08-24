@@ -4370,20 +4370,38 @@ Implemented and tested:
 
 ## 25.3 Validation
 
-The completion handoff records the exact final command results below. Commands
-are run from the repository root unless a frontend working directory is shown:
+The final validation was run from the repository root unless a frontend
+working directory is shown:
 
 * focused backend Phase 10/worker/Phase 15/Phase 25 suite: passing;
 * `python -m compileall -q newsroom tests`: passing;
 * `pnpm typecheck` from `frontend`: passing;
 * `pnpm build` from `frontend`: passing;
-* full `python -m pytest -p no:cacheprovider -q`: required before final commit;
-* `git diff --check`: required before final commit;
+* `poetry run pytest -q`: passing, 742 tests collected and passed;
+* `git diff --check`: passing;
 * database integrity and migration idempotency: covered by focused and full
   tests.
 
+The repository does not define the skill-alias commands `poetry run format`,
+`poetry run test`, `pnpm format`, `pnpm lint`, or `pnpm types`; those aliases
+were checked and reported as unavailable. The configured test, typecheck, and
+build commands above are the authoritative validation paths for this codebase.
+
 ## 25.4 Completion record
 
-The final commit SHA, final validation totals, branch/HEAD, schema version,
-tracked worktree state, and preserved unrelated untracked files are recorded
-in the final handoff after the final commit. No push is performed.
+Checkpoint A: `f732b84` (`Phase 25: add evidence-grounded research tasks`).
+
+Checkpoint B: `73db5b2` (`Phase 25: expose bounded research workspace`).
+
+Implementation commit: `c88d80a` (`Phase 25: complete autonomous research`).
+The documentation closeout is the only follow-up commit and contains no code
+or behavior changes. No push is performed.
+
+At implementation completion the branch is `main`, schema version is 25, and
+the branch is ahead of `origin/main`. The tracked worktree is clean. These
+unrelated untracked files were preserved and intentionally not staged:
+
+* `.kilo/`;
+* `Newsroom -v2.zip`;
+* `plan/phases-v2/Phase 23 Summary.md`;
+* `plan/phases/phases - Shortcut.lnk`.
