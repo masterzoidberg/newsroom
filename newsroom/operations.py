@@ -104,7 +104,7 @@ _EXPORT_COLUMNS: dict[str, tuple[str, ...]] = {
     "entity_merges": ("id", "from_entity_id", "into_entity_id", "reason", "actor", "created_at"),
     "knowledge_backfills": ("id", "kind", "status", "cursor", "processed", "row_limit", "batch_size", "error_code", "error_detail", "created_at", "updated_at", "completed_at"),
     "ask_conversations": ("id", "scope_type", "scope_id", "created_at", "updated_at"),
-    "ask_runs": ("id", "conversation_id", "turn_number", "status", "answer_json", "retrieval_json", "citations_json", "refusal_code", "context_units", "provider_route", "estimated_cost_usd", "created_at", "completed_at"),
+    "ask_runs": ("id", "conversation_id", "turn_number", "status", "retrieval_json", "citations_json", "refusal_code", "context_units", "provider_route", "estimated_cost_usd", "created_at", "completed_at"),
     "article_analyses": ("id", "document_version_id", "relevance_id", "monitor_id", "job_id", "scope_version", "artifact_id", "normalized_content_hash", "schema_version", "prompt_version", "provider", "model", "paid", "confidence", "input_char_count", "analyzed_char_count", "truncated", "input_view_version", "input_content_hash", "analyzed_content_hash", "invocation_id", "created_at"),
     "article_analysis_promotions": ("id", "promotion_identity", "article_analysis_id", "candidate_claim_index", "outcome_code", "claim_id", "evidence_span_ids_json", "created_at"),
 }

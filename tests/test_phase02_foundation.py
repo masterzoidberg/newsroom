@@ -69,9 +69,9 @@ def test_fresh_migration_creates_the_proposed_schema_and_rerun_is_idempotent(tmp
     first = apply_migrations(tmp_db)
     second = apply_migrations(tmp_db)
 
-    assert first.applied_versions == tuple(range(1, 26))
+    assert first.applied_versions == tuple(range(1, 29))
     assert second.applied_versions == ()
-    assert migration_status(tmp_db) == tuple(range(1, 26))
+    assert migration_status(tmp_db) == tuple(range(1, 29))
 
     conn = storage.connect(tmp_db)
     try:
@@ -84,7 +84,7 @@ def test_fresh_migration_creates_the_proposed_schema_and_rerun_is_idempotent(tmp
         assert EXPECTED_TABLES <= tables
         assert conn.execute("PRAGMA foreign_keys").fetchone()[0] == 1
         assert conn.execute("PRAGMA journal_mode").fetchone()[0].lower() == "wal"
-        assert conn.execute("SELECT value FROM app_meta WHERE key = 'schema_version'").fetchone()[0] == "25"
+        assert conn.execute("SELECT value FROM app_meta WHERE key = 'schema_version'").fetchone()[0] == "28"
     finally:
         conn.close()
 
@@ -105,8 +105,8 @@ def test_existing_phase02_database_migrates_forward_without_replaying_0001(tmp_d
         conn.close()
 
     result = apply_migrations(tmp_db)
-    assert result.applied_versions == tuple(range(2, 26))
-    assert migration_status(tmp_db) == tuple(range(1, 26))
+    assert result.applied_versions == tuple(range(2, 29))
+    assert migration_status(tmp_db) == tuple(range(1, 29))
 
 
 def test_evidence_span_hash_includes_excerpt_and_locator():

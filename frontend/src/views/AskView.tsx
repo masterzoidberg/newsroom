@@ -12,6 +12,7 @@ const SCOPES = [
   { value: "question", label: "Research question" },
   { value: "subject", label: "Subject" },
   { value: "monitor", label: "Monitor" },
+  { value: "source", label: "Source" },
   { value: "entity", label: "Entity" },
   { value: "research_task", label: "Research task" },
 ] as const;

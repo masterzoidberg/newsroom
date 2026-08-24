@@ -13,7 +13,7 @@ from .workbench import KnowledgeRetrievalService
 
 
 SCOPE_TYPES = frozenset(
-    {"global", "story", "claim", "evidence", "document", "report", "question", "subject", "monitor", "note", "entity", "research_task"}
+    {"global", "story", "claim", "evidence", "document", "report", "question", "subject", "monitor", "note", "entity", "research_task", "source"}
 )
 PROMPT_LIMIT = 4_000
 CONTEXT_LIMIT = 12_000
@@ -45,6 +45,7 @@ OBJECT_TABLES = {
     "note": ("notes", False),
     "entity": ("entities", False),
     "research_task": ("research_tasks", False),
+    "source": ("sources", True),
 }
 
 
@@ -222,6 +223,7 @@ class AskService:
             raise DomainValidation("cost_cap_usd cannot be negative")
         conversation = self._conversation(conversation_id)
         run_id, turn_number = self._start_run(conversation_id, prompt, provider_mode)
+        fallback_route: str | None = None
 
         if self._cancelled(run_id, cancel_check):
             return self._finish(run_id, self._cancelled_result(run_id, conversation_id, turn_number))
@@ -231,14 +233,15 @@ class AskService:
             if cost_cap_usd <= 0:
                 return self._finish(run_id, self._refused_result(run_id, conversation_id, turn_number, "provider_cost_cap", "Hosted escalation is disabled because this request has no positive cost cap."), provider_route="hosted_blocked")
             if not self.hosted_enabled:
-                return self._finish(run_id, self._refused_result(run_id, conversation_id, turn_number, "hosted_unavailable", "Hosted escalation is not configured. Local evidence retrieval remains available."), provider_route="hosted_unavailable")
+                provider_mode = "local"
+                fallback_route = "local_deterministic_fallback"
 
         try:
             retrieved = self._retrieve(prompt, conversation["scope_type"], conversation["scope_id"], context_budget, cancel_check, run_id)
             if retrieved.get("cancelled"):
                 return self._finish(run_id, self._cancelled_result(run_id, conversation_id, turn_number))
             result = self._compose(run_id, conversation_id, turn_number, prompt, retrieved, context_budget)
-            return self._finish(run_id, result)
+            return self._finish(run_id, result, provider_route=fallback_route or result.get("provider_route"))
         except DomainValidation:
             raise
         except Exception:
@@ -414,7 +417,7 @@ class AskService:
             conn.close()
 
     def _scope_sets(self, conn, scope_type: str, scope_id: str | None) -> dict[str, Any]:
-        empty = {key: set() for key in ("stories", "claims", "evidence", "documents", "subjects", "questions", "monitors", "reports", "notes", "entities", "gaps", "tasks")}
+        empty = {key: set() for key in ("stories", "claims", "evidence", "documents", "subjects", "questions", "monitors", "reports", "notes", "entities", "gaps", "tasks", "sources")}
         empty["_primary_type"] = scope_type
         empty["_primary_id"] = scope_id
         if scope_type == "global":
@@ -467,6 +470,9 @@ class AskService:
             if row:
                 empty["questions"].add(row[0])
                 empty["gaps"].add(row[1])
+        elif scope_type == "source":
+            empty["sources"].add(scope_id)
+            empty["documents"].update(row[0] for row in conn.execute("SELECT id FROM documents WHERE source_id = ?", (scope_id,)))
         if empty["stories"]:
             empty["claims"].update(row[0] for row in conn.execute("SELECT id FROM claims WHERE story_id IN ({})".format(_placeholders(empty["stories"])), tuple(empty["stories"])))
         if empty["claims"]:
@@ -488,7 +494,7 @@ class AskService:
             return True
         entity = item["entity_type"]
         identifier = item["entity_id"]
-        mapping = {"story": "stories", "claim": "claims", "evidence": "evidence", "document": "documents", "subject": "subjects", "question": "questions", "monitor": "monitors", "note": "notes", "report": "reports", "entity": "entities", "research_task": "tasks"}
+        mapping = {"story": "stories", "claim": "claims", "evidence": "evidence", "document": "documents", "subject": "subjects", "question": "questions", "monitor": "monitors", "note": "notes", "report": "reports", "entity": "entities", "research_task": "tasks", "source": "sources"}
         primary_type = scope.get("_primary_type")
         if primary_type == "claim":
             return (entity == "claim" and identifier == scope.get("_primary_id")) or (entity == "evidence" and identifier in scope.get("evidence", set())) or (entity == "document" and identifier in scope.get("documents", set()))
@@ -560,6 +566,11 @@ class AskService:
             if row:
                 question_ids.add(row[0])
                 claim_ids.update(item[0] for item in conn.execute("SELECT claim_id FROM research_question_claims WHERE question_id = ?", (row[0],)))
+        elif entity == "source":
+            document_ids = [row[0] for row in conn.execute("SELECT id FROM documents WHERE source_id = ?", (identifier,))]
+            if document_ids:
+                evidence_ids.update(row[0] for row in conn.execute("SELECT es.id FROM evidence_spans es JOIN document_versions dv ON dv.id = es.document_version_id WHERE dv.document_id IN ({})".format(_placeholders(document_ids)), tuple(document_ids)))
+                claim_ids.update(row[0] for row in conn.execute("SELECT DISTINCT claim_id FROM claim_evidence ce JOIN evidence_spans es ON es.id = ce.evidence_span_id JOIN document_versions dv ON dv.id = es.document_version_id WHERE dv.document_id IN ({})".format(_placeholders(document_ids)), tuple(document_ids)))
 
     def _expand_scope(self, scope: Mapping[str, set[str]], claim_ids: set[str], evidence_ids: set[str], note_ids: set[str], question_ids: set[str], task_ids: set[str]) -> None:
         claim_ids.update(scope.get("claims", set()))

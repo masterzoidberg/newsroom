@@ -110,26 +110,18 @@ class KnowledgeService:
                     identifier = new_id("ent")
                     conn.execute(
                         """
-                        INSERT INTO entities
+                        INSERT OR IGNORE INTO entities
                             (id, canonical_name, normalized_name, entity_type, description,
                              status, created_at, updated_at)
                         VALUES (?, ?, ?, ?, ?, 'active', ?, ?)
                         """,
                         (identifier, name, normalized, entity_type, description, now, now),
                     )
+                    identifier = conn.execute("SELECT id FROM entities WHERE normalized_name = ?", (normalized,)).fetchone()[0]
                     for alias in aliases:
                         self._add_alias_tx(conn, identifier, alias, origin=str(data.get("origin", "user")))
-        except sqlite3.IntegrityError as exc:
-            if "entities.normalized_name" not in str(exc) and "UNIQUE constraint failed: entities.normalized_name" not in str(exc):
-                raise
-            conn.close()
-            return self.create_entity(data)
         finally:
-            if not conn is None:
-                try:
-                    conn.close()
-                except sqlite3.ProgrammingError:
-                    pass
+            conn.close()
         return self.get_entity(identifier)
 
     def create_candidate(self, name: str, *, entity_type: str = "unknown", origin: str = "deterministic") -> dict[str, Any]:
@@ -150,10 +142,10 @@ class KnowledgeService:
         identifier = new_id("ent")
         created_at = now or utc_now()
         conn.execute(
-            "INSERT INTO entities(id, canonical_name, normalized_name, entity_type, status, created_at, updated_at) VALUES (?, ?, ?, ?, 'candidate', ?, ?)",
+            "INSERT OR IGNORE INTO entities(id, canonical_name, normalized_name, entity_type, status, created_at, updated_at) VALUES (?, ?, ?, ?, 'candidate', ?, ?)",
             (identifier, canonical, normalized, self._entity_type(entity_type), created_at, created_at),
         )
-        return identifier
+        return conn.execute("SELECT id FROM entities WHERE normalized_name = ?", (normalized,)).fetchone()[0]
 
     def _add_alias_tx(self, conn: sqlite3.Connection, entity_id: str, data: Any, *, origin: str) -> str:
         if isinstance(data, str):
@@ -178,13 +170,13 @@ class KnowledgeService:
         identifier = new_id("ealias")
         conn.execute(
             """
-            INSERT INTO entity_aliases
+            INSERT OR IGNORE INTO entity_aliases
                 (id, entity_id, alias, normalized_alias, alias_type, origin, created_at)
             VALUES (?, ?, ?, ?, ?, ?, ?)
             """,
             (identifier, entity_id, alias, normalized, alias_type, origin, utc_now()),
         )
-        return identifier
+        return conn.execute("SELECT id FROM entity_aliases WHERE entity_id = ? AND normalized_alias = ?", (entity_id, normalized)).fetchone()[0]
 
     def add_alias(self, entity_id: str, data: Mapping[str, Any] | str) -> dict[str, Any]:
         conn = storage.connect(self.db_path)
@@ -297,7 +289,7 @@ class KnowledgeService:
                     identifier = new_id("mention")
                     conn.execute(
                         """
-                        INSERT INTO entity_mentions
+                        INSERT OR IGNORE INTO entity_mentions
                             (id, entity_id, mention_text, normalized_mention, source_type,
                              source_id, article_analysis_id, document_version_id,
                              resolution_status, resolution_method, confidence,
@@ -312,6 +304,10 @@ class KnowledgeService:
                             _json(data.get("context")), utc_now(),
                         ),
                     )
+                    identifier = conn.execute(
+                        "SELECT id FROM entity_mentions WHERE source_type = ? AND source_id IS ? AND normalized_mention = ?",
+                        (source_type, source_id, normalized),
+                    ).fetchone()[0]
         finally:
             conn.close()
         return self.get_mention(identifier)
@@ -384,17 +380,12 @@ class KnowledgeService:
                 else:
                     identifier = new_id("tag")
                     conn.execute(
-                        "INSERT INTO tags(id, name, normalized_name, namespace, tag_type, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+                        "INSERT OR IGNORE INTO tags(id, name, normalized_name, namespace, tag_type, created_at) VALUES (?, ?, ?, ?, ?, ?)",
                         (identifier, name, normalized, namespace, tag_type, utc_now()),
                     )
-        except sqlite3.IntegrityError:
-            conn.close()
-            return self.create_tag(data)
+                    identifier = conn.execute("SELECT id FROM tags WHERE namespace = ? AND normalized_name = ?", (namespace, normalized)).fetchone()[0]
         finally:
-            try:
-                conn.close()
-            except sqlite3.ProgrammingError:
-                pass
+            conn.close()
         return self.get_tag(identifier)
 
     def _require_object(self, conn: sqlite3.Connection, object_type: str, object_id: str) -> None:
@@ -418,15 +409,12 @@ class KnowledgeService:
                 if conn.execute("SELECT 1 FROM tags WHERE id = ?", (tag_id,)).fetchone() is None:
                     raise DomainNotFound("tag not found")
                 self._require_object(conn, object_type, object_id)
-                existing = conn.execute("SELECT * FROM tag_assignments WHERE tag_id = ? AND object_type = ? AND object_id = ?", (tag_id, object_type, object_id)).fetchone()
-                if existing is None:
-                    identifier = new_id("tagassign")
-                    conn.execute(
-                        "INSERT INTO tag_assignments(id, tag_id, object_type, object_id, origin, confidence, reason, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-                        (identifier, tag_id, object_type, object_id, origin, confidence, reason, utc_now()),
-                    )
-                else:
-                    identifier = existing["id"]
+                identifier = new_id("tagassign")
+                conn.execute(
+                    "INSERT OR IGNORE INTO tag_assignments(id, tag_id, object_type, object_id, origin, confidence, reason, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                    (identifier, tag_id, object_type, object_id, origin, confidence, reason, utc_now()),
+                )
+                identifier = conn.execute("SELECT id FROM tag_assignments WHERE tag_id = ? AND object_type = ? AND object_id = ?", (tag_id, object_type, object_id)).fetchone()[0]
                 if object_type == "story":
                     conn.execute("INSERT OR IGNORE INTO story_tags(story_id, tag_id, created_at) VALUES (?, ?, ?)", (object_id, tag_id, utc_now()))
         finally:
@@ -619,9 +607,10 @@ class KnowledgeService:
             now = utc_now()
             entity_id = new_id("ent")
             conn.execute(
-                "INSERT INTO entities(id, canonical_name, normalized_name, entity_type, description, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, 'active', ?, ?)",
+                "INSERT OR IGNORE INTO entities(id, canonical_name, normalized_name, entity_type, description, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, 'active', ?, ?)",
                 (entity_id, subject["canonical_name"], normalized_text(subject["canonical_name"]), self._entity_type(subject["subject_type"]), subject["description"] or "", now, now),
             )
+            entity_id = conn.execute("SELECT id FROM entities WHERE normalized_name = ?", (normalized_text(subject["canonical_name"]),)).fetchone()[0]
         else:
             entity_id = entity_row["id"]
         self._add_alias_tx(conn, entity_id, {"alias": subject["canonical_name"], "alias_type": "alternate_name", "origin": "subject"}, origin="subject")
@@ -710,10 +699,10 @@ class KnowledgeService:
             return self._mention_row(existing)
         identifier = new_id("mention")
         conn.execute(
-            "INSERT INTO entity_mentions(id, entity_id, mention_text, normalized_mention, source_type, source_id, article_analysis_id, document_version_id, resolution_status, resolution_method, confidence, context_json, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "INSERT OR IGNORE INTO entity_mentions(id, entity_id, mention_text, normalized_mention, source_type, source_id, article_analysis_id, document_version_id, resolution_status, resolution_method, confidence, context_json, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (identifier, entity_id, mention_text, normalized, source_type, source_id, article_analysis_id, document_version_id, resolution_status, resolution_method, confidence, _json(context), utc_now()),
         )
-        return self._mention_row(conn.execute("SELECT * FROM entity_mentions WHERE id = ?", (identifier,)).fetchone())
+        return self._mention_row(conn.execute("SELECT * FROM entity_mentions WHERE source_type = ? AND source_id IS ? AND normalized_mention = ?", (source_type, source_id, normalized)).fetchone())
 
     def _link_claim_entity_tx(self, conn: sqlite3.Connection, claim_id: str, entity_id: str, *, role: str, origin: str, mention_id: str | None) -> None:
         conn.execute("INSERT OR IGNORE INTO claim_entities(claim_id, entity_id, role, origin, mention_id, created_at) VALUES (?, ?, ?, ?, ?, ?)", (claim_id, entity_id, role, origin, mention_id, utc_now()))

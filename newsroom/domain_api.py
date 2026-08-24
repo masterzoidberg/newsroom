@@ -783,7 +783,7 @@ class NoteCreate(StrictModel):
 
 
 class AskConversationCreate(StrictModel):
-    scope_type: str = Field(default="global", pattern="^(global|story|claim|evidence|document|report|question|research_question|subject|monitor|note|entity|research_task)$")
+    scope_type: str = Field(default="global", pattern="^(global|story|claim|evidence|document|report|question|research_question|subject|monitor|note|entity|research_task|source)$")
     scope_id: Optional[str] = Field(default=None, max_length=200)
 
 
@@ -795,7 +795,7 @@ class AskTurnCreate(StrictModel):
 
 
 class AskDirectCreate(AskTurnCreate):
-    scope_type: str = Field(default="global", pattern="^(global|story|claim|evidence|document|report|question|research_question|subject|monitor|note|entity|research_task)$")
+    scope_type: str = Field(default="global", pattern="^(global|story|claim|evidence|document|report|question|research_question|subject|monitor|note|entity|research_task|source)$")
     scope_id: Optional[str] = Field(default=None, max_length=200)
 
 

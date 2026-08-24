@@ -149,6 +149,18 @@ def test_ask_qualifies_stale_evidence_and_enforces_cancel_and_provider_caps(tmp_
         service.ask(capped_conversation["id"], "x" * 4001)
 
 
+def test_unavailable_hosted_synthesis_falls_back_to_deterministic_evidence(tmp_db):
+    _, story, _, _, _ = _fixture(tmp_db)
+    service = AskService(tmp_db)
+    conversation = service.create_conversation(scope_type="story", scope_id=story["id"])
+
+    result = service.ask(conversation["id"], "What happened with the Atlas launch?", provider_mode="hosted", cost_cap_usd=1.0)
+
+    assert result["provider_route"] == "local_deterministic_fallback"
+    assert result["status"] in {"answered", "qualified"}
+    assert result["citations"]
+
+
 def test_ask_api_is_authenticated_csrf_protected_and_supports_a_turn(tmp_path):
     client = TestClient(
         create_app(

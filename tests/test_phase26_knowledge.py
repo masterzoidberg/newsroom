@@ -1,12 +1,16 @@
 from __future__ import annotations
 
 import json
+from concurrent.futures import ThreadPoolExecutor
 import pytest
 
-from newsroom.domain import CoreService, DomainConflict
+from newsroom.domain import CoreService, DomainConflict, new_id, utc_now
 from newsroom.evidence import EvidenceService
 from newsroom.knowledge import KnowledgeService
 from newsroom.migrations import apply_migrations
+from newsroom.content_artifacts import ContentArtifactService
+from newsroom.monitoring import DocumentVersionRelevanceService, MonitorService, MonitoringPolicyService, RelevanceResult, RelevanceScope
+from newsroom import storage
 from newsroom.research_questions import ResearchQuestionService
 from newsroom.workbench import SearchService
 from newsroom.ask import AskService
@@ -70,6 +74,43 @@ def test_entity_alias_resolution_is_idempotent_and_conservative(tmp_db):
     ambiguous = service.resolve_entity("J")
     assert ambiguous["status"] == "ambiguous"
     assert {item["id"] for item in ambiguous["candidates"]} == {first["id"], second["id"]}
+
+
+def test_article_analysis_entity_indexing_imports_subjects_and_keeps_candidates_restart_safe(tmp_db):
+    apply_migrations(tmp_db)
+    core, _source, _document, version = _ledger_fixture(tmp_db)
+    subject = core.create_subject({"canonical_name": "Pentagon", "canonical_id": "pentagon", "subject_type": "organization"})
+    artifact = ContentArtifactService(tmp_db).create(normalized_text="Pentagon discussed Mercury.", content_kind="visible_text")
+    policy = MonitoringPolicyService(tmp_db).create({"name": "Knowledge analysis policy", "allowed_channels": ["direct_http"], "base_cadence_seconds": 3600, "min_cadence_seconds": 900, "max_cadence_seconds": 86400})
+    monitor = MonitorService(tmp_db).create({"target_type": "source", "target_id": _source["id"], "policy_id": policy["id"]})
+    scope = MonitorService(tmp_db).scope_at_version(monitor["id"], 1)
+    relevance = DocumentVersionRelevanceService(tmp_db).persist_decision(job_id=None, document_version_id=version["id"], monitor_id=monitor["id"], scope_version=1, scope=scope, result=RelevanceResult(True, "exact", 1.0, ("Pentagon",), "controlled"))
+    analysis_id = new_id("analysis")
+    conn = storage.connect(tmp_db)
+    try:
+        with storage.write_tx(conn):
+            conn.execute(
+                """
+                INSERT INTO article_analyses
+                    (id, document_version_id, relevance_id, monitor_id, scope_version, artifact_id,
+                     normalized_content_hash, identity_hash, schema_version, prompt_version,
+                     provider, model, paid, confidence, input_char_count, analyzed_char_count,
+                     truncated, result_json, created_at)
+                VALUES (?, ?, ?, ?, 1, ?, ?, ?, 'phase26', 'test', 'local', 'test', 0, 0.9, 28, 28, 0, ?, ?)
+                """,
+                (analysis_id, version["id"], relevance["id"], monitor["id"], artifact["id"], artifact["normalized_content_hash"], f"identity-{analysis_id}", json.dumps({"entities": [{"name": "Pentagon", "category": "organization", "confidence": 0.9}, {"name": "Mercury", "category": "program"}]}), utc_now()),
+            )
+    finally:
+        conn.close()
+    service = KnowledgeService(tmp_db)
+    first = service.index_article_analysis(analysis_id)
+    repeated = service.index_article_analysis(analysis_id)
+
+    assert first["entities"][0]["status"] == "resolved"
+    assert first["entities"][0]["entity_id"] == service.resolve_entity("Pentagon")["entity"]["id"]
+    assert any(item["status"] == "unresolved" for item in first["entities"])
+    assert repeated["entities"][0]["mention_id"] == first["entities"][0]["mention_id"]
+    assert service.get_entity(first["entities"][0]["entity_id"])["mentions"]
 
 
 def test_mentions_are_not_evidence_and_claim_relationships_are_provenance_bound(tmp_db):
@@ -219,7 +260,7 @@ def test_entity_and_tag_api_exposes_bounded_pivots(tmp_path):
 
 def test_shared_retrieval_grounds_entity_ask_and_preserves_question_lifecycle(tmp_db):
     apply_migrations(tmp_db)
-    core, _source, _document, version = _ledger_fixture(tmp_db)
+    core, source, _document, version = _ledger_fixture(tmp_db)
     story = core.create_story({"headline": "AARO story"})
     ledger = EvidenceService(tmp_db)
     span = ledger.create_evidence_span(version["id"], {"excerpt": "AARO published a report."})
@@ -242,6 +283,10 @@ def test_shared_retrieval_grounds_entity_ask_and_preserves_question_lifecycle(tm
     assert f"claim:{claim['id']}" in result["retrieval"]["packet_ids"]
     assert "lifecycle: open" in result["answer"]
     assert question["id"] in {item["object_id"] for item in result["citations"] if item["object_type"] == "question"}
+
+    source_conversation = ask.create_conversation(scope_type="source", scope_id=source["id"])
+    source_result = ask.ask(source_conversation["id"], "What did Knowledge Source report?")
+    assert any(item["object_id"] == claim["id"] for item in source_result["citations"])
 
     with pytest.raises(DomainConflict):
         ask._resolve_citation(None, {"object_type": "claim", "object_id": "cl_outside"}, packet_ids={f"claim:{claim['id']}"})
@@ -266,6 +311,32 @@ def test_phase26_logical_export_reconstructs_knowledge_path_and_integrity(tmp_db
     assert {"entities", "entity_aliases", "claim_entities", "research_question_entities", "claims", "claim_evidence", "evidence_spans", "documents", "sources"} <= tables
     assert not {"search_records", "search_index_meta"} & tables
     assert check_database(tmp_db).ok
+
+
+def test_entity_mentions_and_tags_converge_under_concurrent_retries(tmp_db):
+    apply_migrations(tmp_db)
+    service = KnowledgeService(tmp_db)
+    entity_ids = []
+    tag_ids = []
+    mention_ids = []
+
+    def create_entity():
+        return service.create_entity({"canonical_name": "Concurrent AARO", "entity_type": "agency"})["id"]
+
+    def create_tag():
+        return service.create_tag({"name": "Concurrent official", "namespace": "phase26", "tag_type": "smart"})["id"]
+
+    def create_mention():
+        return service.record_mention({"mention_text": "Concurrent AARO", "source_type": "manual", "source_id": "shared-source"})["id"]
+
+    with ThreadPoolExecutor(max_workers=4) as executor:
+        entity_ids = list(executor.map(lambda _: create_entity(), range(4)))
+        tag_ids = list(executor.map(lambda _: create_tag(), range(4)))
+        mention_ids = list(executor.map(lambda _: create_mention(), range(4)))
+
+    assert len(set(entity_ids)) == 1
+    assert len(set(tag_ids)) == 1
+    assert len(set(mention_ids)) == 1
 
 
 def test_ask_research_bridge_queues_the_existing_phase25_task_service(tmp_path):

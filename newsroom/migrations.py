@@ -2824,6 +2824,68 @@ MIGRATION_0027_CHECKSUM = hashlib.sha256(
 ).hexdigest()
 
 
+# 0028: complete the bounded Ask scope vocabulary with Source records.
+MIGRATION_0028_STATEMENTS: tuple[str, ...] = (
+    "DROP INDEX ask_runs_status_idx",
+    "DROP INDEX ask_runs_conversation_idx",
+    "DROP INDEX ask_conversations_scope_idx",
+    "ALTER TABLE ask_runs RENAME TO ask_runs_legacy_0028",
+    "ALTER TABLE ask_conversations RENAME TO ask_conversations_legacy_0028",
+    """
+    CREATE TABLE ask_conversations (
+        id TEXT PRIMARY KEY,
+        scope_type TEXT NOT NULL CHECK (scope_type IN ('global', 'story', 'claim', 'evidence', 'document', 'report', 'question', 'research_question', 'subject', 'monitor', 'note', 'entity', 'research_task', 'source')),
+        scope_id TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        CHECK ((scope_type = 'global' AND scope_id IS NULL) OR (scope_type <> 'global' AND scope_id IS NOT NULL))
+    )
+    """,
+    """
+    CREATE TABLE ask_runs (
+        id TEXT PRIMARY KEY,
+        conversation_id TEXT NOT NULL REFERENCES ask_conversations(id) ON DELETE CASCADE,
+        turn_number INTEGER NOT NULL,
+        prompt_hash TEXT NOT NULL,
+        prompt_length INTEGER NOT NULL CHECK (prompt_length > 0),
+        status TEXT NOT NULL CHECK (status IN ('queued', 'running', 'answered', 'qualified', 'refused', 'cancelled', 'failed')),
+        answer_json TEXT,
+        retrieval_json TEXT,
+        citations_json TEXT,
+        refusal_code TEXT,
+        context_units INTEGER NOT NULL DEFAULT 0 CHECK (context_units >= 0),
+        provider_route TEXT NOT NULL DEFAULT 'local_deterministic',
+        estimated_cost_usd REAL NOT NULL DEFAULT 0 CHECK (estimated_cost_usd >= 0),
+        created_at TEXT NOT NULL,
+        completed_at TEXT,
+        UNIQUE (conversation_id, turn_number)
+    )
+    """,
+    """
+    INSERT INTO ask_conversations(id, scope_type, scope_id, created_at, updated_at)
+    SELECT id, scope_type, scope_id, created_at, updated_at FROM ask_conversations_legacy_0028
+    """,
+    """
+    INSERT INTO ask_runs(id, conversation_id, turn_number, prompt_hash, prompt_length, status,
+                         answer_json, retrieval_json, citations_json, refusal_code,
+                         context_units, provider_route, estimated_cost_usd, created_at, completed_at)
+    SELECT id, conversation_id, turn_number, prompt_hash, prompt_length, status,
+           answer_json, retrieval_json, citations_json, refusal_code,
+           context_units, provider_route, estimated_cost_usd, created_at, completed_at
+    FROM ask_runs_legacy_0028
+    """,
+    "DROP TABLE ask_runs_legacy_0028",
+    "DROP TABLE ask_conversations_legacy_0028",
+    "CREATE INDEX ask_conversations_scope_idx ON ask_conversations(scope_type, scope_id, updated_at DESC, id DESC)",
+    "CREATE INDEX ask_runs_conversation_idx ON ask_runs(conversation_id, turn_number DESC, id DESC)",
+    "CREATE INDEX ask_runs_status_idx ON ask_runs(status, created_at DESC, id DESC)",
+)
+
+MIGRATION_0028_CHECKSUM = hashlib.sha256(
+    "\n".join(MIGRATION_0028_STATEMENTS).encode("utf-8")
+).hexdigest()
+
+
 @dataclass(frozen=True)
 class MigrationResult:
     applied_versions: tuple[int, ...]
@@ -2898,6 +2960,7 @@ def apply_migrations(db_path: Optional[str | Path] = None) -> MigrationResult:
                 25: MIGRATION_0025_STATEMENTS,
                 26: MIGRATION_0026_STATEMENTS,
                 27: MIGRATION_0027_STATEMENTS,
+                28: MIGRATION_0028_STATEMENTS,
             }
             for version, statements in migrations.items():
                 if version in existing:
