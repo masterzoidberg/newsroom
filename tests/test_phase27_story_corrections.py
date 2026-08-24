@@ -10,7 +10,7 @@ from newsroom.integrity import check_database
 from newsroom.knowledge import KnowledgeService
 from newsroom.migrations import apply_migrations
 from newsroom.intelligent_monitoring import WatchService
-from newsroom.monitoring import MonitoringPolicyService
+from newsroom.monitoring import MonitorService, MonitoringPolicyService
 from newsroom.story_corrections import StoryCorrectionService
 from newsroom.story_corrections import StoryCorrectionReconciliationService
 from newsroom import storage
@@ -227,10 +227,23 @@ def test_duplicate_review_identity_and_watch_resolution_are_durable(tmp_db):
     watch = WatchService(tmp_db).create(
         {"name": "Merged Story", "target_type": "story", "target_id": watch_source["id"], "policy_id": policy["id"]}
     )
+    monitor = MonitorService(tmp_db).create(
+        {"target_type": "story", "target_id": watch_source["id"], "policy_id": policy["id"]}
+    )
     service.merge_stories(watch_source["id"], watch_destination["id"], actor="user-1", reason="watch canonical")
     merged_watch = WatchService(tmp_db).get(watch["id"])
     assert merged_watch["target_id"] == watch_destination["id"]
     assert merged_watch["historical_target_id"] == watch_source["id"]
+    merged_monitor = MonitorService(tmp_db).get(monitor["id"])
+    assert merged_monitor["target_id"] == watch_destination["id"]
+    conn = storage.connect(tmp_db)
+    try:
+        assert conn.execute(
+            "SELECT 1 FROM monitor_scope_history WHERE monitor_id = ? AND change_type = 'manual'",
+            (monitor["id"],),
+        ).fetchone()
+    finally:
+        conn.close()
 
     split_source = CoreService(tmp_db).create_story({"headline": "Watch split"})
     split_claim_a = EvidenceService(tmp_db).create_claim(split_source["id"], {"proposition": "Watch split A"})

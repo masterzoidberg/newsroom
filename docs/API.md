@@ -234,8 +234,9 @@ Entities are resolved from current Claim/Evidence membership.
 Every committed correction records one `story_corrections` aggregate, Claim
 membership transitions, and any lineage/duplicate decision in the same
 transaction, then queues the idempotent `story_correction_reconcile` Job.
-Downstream Report and Research Question reevaluation is best-effort and
-isolated after the correction commits.
+Downstream Report, Alert, and Research Question reevaluation is best-effort and
+isolated after the correction commits. Alerts are emitted through the existing
+exact-cause ReportRevision path and remain deduplicated on replay.
 
 ## Research Questions and evidence gaps
 

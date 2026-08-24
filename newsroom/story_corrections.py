@@ -784,6 +784,16 @@ class StoryCorrectionService:
                     conn.execute(f"UPDATE {table} SET historical_target_id = ?, resolution_state = 'merged_into_existing', resolution_options_json = ?, updated_at = ? WHERE id = ?", (source, _json([destination]), utc_now(), row[0]))
                 else:
                     conn.execute(f"UPDATE {table} SET target_id = ?, historical_target_id = ?, resolution_state = 'active', resolution_options_json = '[]', updated_at = ? WHERE id = ?", (destination, source, utc_now(), row[0]))
+                    if table == "monitors":
+                        from .monitoring import MonitorService, _scope_for_target
+                        MonitorService._write_scope_history(
+                            conn,
+                            row[0],
+                            _scope_for_target(conn, "story", destination),
+                            change_type="manual",
+                            changed_by=None,
+                            created_at=utc_now(),
+                        )
 
     @staticmethod
     def _mark_split_watch_review_tx(conn: sqlite3.Connection, source: str, children: list[str]) -> None:
@@ -917,11 +927,18 @@ class StoryCorrectionReconciliationService:
         # the committed correction transaction. Their normal services remain
         # the authority for report and Question history.
         report_results: list[dict[str, Any]] = []
+        alert_results: list[dict[str, Any]] = []
         for report_id in report_ids[:50]:
             try:
                 from .reports import LivingReportService
                 generated = LivingReportService(self.db_path).generate(report_id)
-                report_results.append({"report_id": report_id, "status": generated.get("generation", {}).get("status", "completed")})
+                generation = generated.get("generation", {})
+                report_results.append({"report_id": report_id, "status": generation.get("status", "completed")})
+                revision_id = generation.get("revision_id")
+                if revision_id:
+                    from .reports import AlertService
+                    emitted = AlertService(self.db_path).emit_for_report_revision(report_id, revision_id)
+                    alert_results.append({"report_id": report_id, "created_count": emitted.get("created_count", 0), "alert_ids": emitted.get("alert_ids", [])})
             except Exception as exc:  # downstream failure must not invalidate the correction
                 report_results.append({"report_id": report_id, "status": "deferred", "error": type(exc).__name__})
         question_results: list[dict[str, Any]] = []
@@ -932,6 +949,7 @@ class StoryCorrectionReconciliationService:
             except Exception as exc:  # downstream failure is recoverable on the next normal evaluation
                 question_results.append({"claim_id": claim_id, "status": "deferred", "error": type(exc).__name__})
         result["report_results"] = report_results
+        result["alert_results"] = alert_results
         result["question_results"] = question_results
         result["research_question_targets_reconciled"] = sum(
             int(item.get("evaluated_count", 0)) for item in question_results
