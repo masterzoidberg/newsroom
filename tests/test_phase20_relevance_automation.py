@@ -1204,13 +1204,13 @@ def test_migration_0017_preserves_schema_16_data(tmp_db):
         conn.close()
 
     result = apply_migrations(tmp_db)
-    assert result.applied_versions == (17, 18, 19, 20, 21, 22, 23, 24)
-    assert result.current_version == 24
-    assert migration_status(tmp_db) == tuple(range(1, 25))
+    assert result.applied_versions == (17, 18, 19, 20, 21, 22, 23, 24, 25)
+    assert result.current_version == 25
+    assert migration_status(tmp_db) == tuple(range(1, 26))
     monitor = _get(tmp_db, "SELECT need_type, need_id FROM monitors WHERE id = 'mon-old20'")
     assert monitor[0] is None
     assert monitor[1] is None
-    assert _get(tmp_db, "SELECT value FROM app_meta WHERE key = 'schema_version'")[0] == "24"
+    assert _get(tmp_db, "SELECT value FROM app_meta WHERE key = 'schema_version'")[0] == "25"
     # No historical relevance rows are manufactured.
     assert _count(tmp_db, "document_version_relevance") == 0
     # No historical article analyses are fabricated either.

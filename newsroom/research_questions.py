@@ -10,7 +10,8 @@ import json
 import hashlib
 import re
 import sqlite3
-from datetime import datetime
+import time
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -99,6 +100,11 @@ def _validate_time(value: str | None, label: str) -> str | None:
     except ValueError as exc:
         raise DomainValidation(f"{label} must be a valid timestamp") from exc
     return normalized
+
+
+def _plus_seconds(timestamp: str, seconds: int) -> str:
+    value = datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
+    return (value + timedelta(seconds=max(0, seconds))).isoformat().replace("+00:00", "Z")
 
 
 def _bounded_text(value: Any, label: str, maximum: int) -> str:
@@ -263,6 +269,18 @@ class ResearchQuestionService:
         conn = storage.connect(self.db_path)
         try:
             row = self._require(conn, identifier)
+            if conn.execute(
+                "SELECT 1 FROM research_question_assessments WHERE question_id = ? LIMIT 1",
+                (identifier,),
+            ).fetchone() is None:
+                # Migration 0025 is intentionally additive and does not
+                # fabricate historical transitions.  Lazily materialize the
+                # first deterministic assessment when an upgraded legacy
+                # Question is first read.
+                conn.close()
+                self.evaluate(identifier)
+                conn = storage.connect(self.db_path)
+                row = self._require(conn, identifier)
             result = dict(row)
             attempts = conn.execute(
                 "SELECT * FROM research_question_attempts WHERE question_id = ? ORDER BY attempt_no, id",
@@ -776,6 +794,26 @@ class ResearchQuestionService:
             """,
             (state, snapshot_hash, explanation, now, now, identifier),
         )
+        # Canonical evidence can arrive after a Research Task has already
+        # recorded candidate material (for example when the normal document
+        # processing worker promotes a verified Claim later).  Reconcile that
+        # durable task projection without allowing a stale task to overwrite
+        # the current evidence-grounded result.
+        conn.execute(
+            """
+            UPDATE research_tasks
+               SET status = 'completed_with_evidence',
+                   completed_at = COALESCE(completed_at, ?),
+                   updated_at = ?
+             WHERE question_id = ?
+               AND status = 'completed_with_candidates'
+               AND gap_id IN (
+                   SELECT id FROM research_question_gaps
+                   WHERE question_id = ? AND status = 'satisfied'
+               )
+            """,
+            (now, now, identifier, identifier),
+        )
         return {
             "question_id": identifier,
             "state": state,
@@ -798,6 +836,28 @@ class ResearchQuestionService:
             return result
         finally:
             conn.close()
+
+    def reevaluate_for_claim(self, claim_id: str, *, limit: int = 50) -> dict[str, Any]:
+        """Reevaluate bounded Question candidates after trusted Claim changes."""
+        if not isinstance(limit, int) or isinstance(limit, bool) or not 1 <= limit <= 100:
+            raise DomainValidation("claim reevaluation limit must be between 1 and 100")
+        conn = storage.connect(self.db_path)
+        try:
+            self._require_claim(conn, claim_id)
+            rows = conn.execute(
+                """
+                SELECT id FROM research_questions
+                WHERE deleted_at IS NULL AND status = 'open'
+                ORDER BY CASE priority WHEN 'urgent' THEN 3 WHEN 'high' THEN 2 WHEN 'normal' THEN 1 ELSE 0 END DESC, id
+                LIMIT ?
+                """,
+                (limit,),
+            ).fetchall()
+            identifiers = [row["id"] for row in rows]
+        finally:
+            conn.close()
+        results = [self.evaluate(identifier) for identifier in identifiers]
+        return {"claim_id": claim_id, "evaluated_count": len(results), "question_ids": identifiers}
 
     def list_gaps(self, identifier: str, *, status: str | None = None, page: int = 1, page_size: int = 50) -> dict[str, Any]:
         if status is not None and status not in GAP_STATUSES:
@@ -837,7 +897,44 @@ class ResearchQuestionService:
         finally:
             conn.close()
 
-    def set_gap_status(self, gap_id: str, status: str, *, actor: str = "user", reason: str = "") -> dict[str, Any]:
+    def get_task(self, identifier: str, task_id: str) -> dict[str, Any]:
+        conn = storage.connect(self.db_path)
+        try:
+            self._require(conn, identifier)
+            row = conn.execute(
+                "SELECT * FROM research_tasks WHERE id = ? AND question_id = ?",
+                (task_id, identifier),
+            ).fetchone()
+            if row is None:
+                raise DomainNotFound("research task not found")
+            result = self._task_dict(row)
+            result["queries"] = [
+                dict(item) for item in conn.execute(
+                    "SELECT id, query, query_hash, strategy, ordinal, created_at FROM research_task_queries WHERE task_id = ? ORDER BY ordinal, id LIMIT 100",
+                    (task_id,),
+                ).fetchall()
+            ]
+            result["findings"] = []
+            for item in conn.execute(
+                "SELECT id, finding_type, identity_key, status, source_id, document_id, document_version_id, claim_id, evidence_span_id, rank, metadata_json, created_at, updated_at FROM research_task_findings WHERE task_id = ? ORDER BY rank, created_at, id LIMIT 100",
+                (task_id,),
+            ):
+                finding = dict(item)
+                finding["metadata"] = _decode(finding.pop("metadata_json", None))
+                result["findings"].append(finding)
+            return result
+        finally:
+            conn.close()
+
+    def set_gap_status(
+        self,
+        gap_id: str,
+        status: str,
+        *,
+        question_id: str | None = None,
+        actor: str = "user",
+        reason: str = "",
+    ) -> dict[str, Any]:
         if status not in {"dismissed", "open"}:
             raise DomainValidation("gap status may only be dismissed or open manually")
         reason = _bounded_text(reason, "gap reason", 4_000)
@@ -848,6 +945,8 @@ class ResearchQuestionService:
             with storage.write_tx(conn):
                 gap = conn.execute("SELECT * FROM research_question_gaps WHERE id = ?", (gap_id,)).fetchone()
                 if gap is None:
+                    raise DomainNotFound("research question gap not found")
+                if question_id is not None and gap["question_id"] != question_id:
                     raise DomainNotFound("research question gap not found")
                 if gap["status"] == status:
                     raise DomainConflict("gap is already in that status")
@@ -1278,8 +1377,11 @@ class ResearchQuestionService:
                 question = self._require(conn, identifier)
                 if question["status"] != "open":
                     raise DomainConflict("only open research questions can be pursued")
-                if mode == "policy" and question["pursuit_policy"] == "disabled":
-                    raise DomainConflict("automatic research pursuit is disabled for this question")
+                if mode == "policy":
+                    if question["pursuit_policy"] == "disabled":
+                        raise DomainConflict("automatic research pursuit is disabled for this question")
+                    if question["next_attempt_at"] and question["next_attempt_at"] > now:
+                        raise DomainConflict("research pursuit cooldown has not elapsed")
                 attempts_used, queries_used, local_used, paid_used = self._attempt_summary(conn, identifier)
                 if attempts_used >= question["search_attempt_budget"]:
                     raise DomainConflict("research question attempt budget exhausted")
@@ -1492,7 +1594,7 @@ class ResearchQuestionService:
         conn = storage.connect(self.db_path)
         try:
             rows = conn.execute(
-                "SELECT id FROM research_questions WHERE status = 'open' AND deleted_at IS NULL AND next_attempt_at IS NOT NULL AND next_attempt_at <= ? ORDER BY CASE priority WHEN 'urgent' THEN 3 WHEN 'high' THEN 2 WHEN 'normal' THEN 1 ELSE 0 END DESC, next_attempt_at, id LIMIT ?",
+                "SELECT id FROM research_questions WHERE status = 'open' AND deleted_at IS NULL AND pursuit_policy <> 'disabled' AND next_attempt_at IS NOT NULL AND next_attempt_at <= ? ORDER BY CASE priority WHEN 'urgent' THEN 3 WHEN 'high' THEN 2 WHEN 'normal' THEN 1 ELSE 0 END DESC, next_attempt_at, id LIMIT ?",
                 (timestamp, limit),
             ).fetchall()
             identifiers = [row["id"] for row in rows]
@@ -1691,7 +1793,15 @@ class ResearchQuestionExecutionService:
         finally:
             conn.close()
 
-    def _plan_queries(self, question: Mapping[str, Any], task: Mapping[str, Any], query: str, limit: int) -> list[tuple[str, str]]:
+    def _plan_queries(
+        self,
+        question: Mapping[str, Any],
+        task: Mapping[str, Any],
+        query: str,
+        limit: int,
+        *,
+        allow_provider: bool = True,
+    ) -> list[tuple[str, str]]:
         plan = _decode(task.get("plan_json"))
         context = self._watch_context(str(question["id"]))
         raw: list[tuple[str, str]] = []
@@ -1707,7 +1817,7 @@ class ResearchQuestionExecutionService:
         }.get(gap_type)
         if gap_terms:
             raw.append((f"{question['question']} {gap_terms}", "gap"))
-        if self._router is not None:
+        if self._router is not None and allow_provider:
             try:
                 from .ai import ResearchPlanRequest
 
@@ -1782,8 +1892,8 @@ class ResearchQuestionExecutionService:
                     (
                         new_id("rqf"), task_id, finding_type, identity, status,
                         item.get("source_id"), item.get("document_id"), item.get("document_version_id"),
-                        item.get("claim_id") if finding_type == "claim" else None,
-                        item.get("evidence_span_id") if finding_type == "evidence" else None,
+                        (item.get("claim_id") or item.get("entity_id")) if finding_type == "claim" else None,
+                        (item.get("evidence_span_id") or item.get("entity_id")) if finding_type == "evidence" else None,
                         max(0, rank), _json({"title": str(item.get("title") or "")[:300], "snippet": str(item.get("snippet") or "")[:500]}),
                         utc_now(), utc_now(),
                     ),
@@ -1791,10 +1901,12 @@ class ResearchQuestionExecutionService:
         finally:
             conn.close()
 
-    def _research(self, query_plan: list[tuple[str, str]], cap: int) -> list[dict[str, Any]]:
+    def _research(self, query_plan: list[tuple[str, str]], cap: int, *, deadline: float | None = None) -> list[dict[str, Any]]:
         search = self._search_service()
         findings: dict[tuple[str, str], dict[str, Any]] = {}
         for candidate, _strategy in query_plan:
+            if deadline is not None and time.monotonic() >= deadline:
+                break
             if len(findings) >= cap:
                 break
             try:
@@ -1809,12 +1921,21 @@ class ResearchQuestionExecutionService:
                     break
         return list(findings.values())
 
-    def _external_candidates(self, query_plan: list[tuple[str, str]], cap: int) -> tuple[list[dict[str, Any]], str | None]:
+    def _external_candidates(
+        self,
+        query_plan: list[tuple[str, str]],
+        cap: int,
+        *,
+        deadline: float | None = None,
+    ) -> tuple[list[dict[str, Any]], str | None]:
         if self._external_search is None:
             return [], None
         output: list[dict[str, Any]] = []
+        seen_urls: set[str] = set()
         try:
             for query, _strategy in query_plan:
+                if deadline is not None and time.monotonic() >= deadline:
+                    break
                 if len(output) >= cap:
                     break
                 raw = self._external_search.search(query, limit=min(cap - len(output), 10))
@@ -1827,6 +1948,9 @@ class ResearchQuestionExecutionService:
                     title = str(item.get("title") or item.get("name") or "").strip()
                     if not url or len(url) > 2048 or len(title) > 500:
                         continue
+                    if url in seen_urls:
+                        continue
+                    seen_urls.add(url)
                     output.append({"url": url, "title": title, "source_id": item.get("source_id"), "snippet": str(item.get("snippet") or "")[:500]})
                     if len(output) >= cap:
                         break
@@ -1861,11 +1985,18 @@ class ResearchQuestionExecutionService:
             query = str(self.questions.get(question_id).get("question") or "").strip()
         limits = _decode(task.get("limits_json"))
         task_limits = _task_limits(limits)
+        deadline = time.monotonic() + task_limits["max_runtime_seconds"]
         question = self.questions.get(question_id)
-        query_plan = self._plan_queries(question, task, query, min(task_limits["max_queries"], 25))
+        query_plan = self._plan_queries(
+            question,
+            task,
+            query,
+            min(task_limits["max_queries"], 25),
+            allow_provider=task_limits["max_provider_calls"] > 0,
+        )
         for ordinal, (planned_query, strategy) in enumerate(query_plan):
             self._persist_query(task["id"], planned_query, strategy, ordinal)
-        findings = self._research(query_plan, cap=task_limits["max_candidates"])
+        findings = self._research(query_plan, cap=task_limits["max_candidates"], deadline=deadline)
         claims = [item for item in findings if item["entity_type"] == "claim"]
         evidence = [item for item in findings if item["entity_type"] == "evidence"]
         for rank, item in enumerate(findings):
@@ -1889,7 +2020,11 @@ class ResearchQuestionExecutionService:
 
         external, provider_error = ([], None)
         if not findings and discovery_count == 0:
-            external, provider_error = self._external_candidates(query_plan, min(task_limits["max_candidates"], 25))
+            external, provider_error = self._external_candidates(
+                query_plan,
+                min(task_limits["max_candidates"], 25),
+                deadline=deadline,
+            )
             for rank, candidate in enumerate(external):
                 self._persist_finding(task["id"], {"finding_type": "source_candidate", "identity_key": candidate["url"], "title": candidate.get("title"), "snippet": candidate.get("snippet")}, rank=rank)
 
@@ -2064,12 +2199,30 @@ def reconcile_research_job_outcome(
         conn.execute(
             """
             UPDATE research_tasks
-               SET status = ?, outcome_json = ?, error_code = ?, error_detail = ?,
-                   started_at = COALESCE(started_at, ?), completed_at = ?, updated_at = ?
+               SET status = CASE WHEN status = 'completed_with_evidence' THEN status ELSE ? END,
+                   outcome_json = CASE WHEN status = 'completed_with_evidence' THEN outcome_json ELSE ? END,
+                   error_code = CASE WHEN status = 'completed_with_evidence' THEN error_code ELSE ? END,
+                   error_detail = CASE WHEN status = 'completed_with_evidence' THEN error_detail ELSE ? END,
+                   started_at = COALESCE(started_at, ?),
+                   completed_at = CASE WHEN status = 'completed_with_evidence' THEN COALESCE(completed_at, ?) ELSE ? END,
+                   updated_at = ?
              WHERE id = ? AND status <> 'deferred'
             """,
-            (status, _json(result or {}), error_code, error, now, now if status in RESEARCH_TASK_TERMINAL_STATUSES else None, now, task_id),
+            (
+                status,
+                _json(result or {}),
+                error_code,
+                error,
+                now,
+                now if status in RESEARCH_TASK_TERMINAL_STATUSES else None,
+                now if status in RESEARCH_TASK_TERMINAL_STATUSES else None,
+                now,
+                task_id,
+            ),
         )
+        effective_task = conn.execute("SELECT status FROM research_tasks WHERE id = ?", (task_id,)).fetchone()
+        if effective_task is None or effective_task["status"] == "completed_with_evidence":
+            return
         if status in {"completed_with_candidates", "completed_no_findings", "failed", "cancelled"}:
             task = conn.execute("SELECT gap_id, question_id FROM research_tasks WHERE id = ?", (task_id,)).fetchone()
             if task is not None:
@@ -2083,6 +2236,16 @@ def reconcile_research_job_outcome(
                         "INSERT INTO research_question_gap_history(id, gap_id, from_status, to_status, reason_code, task_id, actor, created_at) VALUES (?, ?, 'pursuing', 'open', ?, ?, 'system', ?)",
                         (new_id("rqgh"), task["gap_id"], "task_failed" if status in {"failed", "cancelled"} else "task_completed_without_qualifying_evidence", task_id, now),
                     )
+                if status in {"completed_with_candidates", "completed_no_findings", "failed"}:
+                    question = conn.execute(
+                        "SELECT pursuit_policy, pursuit_cooldown_seconds FROM research_questions WHERE id = ?",
+                        (task["question_id"],),
+                    ).fetchone()
+                    if question is not None and question["pursuit_policy"] == "automatic":
+                        conn.execute(
+                            "UPDATE research_questions SET next_attempt_at = ?, updated_at = ? WHERE id = ? AND status = 'open'",
+                            (_plus_seconds(now, int(question["pursuit_cooldown_seconds"] or 0)), now, task["question_id"]),
+                        )
 
     if final_status == "queued":
         conn.execute(
@@ -2261,11 +2424,16 @@ def research_job_completion_hook(
 __all__ = [
     "ATTEMPT_MODES",
     "ATTEMPT_STATUSES",
+    "ASSESSMENT_STATES",
+    "DEFAULT_TASK_LIMITS",
+    "GAP_STATUSES",
+    "GAP_TYPES",
     "LINK_RELATIONSHIPS",
     "NOTE_TYPES",
     "QUESTION_ORIGINS",
     "QUESTION_PRIORITIES",
     "QUESTION_STATUSES",
+    "RESEARCH_TASK_STATUSES",
     "reconcile_recovered_research_job",
     "reconcile_research_job_outcome",
     "research_job_completion_hook",

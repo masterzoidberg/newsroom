@@ -1426,10 +1426,13 @@ def create_domain_router(
     @router.post("/research-questions/{identifier}/gaps/{gap_id}/review")
     async def review_research_question_gap(request: Request, identifier: str, gap_id: str, payload: ResearchQuestionGapReview):
         user = write_guard(request)
-        gap = research.set_gap_status(gap_id, payload.status, actor=user.user_id, reason=payload.reason)
-        if gap["question_id"] != identifier:
-            raise DomainNotFound("research question gap not found")
-        return gap
+        return research.set_gap_status(
+            gap_id,
+            payload.status,
+            question_id=identifier,
+            actor=user.user_id,
+            reason=payload.reason,
+        )
 
     @router.post("/research-questions/{identifier}/gaps/{gap_id}/pursue", status_code=201)
     async def pursue_research_question_gap(request: Request, identifier: str, gap_id: str, payload: ResearchQuestionPursuitCreate):

@@ -222,6 +222,45 @@ export type Timeline = { events?: Array<Record<string, unknown>>; revisions?: Ar
 
 export type CollectionRecord = Record<string, unknown> & { id: string; name?: string; title?: string; status?: string; enabled?: boolean };
 
+export type ResearchQuestionClaim = {
+  claim_id: string;
+  relationship: "supports" | "contradicts" | "contextualizes" | "resolves";
+  origin?: "manual" | "automatic" | "task";
+  confidence?: number;
+  rationale?: string;
+};
+
+export type ResearchQuestionGap = {
+  id: string;
+  gap_type: string;
+  description: string;
+  status: "open" | "pursuing" | "satisfied" | "dismissed" | "blocked";
+  rationale?: string;
+};
+
+export type ResearchTask = {
+  id: string;
+  status: "planned" | "running" | "completed_with_evidence" | "completed_with_candidates" | "completed_no_findings" | "deferred" | "failed" | "cancelled";
+  mode: "manual" | "automatic";
+  outcome?: Record<string, unknown>;
+  limits?: Record<string, number>;
+};
+
+export type ResearchQuestion = CollectionRecord & {
+  question: string;
+  assessment_state?: "open" | "partially_answered" | "supported" | "contradicted" | "resolved" | "stale";
+  assessment_explanation?: string;
+  assessment_at?: string | null;
+  pursuit_policy?: "disabled" | "manual" | "automatic";
+};
+
+export type ResearchQuestionDetail = ResearchQuestion & {
+  claims?: ResearchQuestionClaim[];
+  gaps?: ResearchQuestionGap[];
+  tasks?: ResearchTask[];
+  assessment_history?: Array<Record<string, unknown>>;
+};
+
 export type AskCitation = {
   id: string;
   object_type: string;

@@ -54,7 +54,7 @@ _EXPORT_COLUMNS: dict[str, tuple[str, ...]] = {
     "claim_story_assignment_history": ("id", "claim_id", "from_story_id", "to_story_id", "reason", "created_at"),
     "evidence_spans": ("id", "document_version_id", "locator_type", "locator_value", "span_hash", "article_analysis_id", "artifact_id", "artifact_content_hash", "view_content_hash", "view_kind", "view_version", "field_path", "start_offset", "end_offset", "verification_method", "provenance_json", "created_at"),
     "claim_evidence": ("id", "claim_id", "evidence_span_id", "relationship", "created_at"),
-    "research_questions": ("id", "question", "origin_type", "origin_id", "status", "priority", "created_at", "updated_at", "deleted_at"),
+    "research_questions": ("id", "question", "origin_type", "origin_id", "status", "priority", "assessment_state", "assessment_hash", "assessment_explanation", "assessment_at", "criteria_json", "pursuit_policy", "pursuit_cooldown_seconds", "created_at", "updated_at", "deleted_at"),
     "research_question_history": ("id", "question_id", "from_status", "to_status", "reason", "actor", "created_at"),
     "research_question_claims": ("question_id", "claim_id", "relationship", "created_at", "origin", "confidence", "rationale", "actor"),
     "research_question_evidence": ("question_id", "evidence_span_id", "relationship", "created_at"),
