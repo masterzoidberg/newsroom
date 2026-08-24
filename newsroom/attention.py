@@ -121,7 +121,15 @@ class AttentionService:
     def refresh(self, *, limit: int = 200) -> dict[str, Any]:
         if limit < 1 or limit > 500:
             raise DomainValidation("attention limit must be between 1 and 500")
-        candidates = self._candidates()[:limit]
+        candidates = self._candidates()
+        candidates.sort(
+            key=lambda item: (
+                -float(item["importance_score"]),
+                item["object_type"],
+                item["object_id"],
+            )
+        )
+        candidates = candidates[:limit]
         now = utc_now()
         conn = storage.connect(self.db_path)
         created_count = 0
