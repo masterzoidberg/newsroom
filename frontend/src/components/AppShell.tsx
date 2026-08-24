@@ -15,7 +15,7 @@ export const NAV_ITEMS: NavItem[] = [
   { key: "topics", label: "Topics", group: "Configure", icon: "#" },
   { key: "subjects", label: "Subjects", group: "Configure", icon: "◎" },
   { key: "sources", label: "Sources", group: "Configure", icon: "↗" },
-  { key: "monitors", label: "Monitors", group: "Configure", icon: "◌" },
+  { key: "monitors", label: "Watches", group: "Configure", icon: "◌" },
   { key: "questions", label: "Research questions", group: "Configure", icon: "?" },
   { key: "runs", label: "Runs & jobs", group: "Operate", icon: "▶" },
   { key: "alerts", label: "Alerts", group: "Operate", icon: "!" },

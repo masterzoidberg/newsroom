@@ -22,6 +22,7 @@ from .document_processing import (
     DocumentProcessingExecutionService,
     document_version_processing_rerun_factory,
 )
+from .intelligent_monitoring import WatchMaintenanceService
 from .jobs import JobService, compose_completion_hooks, compose_rerun_factories
 from .migrations import apply_migrations
 from .monitoring import MonitorExecutionService, monitor_job_completion_hook
@@ -130,6 +131,7 @@ def build_worker_handlers(db_path: str | Path) -> dict[str, Any]:
         AutomaticStoryStageExecutionService(db_path).handlers(),
         AutomaticReportStageExecutionService(db_path).handlers(),
         AutomaticAlertStageExecutionService(db_path).handlers(),
+        WatchMaintenanceService(db_path).handlers(),
     )
 
 

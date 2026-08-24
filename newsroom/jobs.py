@@ -67,6 +67,8 @@ DOCUMENT_VERSION_PROCESS_JOB_TYPE = "document_version_process"
 AUTOMATIC_STORY_STAGE_JOB_TYPE = "automatic_story_stage"
 AUTOMATIC_REPORT_STAGE_JOB_TYPE = "automatic_report_stage"
 AUTOMATIC_ALERT_STAGE_JOB_TYPE = "automatic_alert_stage"
+WATCH_SOURCE_DISCOVERY_JOB_TYPE = "watch_source_discovery"
+WATCH_VOCABULARY_SUGGESTION_JOB_TYPE = "watch_vocabulary_suggestion"
 
 RecoveryHook = Callable[[sqlite3.Connection, sqlite3.Row, str], None]
 CompletionHook = Callable[[sqlite3.Connection, sqlite3.Row, str, Mapping[str, Any] | None], None]
@@ -1800,6 +1802,8 @@ __all__ = [
     "AUTOMATIC_ALERT_STAGE_JOB_TYPE",
     "AUTOMATIC_STORY_STAGE_JOB_TYPE",
     "AUTOMATIC_REPORT_STAGE_JOB_TYPE",
+    "WATCH_SOURCE_DISCOVERY_JOB_TYPE",
+    "WATCH_VOCABULARY_SUGGESTION_JOB_TYPE",
     "DOCUMENT_VERSION_PROCESS_JOB_TYPE",
     "JobConflict",
     "JobError",

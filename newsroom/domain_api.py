@@ -19,6 +19,7 @@ from .article_analysis import ArticleAnalysisService
 from .domain import CoreService, DomainValidation
 from .evidence import EvidenceService
 from .jobs import BudgetService, JobService, SchedulerService, compose_completion_hooks
+from .intelligent_monitoring import WatchMaintenanceService, WatchService
 from .monitoring import (
     MonitorService,
     MonitoringPolicyService,
@@ -187,6 +188,50 @@ class MonitorPatch(StrictModel):
         if not self.model_fields_set:
             raise ValueError("at least one monitor field must be supplied")
         return self
+
+
+class WatchCreate(StrictModel):
+    name: str = Field(min_length=1, max_length=200)
+    target_type: str = Field(pattern="^(topic|subject|story|source|research_question)$")
+    target_id: str = Field(min_length=1, max_length=200)
+    policy_id: str = Field(min_length=1, max_length=200)
+    priority: str = Field(default="normal", pattern="^(low|normal|high|urgent)$")
+    discovery_enabled: bool = True
+
+
+class WatchReview(StrictModel):
+    """Shared approve/reject envelope for vocabulary and Source candidates."""
+
+    status: str = Field(pattern="^(approved|rejected)$")
+
+
+class WatchVocabularySuggest(StrictModel):
+    limit: int = Field(default=20, ge=1, le=50)
+
+
+class WatchDiscoveryRun(StrictModel):
+    limit: int = Field(default=25, ge=1, le=25)
+
+
+class WatchVocabularyCreate(StrictModel):
+    term: str = Field(min_length=1, max_length=300)
+    kind: str = Field(
+        default="alias",
+        pattern="^(primary|alias|synonym|acronym|acronym_expansion|related|include|exclude)$",
+    )
+    expansion_of: Optional[str] = Field(default=None, max_length=300)
+    rationale: str = Field(default="Added by user", max_length=2000)
+
+
+class SourceCandidateCreate(StrictModel):
+    name: str = Field(min_length=1, max_length=200)
+    homepage_url: str = Field(min_length=1, max_length=2048)
+    feed_url: Optional[str] = Field(default=None, max_length=2048)
+    discovery_method: str = Field(default="manual", pattern="^(manual|existing_source|document_link|feed_discovery|web_search|ai_suggestion)$")
+    rationale: str = Field(min_length=1, max_length=2000)
+    authority_context: str = Field(default="", max_length=2000)
+    limitations: str = Field(default="", max_length=2000)
+    provenance: dict[str, Any] = Field(default_factory=dict)
 
 
 class RelevanceEvaluate(StrictModel):
@@ -785,6 +830,8 @@ def create_domain_router(
     scheduler = SchedulerService(service.db_path)
     policies = MonitoringPolicyService(service.db_path)
     monitors = MonitorService(service.db_path)
+    watches = WatchService(service.db_path)
+    watch_maintenance = WatchMaintenanceService(service.db_path, watches=watches)
     vocabulary_service = ScopeSuggestionService(service.db_path)
     evolution = StoryEvolutionService(service.db_path)
     research = ResearchQuestionService(service.db_path)
@@ -1768,6 +1815,82 @@ def create_domain_router(
     async def list_monitors(request: Request, enabled: Optional[bool] = None, target_type: Optional[str] = None, page: int = Query(1, ge=1), page_size: int = Query(25, ge=1, le=100)):
         read_guard(request)
         return monitors.list(enabled=enabled, target_type=target_type, page=page, page_size=page_size)
+
+    @router.get("/watches")
+    async def list_watches(request: Request, status: Optional[str] = None, page: int = Query(1, ge=1), page_size: int = Query(25, ge=1, le=100)):
+        read_guard(request)
+        return watches.list(status=status, page=page, page_size=page_size)
+
+    @router.post("/watches", status_code=201)
+    async def create_watch(request: Request, payload: WatchCreate):
+        write_guard(request)
+        return watches.create(payload.model_dump())
+
+    @router.get("/watches/{identifier}")
+    async def get_watch(request: Request, identifier: str):
+        read_guard(request)
+        return watches.get(identifier)
+
+    @router.post("/watches/{identifier}/pause")
+    async def pause_watch(request: Request, identifier: str):
+        write_guard(request)
+        return watches.pause(identifier)
+
+    @router.post("/watches/{identifier}/resume")
+    async def resume_watch(request: Request, identifier: str):
+        write_guard(request)
+        return watches.resume(identifier)
+
+    @router.post("/watches/{identifier}/disable")
+    async def disable_watch(request: Request, identifier: str):
+        write_guard(request)
+        return watches.disable(identifier)
+
+    @router.post("/watches/{identifier}/vocabulary/suggest", status_code=201)
+    async def suggest_watch_vocabulary(request: Request, identifier: str, payload: WatchVocabularySuggest):
+        write_guard(request)
+        return {"items": watches.suggest_vocabulary(identifier, limit=payload.limit)}
+
+    @router.post("/watches/{identifier}/vocabulary", status_code=201)
+    async def create_watch_vocabulary(request: Request, identifier: str, payload: WatchVocabularyCreate):
+        user = write_guard(request)
+        return watches.add_vocabulary(identifier, {**payload.model_dump(), "created_by": user.user_id})
+
+    @router.post("/watches/{identifier}/vocabulary/{vocabulary_id}/review")
+    async def review_watch_vocabulary(request: Request, identifier: str, vocabulary_id: str, payload: WatchReview):
+        user = write_guard(request)
+        return watches.review_vocabulary(identifier, vocabulary_id, payload.status, user.user_id)
+
+    @router.post("/watches/{identifier}/discover-sources")
+    async def discover_watch_sources(request: Request, identifier: str, payload: WatchDiscoveryRun):
+        write_guard(request)
+        return watches.discover_sources(identifier, limit=payload.limit)
+
+    @router.post("/watches/{identifier}/discovery-runs", status_code=202)
+    async def enqueue_watch_discovery(request: Request, identifier: str, payload: WatchDiscoveryRun):
+        write_guard(request)
+        return watch_maintenance.enqueue_discovery(identifier, limit=payload.limit)
+
+    @router.post("/watches/{identifier}/vocabulary/suggestion-runs", status_code=202)
+    async def enqueue_watch_suggestion(request: Request, identifier: str, payload: WatchVocabularySuggest):
+        write_guard(request)
+        return watch_maintenance.enqueue_suggestion(identifier, limit=payload.limit)
+
+    @router.post("/watches/{identifier}/source-candidates", status_code=201)
+    async def create_watch_source_candidate(request: Request, identifier: str, payload: SourceCandidateCreate):
+        write_guard(request)
+        return watches.add_source_candidate(identifier, payload.model_dump(exclude_none=True))
+
+    @router.post("/watches/{identifier}/source-candidates/{candidate_id}/review")
+    async def review_watch_source_candidate(request: Request, identifier: str, candidate_id: str, payload: WatchReview):
+        user = write_guard(request)
+        return watches.review_source_candidate(identifier, candidate_id, payload.status, user.user_id)
+
+    @router.delete("/watches/{identifier}/sources/{source_id}", status_code=204)
+    async def remove_watch_source(request: Request, identifier: str, source_id: str):
+        write_guard(request)
+        watches.remove_source(identifier, source_id)
+        return Response(status_code=204)
 
     @router.post("/monitors", status_code=201)
     async def create_monitor(request: Request, payload: MonitorCreate):

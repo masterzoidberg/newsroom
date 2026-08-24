@@ -2200,6 +2200,149 @@ MIGRATION_0023_CHECKSUM = hashlib.sha256(
 ).hexdigest()
 
 
+# Phase 24 — a Watch is the user-facing monitoring instruction. Approved
+# Sources are implemented by ordinary source Monitors, preserving the existing
+# scheduler/acquisition/relevance pipeline and its compatibility contracts.
+#
+# The monitors rebuild replaces UNIQUE(target_type, target_id) with per-need
+# identity. A Source may now be monitored once per approved information need,
+# so two Watches can share one Source while each keeps its own approved scope,
+# cadence, and enabled state. Acquisition-only monitors (need_type IS NULL)
+# remain limited to one per target, which the old constraint also guaranteed.
+# Partial indexes are used deliberately: a table-level UNIQUE over nullable
+# need columns would treat every NULL as distinct and silently permit
+# duplicate acquisition-only monitors.
+MIGRATION_0024_STATEMENTS: tuple[str, ...] = (
+    "DROP TRIGGER search_dirty_monitors_insert",
+    "DROP TRIGGER search_dirty_monitors_update",
+    "DROP TRIGGER search_dirty_monitors_delete",
+    "PRAGMA legacy_alter_table = ON",
+    "ALTER TABLE monitors RENAME TO monitors_legacy_0024",
+    """
+    CREATE TABLE monitors (
+        id TEXT PRIMARY KEY,
+        target_type TEXT NOT NULL CHECK (target_type IN ('topic', 'subject', 'story', 'source', 'research_question')),
+        target_id TEXT NOT NULL,
+        policy_id TEXT NOT NULL REFERENCES monitoring_policies(id),
+        enabled INTEGER NOT NULL DEFAULT 1 CHECK (enabled IN (0, 1)),
+        next_check_at TEXT,
+        last_run_at TEXT,
+        last_result TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        need_type TEXT CHECK (need_type IS NULL OR need_type IN ('topic', 'subject', 'story', 'research_question')),
+        need_id TEXT
+    )
+    """,
+    """
+    INSERT INTO monitors
+        (id, target_type, target_id, policy_id, enabled, next_check_at,
+         last_run_at, last_result, created_at, updated_at, need_type, need_id)
+    SELECT id, target_type, target_id, policy_id, enabled, next_check_at,
+           last_run_at, last_result, created_at, updated_at, need_type, need_id
+    FROM monitors_legacy_0024
+    """,
+    "DROP TABLE monitors_legacy_0024",
+    "PRAGMA legacy_alter_table = OFF",
+    "CREATE UNIQUE INDEX monitors_acquisition_identity_idx ON monitors(target_type, target_id) WHERE need_type IS NULL",
+    "CREATE UNIQUE INDEX monitors_need_identity_idx ON monitors(target_type, target_id, need_type, need_id) WHERE need_type IS NOT NULL",
+    "CREATE INDEX monitors_due_idx ON monitors(enabled, next_check_at)",
+    """
+    CREATE TRIGGER search_dirty_monitors_insert
+        AFTER INSERT ON monitors
+        BEGIN
+            UPDATE search_index_meta SET dirty = 1, updated_at = CURRENT_TIMESTAMP WHERE id = 1;
+        END
+    """,
+    """
+    CREATE TRIGGER search_dirty_monitors_update
+        AFTER UPDATE ON monitors
+        BEGIN
+            UPDATE search_index_meta SET dirty = 1, updated_at = CURRENT_TIMESTAMP WHERE id = 1;
+        END
+    """,
+    """
+    CREATE TRIGGER search_dirty_monitors_delete
+        AFTER DELETE ON monitors
+        BEGIN
+            UPDATE search_index_meta SET dirty = 1, updated_at = CURRENT_TIMESTAMP WHERE id = 1;
+        END
+    """,
+    """
+    CREATE TABLE watches (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        target_type TEXT NOT NULL CHECK (target_type IN ('topic','subject','story','source','research_question')),
+        target_id TEXT NOT NULL,
+        policy_id TEXT NOT NULL REFERENCES monitoring_policies(id),
+        status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active','paused','disabled')),
+        priority TEXT NOT NULL DEFAULT 'normal' CHECK (priority IN ('low','normal','high','urgent')),
+        discovery_enabled INTEGER NOT NULL DEFAULT 1 CHECK (discovery_enabled IN (0,1)),
+        last_discovery_at TEXT,
+        discovery_error TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        UNIQUE(target_type, target_id)
+    )
+    """,
+    "CREATE INDEX watches_status_idx ON watches(status, priority, updated_at DESC)",
+    """
+    CREATE TABLE watch_vocabulary (
+        id TEXT PRIMARY KEY,
+        watch_id TEXT NOT NULL REFERENCES watches(id) ON DELETE CASCADE,
+        term TEXT NOT NULL,
+        term_normalized TEXT NOT NULL,
+        kind TEXT NOT NULL CHECK (kind IN ('primary','alias','synonym','acronym','acronym_expansion','related','include','exclude')),
+        origin TEXT NOT NULL CHECK (origin IN ('user','deterministic','ai','topic','subject','import')),
+        status TEXT NOT NULL DEFAULT 'suggested' CHECK (status IN ('suggested','approved','rejected')),
+        enabled INTEGER NOT NULL DEFAULT 0 CHECK (enabled IN (0,1)),
+        expansion_of TEXT,
+        rationale TEXT NOT NULL DEFAULT '',
+        created_at TEXT NOT NULL,
+        reviewed_at TEXT,
+        reviewed_by TEXT,
+        UNIQUE(watch_id, term_normalized, kind)
+    )
+    """,
+    "CREATE INDEX watch_vocabulary_watch_idx ON watch_vocabulary(watch_id, status, created_at, id)",
+    """
+    CREATE TABLE source_candidates (
+        id TEXT PRIMARY KEY,
+        watch_id TEXT NOT NULL REFERENCES watches(id) ON DELETE CASCADE,
+        source_id TEXT REFERENCES sources(id) ON DELETE SET NULL,
+        name TEXT NOT NULL,
+        homepage_url TEXT NOT NULL,
+        normalized_url TEXT NOT NULL,
+        feed_url TEXT,
+        discovery_method TEXT NOT NULL CHECK (discovery_method IN ('manual','existing_source','document_link','feed_discovery','web_search','ai_suggestion')),
+        rationale TEXT NOT NULL,
+        authority_context TEXT NOT NULL DEFAULT '',
+        limitations TEXT NOT NULL DEFAULT '',
+        provenance_json TEXT NOT NULL DEFAULT '{}',
+        status TEXT NOT NULL DEFAULT 'suggested' CHECK (status IN ('suggested','approved','rejected')),
+        created_at TEXT NOT NULL,
+        reviewed_at TEXT,
+        reviewed_by TEXT,
+        UNIQUE(watch_id, normalized_url)
+    )
+    """,
+    "CREATE INDEX source_candidates_watch_idx ON source_candidates(watch_id, status, created_at, id)",
+    """
+    CREATE TABLE watch_sources (
+        watch_id TEXT NOT NULL REFERENCES watches(id) ON DELETE CASCADE,
+        source_id TEXT NOT NULL REFERENCES sources(id) ON DELETE RESTRICT,
+        monitor_id TEXT NOT NULL UNIQUE REFERENCES monitors(id) ON DELETE RESTRICT,
+        created_at TEXT NOT NULL,
+        PRIMARY KEY(watch_id, source_id)
+    )
+    """,
+)
+
+MIGRATION_0024_CHECKSUM = hashlib.sha256(
+    "\n".join(MIGRATION_0024_STATEMENTS).encode("utf-8")
+).hexdigest()
+
+
 @dataclass(frozen=True)
 class MigrationResult:
     applied_versions: tuple[int, ...]
@@ -2270,6 +2413,7 @@ def apply_migrations(db_path: Optional[str | Path] = None) -> MigrationResult:
                 21: MIGRATION_0021_STATEMENTS,
                 22: MIGRATION_0022_STATEMENTS,
                 23: MIGRATION_0023_STATEMENTS,
+                24: MIGRATION_0024_STATEMENTS,
             }
             for version, statements in migrations.items():
                 if version in existing:

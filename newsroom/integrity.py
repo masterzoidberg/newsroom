@@ -120,6 +120,60 @@ def check_database(db_path: Optional[str] = None) -> IntegrityReport:
                     for row in rows
                 )
 
+        # Phase 24 — a Watch must resolve to a live target, and every
+        # Watch-Source relationship must be implemented by a source Monitor
+        # that carries the Watch's own information need.
+        if _table_exists(conn, "watches"):
+            for target_type, table in _MONITOR_TARGET_TABLES.items():
+                if not _table_exists(conn, table):
+                    continue
+                rows = conn.execute(
+                    f"""
+                    SELECT w.id, w.target_id
+                    FROM watches AS w
+                    WHERE w.target_type = ?
+                      AND NOT EXISTS (
+                          SELECT 1 FROM {table} AS target WHERE target.id = w.target_id
+                      )
+                    ORDER BY w.id
+                    """,
+                    (target_type,),
+                )
+                issues.extend(
+                    IntegrityIssue(
+                        "orphan_watch_target",
+                        f"watch={row[0]} target_type={target_type} target_id={row[1]}",
+                    )
+                    for row in rows
+                )
+
+            if _table_exists(conn, "watch_sources") and _table_exists(conn, "monitors"):
+                rows = conn.execute(
+                    """
+                    SELECT ws.watch_id, ws.monitor_id
+                    FROM watch_sources AS ws
+                    JOIN watches AS w ON w.id = ws.watch_id
+                    JOIN monitors AS m ON m.id = ws.monitor_id
+                    WHERE m.target_type <> 'source'
+                       OR m.target_id <> ws.source_id
+                       OR (
+                           w.target_type <> 'source'
+                           AND (
+                               m.need_type IS NOT w.target_type
+                               OR m.need_id IS NOT w.target_id
+                           )
+                       )
+                    ORDER BY ws.watch_id, ws.monitor_id
+                    """
+                )
+                issues.extend(
+                    IntegrityIssue(
+                        "invalid_watch_source_monitor",
+                        f"watch={row[0]} monitor={row[1]}",
+                    )
+                    for row in rows
+                )
+
         if not _table_exists(conn, "research_questions"):
             issues.append(IntegrityIssue("missing_schema", "research_questions is absent"))
         else:
