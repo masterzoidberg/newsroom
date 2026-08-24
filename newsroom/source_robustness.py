@@ -89,7 +89,7 @@ class SourceRobustnessService:
                 ).fetchall()
                 for row in rows:
                     related = row["related"]
-                    if related in remaining and related not in component:
+                    if related not in component:
                         component.add(related)
                         frontier.append(related)
             remaining -= component
@@ -110,11 +110,20 @@ class SourceRobustnessService:
                 ).fetchall()
                 if len(rows) != len(requested):
                     raise DomainNotFound("evidence family document not found")
-                conn.execute(
-                    f"DELETE FROM evidence_family_members WHERE document_id IN ({placeholders})",
-                    requested,
-                )
                 groups = self._component_groups(conn, requested)
+                component_document_ids = sorted(
+                    {document_id for group in groups for document_id in group}
+                )
+                component_placeholders = ",".join("?" for _ in component_document_ids)
+                source_rows = conn.execute(
+                    f"SELECT id, source_id FROM documents WHERE id IN ({component_placeholders})",
+                    component_document_ids,
+                ).fetchall()
+                source_by_document = {row["id"]: row["source_id"] for row in source_rows}
+                conn.execute(
+                    f"DELETE FROM evidence_family_members WHERE document_id IN ({component_placeholders})",
+                    component_document_ids,
+                )
                 output: list[dict[str, Any]] = []
                 now = utc_now()
                 for group in groups:
@@ -130,7 +139,7 @@ class SourceRobustnessService:
                         family_id = existing["id"]
                         conn.execute("UPDATE evidence_families SET updated_at = ? WHERE id = ?", (now, family_id))
                     for document_id in group:
-                        source_id = next(row["source_id"] for row in rows if row["id"] == document_id)
+                        source_id = source_by_document[document_id]
                         conn.execute(
                             "INSERT INTO evidence_family_members(family_id, document_id, source_id, relationship, confidence, created_at) VALUES (?, ?, ?, 'member', 1.0, ?)",
                             (family_id, document_id, source_id, now),

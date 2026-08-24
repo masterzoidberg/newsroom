@@ -31,8 +31,9 @@ def test_dependency_rebuild_groups_derivative_documents_without_calling_sources_
     StoryEvolutionService(tmp_db).link_lineage(syndicated["id"], primary["id"], "syndicated_from", confidence=1.0, rationale="wire copy")
 
     robustness = SourceRobustnessService(tmp_db)
-    families = robustness.rebuild_evidence_families([primary["id"], syndicated["id"], independent["id"]])
-    assert len(families) == 2
+    families = robustness.rebuild_evidence_families([primary["id"]])
+    assert len(families) == 1
+    assert set(families[0]["document_ids"]) == {primary["id"], syndicated["id"]}
     summary = robustness.evidence_summary("claim", claim["id"])
     assert summary["distinct_source_count"] == 3
     assert summary["evidence_family_count"] == 2
