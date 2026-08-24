@@ -9,6 +9,8 @@ from newsroom.evidence import EvidenceService, claim_proposition_hash
 from newsroom.integrity import check_database
 from newsroom.knowledge import KnowledgeService
 from newsroom.migrations import apply_migrations
+from newsroom.intelligent_monitoring import WatchService
+from newsroom.monitoring import MonitoringPolicyService
 from newsroom.story_corrections import StoryCorrectionService
 from newsroom.story_corrections import StoryCorrectionReconciliationService
 from newsroom import storage
@@ -180,3 +182,63 @@ def test_story_correction_metrics_are_derived_from_durable_history(tmp_db):
     assert metrics["manual_unassignment_count"] == 1
     assert metrics["time_to_correction_seconds"] is not None
     assert metrics["resolver_algorithm_version"] == "automatic_story_resolver_v1"
+
+
+def test_duplicate_review_identity_and_watch_resolution_are_durable(tmp_db):
+    first, second, _ = _stories_and_claim(tmp_db)
+    evidence = "A durable proposition"
+    EvidenceService(tmp_db).create_claim(second["id"], {"proposition": evidence})
+    service = StoryCorrectionService(tmp_db)
+    suggestion = service.suggest_duplicates(first["id"])[0]
+    dismissed = service.dismiss_duplicate(
+        suggestion["source_story_id"],
+        suggestion["destination_story_id"],
+        evidence_hash=suggestion["evidence_hash"],
+        actor="user-1",
+        reason="distinct context",
+    )
+    assert dismissed["decision"] == "dismissed"
+    assert service.suggest_duplicates(first["id"]) == []
+
+    third = CoreService(tmp_db).create_story({"headline": "Third duplicate"})
+    EvidenceService(tmp_db).create_claim(third["id"], {"proposition": evidence})
+    approval = service.suggest_duplicates(third["id"])[0]
+    merged = service.approve_duplicate(
+        approval["source_story_id"],
+        approval["destination_story_id"],
+        evidence_hash=approval["evidence_hash"],
+        actor="user-1",
+        reason="duplicate confirmed",
+    )
+    assert merged["source"]["lifecycle"] == "archived"
+    assert merged["duplicate_evidence_hash"] == approval["evidence_hash"]
+
+    policy = MonitoringPolicyService(tmp_db).create(
+        {
+            "name": "Story corrections",
+            "allowed_channels": ["direct_http"],
+            "base_cadence_seconds": 60,
+            "min_cadence_seconds": 30,
+            "max_cadence_seconds": 300,
+        }
+    )
+    watch_source = CoreService(tmp_db).create_story({"headline": "Watch source"})
+    watch_destination = CoreService(tmp_db).create_story({"headline": "Watch destination"})
+    watch = WatchService(tmp_db).create(
+        {"name": "Merged Story", "target_type": "story", "target_id": watch_source["id"], "policy_id": policy["id"]}
+    )
+    service.merge_stories(watch_source["id"], watch_destination["id"], actor="user-1", reason="watch canonical")
+    merged_watch = WatchService(tmp_db).get(watch["id"])
+    assert merged_watch["target_id"] == watch_destination["id"]
+    assert merged_watch["historical_target_id"] == watch_source["id"]
+
+    split_source = CoreService(tmp_db).create_story({"headline": "Watch split"})
+    split_claim_a = EvidenceService(tmp_db).create_claim(split_source["id"], {"proposition": "Watch split A"})
+    split_claim_b = EvidenceService(tmp_db).create_claim(split_source["id"], {"proposition": "Watch split B"})
+    split_watch = WatchService(tmp_db).create(
+        {"name": "Split Story", "target_type": "story", "target_id": split_source["id"], "policy_id": policy["id"]}
+    )
+    split = service.split_story(split_source["id"], [[split_claim_a["id"]], [split_claim_b["id"]]], actor="user-1")
+    split_watch_after = WatchService(tmp_db).get(split_watch["id"])
+    assert split_watch_after["resolution_state"] == "needs_review"
+    assert json.loads(split_watch_after["resolution_options_json"]) == [item["id"] for item in split["children"]]
