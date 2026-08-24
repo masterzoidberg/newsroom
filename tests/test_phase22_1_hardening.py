@@ -443,7 +443,7 @@ def test_schema22_preserves_schema21_manual_evidence_and_child_links(tmp_db):
 
     result = apply_migrations(tmp_db)
 
-    assert result.applied_versions == (22, 23, 24, 25, 26, 27, 28, 29, 30)
+    assert result.applied_versions == (22, 23, 24, 25, 26, 27, 28, 29, 30, 31)
     conn = storage.connect(tmp_db)
     try:
         span = conn.execute("SELECT * FROM evidence_spans WHERE id = 'span-preserve'").fetchone()

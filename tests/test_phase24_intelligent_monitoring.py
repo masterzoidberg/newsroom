@@ -1362,8 +1362,8 @@ def test_phase23_database_upgrades_to_phase24_without_recreating_monitors(tmp_db
 
     result = apply_migrations(tmp_db)
 
-    assert result.applied_versions == (24, 25, 26, 27, 28, 29, 30)
-    assert migration_status(tmp_db) == tuple(range(1, 31))
+    assert result.applied_versions == (24, 25, 26, 27, 28, 29, 30, 31)
+    assert migration_status(tmp_db) == tuple(range(1, 32))
     assert apply_migrations(tmp_db).applied_versions == ()
     preserved = MonitorService(tmp_db).get(legacy_monitor["id"])
     assert preserved["target_id"] == source["id"]

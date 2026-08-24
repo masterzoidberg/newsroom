@@ -63,6 +63,7 @@ _EXPORT_COLUMNS: dict[str, tuple[str, ...]] = {
     "story_transition_authorizations": ("id", "claim_id"),
     "story_lineage": ("id", "source_story_id", "target_story_id", "relationship", "correction_id", "created_at"),
     "story_duplicate_decisions": ("id", "source_story_id", "destination_story_id", "evidence_hash", "decision", "correction_id", "reason", "created_at"),
+    "story_duplicate_suggestions": ("id", "source_story_id", "destination_story_id", "evidence_hash", "score", "explanation_json", "resolver_version", "created_at"),
     "research_questions": ("id", "question", "origin_type", "origin_id", "status", "priority", "assessment_state", "assessment_hash", "assessment_explanation", "assessment_at", "criteria_json", "pursuit_policy", "pursuit_cooldown_seconds", "created_at", "updated_at", "deleted_at"),
     "research_question_history": ("id", "question_id", "from_status", "to_status", "reason", "actor", "created_at"),
     "research_question_claims": ("question_id", "claim_id", "relationship", "created_at", "origin", "confidence", "rationale", "actor"),

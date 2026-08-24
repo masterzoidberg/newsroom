@@ -612,29 +612,39 @@ class StoryCorrectionService:
             raise DomainValidation("limit must be between 1 and 100")
         conn = storage.connect(self.db_path)
         try:
-            self._require_story(conn, story_id, active=True)
-            source_claims = [self._tokens(row[0]) for row in conn.execute("SELECT proposition FROM claims WHERE story_id = ?", (story_id,))]
-            output = []
-            for row in conn.execute("SELECT id FROM stories WHERE id <> ? AND deleted_at IS NULL AND lifecycle <> 'archived' ORDER BY id", (story_id,)):
-                candidate_claims = [self._tokens(item[0]) for item in conn.execute("SELECT proposition FROM claims WHERE story_id = ?", (row[0],))]
-                score = max((len(left & right) / max(1, len(left | right)) for left in source_claims for right in candidate_claims), default=0.0)
-                if score < 0.6:
-                    continue
-                source, destination = sorted((story_id, row[0]))
-                evidence_hash = hashlib.sha256(
-                    _json({
-                        "source": source,
-                        "destination": destination,
-                        "score": round(score, 6),
-                        "source_claims": sorted(" ".join(sorted(tokens)) for tokens in source_claims),
-                        "candidate_claims": sorted(" ".join(sorted(tokens)) for tokens in candidate_claims),
-                    }).encode()
-                ).hexdigest()
-                dismissed = conn.execute("SELECT 1 FROM story_duplicate_decisions WHERE source_story_id = ? AND destination_story_id = ? AND evidence_hash = ? AND decision = 'dismissed'", (source, destination, evidence_hash)).fetchone()
-                if dismissed:
-                    continue
-                output.append({"source_story_id": source, "destination_story_id": destination, "score": round(score, 6), "evidence_hash": evidence_hash})
-            return output[:limit]
+            with storage.write_tx(conn):
+                self._require_story(conn, story_id, active=True)
+                source_claims = [self._tokens(row[0]) for row in conn.execute("SELECT proposition FROM claims WHERE story_id = ?", (story_id,))]
+                output = []
+                for row in conn.execute("SELECT id FROM stories WHERE id <> ? AND deleted_at IS NULL AND lifecycle <> 'archived' ORDER BY id", (story_id,)):
+                    candidate_claims = [self._tokens(item[0]) for item in conn.execute("SELECT proposition FROM claims WHERE story_id = ?", (row[0],))]
+                    score = max((len(left & right) / max(1, len(left | right)) for left in source_claims for right in candidate_claims), default=0.0)
+                    if score < 0.6:
+                        continue
+                    source, destination = sorted((story_id, row[0]))
+                    score = round(score, 6)
+                    evidence_hash = hashlib.sha256(
+                        _json({
+                            "source": source,
+                            "destination": destination,
+                            "score": score,
+                            "source_claims": sorted(" ".join(sorted(tokens)) for tokens in source_claims),
+                            "candidate_claims": sorted(" ".join(sorted(tokens)) for tokens in candidate_claims),
+                        }).encode()
+                    ).hexdigest()
+                    dismissed = conn.execute("SELECT 1 FROM story_duplicate_decisions WHERE source_story_id = ? AND destination_story_id = ? AND evidence_hash = ? AND decision = 'dismissed'", (source, destination, evidence_hash)).fetchone()
+                    if dismissed:
+                        continue
+                    conn.execute(
+                        "INSERT OR IGNORE INTO story_duplicate_suggestions(id, source_story_id, destination_story_id, evidence_hash, score, explanation_json, resolver_version, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                        (new_id("sds"), source, destination, evidence_hash, score, _json({"method": "proposition_token_jaccard", "source_claim_count": len(source_claims), "candidate_claim_count": len(candidate_claims)}), AUTOMATIC_STORY_RESOLVER_VERSION, utc_now()),
+                    )
+                    suggestion = conn.execute(
+                        "SELECT id FROM story_duplicate_suggestions WHERE source_story_id = ? AND destination_story_id = ? AND evidence_hash = ?",
+                        (source, destination, evidence_hash),
+                    ).fetchone()
+                    output.append({"id": suggestion[0], "source_story_id": source, "destination_story_id": destination, "score": score, "evidence_hash": evidence_hash})
+                return output[:limit]
         finally:
             conn.close()
 
@@ -665,7 +675,7 @@ class StoryCorrectionService:
                 )
             }
             suggestion_count = conn.execute(
-                "SELECT COUNT(*) FROM story_duplicate_decisions"
+                "SELECT COUNT(*) FROM story_duplicate_suggestions"
             ).fetchone()[0]
             approval_count = conn.execute(
                 "SELECT COUNT(*) FROM story_duplicate_decisions WHERE decision = 'approved'"

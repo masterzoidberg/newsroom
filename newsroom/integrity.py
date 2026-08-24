@@ -1057,6 +1057,15 @@ def check_database(db_path: Optional[str] = None) -> IntegrityReport:
                 ).fetchone() is None:
                     issues.append(IntegrityIssue("orphan_story_correction_reference", f"decision={decision['id']} correction={decision['correction_id']}"))
 
+        if _table_exists(conn, "story_duplicate_suggestions"):
+            for suggestion in conn.execute("SELECT * FROM story_duplicate_suggestions ORDER BY created_at, id"):
+                try:
+                    explanation = json.loads(suggestion["explanation_json"] or "{}")
+                except (TypeError, ValueError, json.JSONDecodeError):
+                    explanation = None
+                if suggestion["source_story_id"] > suggestion["destination_story_id"] or not 0.0 <= float(suggestion["score"]) <= 1.0 or not isinstance(explanation, dict) or not suggestion["resolver_version"]:
+                    issues.append(IntegrityIssue("invalid_story_duplicate_suggestion", f"suggestion={suggestion['id']}"))
+
         if _table_exists(conn, "story_entities"):
             invalid_entities = conn.execute(
                 "SELECT story_id, entity_id, authority FROM story_entities WHERE authority NOT IN ('manual', 'derived')"

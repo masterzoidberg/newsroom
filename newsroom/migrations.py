@@ -3215,6 +3215,42 @@ MIGRATION_0030_CHECKSUM = hashlib.sha256(
 ).hexdigest()
 
 
+# 0031: persist bounded duplicate suggestion identity separately from the
+# append-only human approval/dismissal decisions.
+MIGRATION_0031_STATEMENTS: tuple[str, ...] = (
+    """
+    CREATE TABLE story_duplicate_suggestions (
+        id TEXT PRIMARY KEY,
+        source_story_id TEXT NOT NULL REFERENCES stories(id) ON DELETE RESTRICT,
+        destination_story_id TEXT NOT NULL REFERENCES stories(id) ON DELETE RESTRICT,
+        evidence_hash TEXT NOT NULL,
+        score REAL NOT NULL CHECK (score >= 0.0 AND score <= 1.0),
+        explanation_json TEXT NOT NULL DEFAULT '{}',
+        resolver_version TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        CHECK(source_story_id <> destination_story_id),
+        UNIQUE(source_story_id, destination_story_id, evidence_hash)
+    )
+    """,
+    "CREATE INDEX story_duplicate_suggestions_pair_idx ON story_duplicate_suggestions(source_story_id, destination_story_id, created_at DESC)",
+    "CREATE INDEX story_duplicate_suggestions_hash_idx ON story_duplicate_suggestions(evidence_hash, created_at DESC)",
+    """
+    CREATE TRIGGER story_duplicate_suggestions_immutable_update
+    BEFORE UPDATE ON story_duplicate_suggestions
+    BEGIN SELECT RAISE(ABORT, 'Story duplicate suggestions are append-only'); END
+    """,
+    """
+    CREATE TRIGGER story_duplicate_suggestions_immutable_delete
+    BEFORE DELETE ON story_duplicate_suggestions
+    BEGIN SELECT RAISE(ABORT, 'Story duplicate suggestions are append-only'); END
+    """,
+)
+
+MIGRATION_0031_CHECKSUM = hashlib.sha256(
+    "\n".join(MIGRATION_0031_STATEMENTS).encode("utf-8")
+).hexdigest()
+
+
 @dataclass(frozen=True)
 class MigrationResult:
     applied_versions: tuple[int, ...]
@@ -3292,6 +3328,7 @@ def apply_migrations(db_path: Optional[str | Path] = None) -> MigrationResult:
                 28: MIGRATION_0028_STATEMENTS,
                 29: MIGRATION_0029_STATEMENTS,
                 30: MIGRATION_0030_STATEMENTS,
+                31: MIGRATION_0031_STATEMENTS,
             }
             for version, statements in migrations.items():
                 if version in existing:
