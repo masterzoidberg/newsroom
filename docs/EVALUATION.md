@@ -178,6 +178,16 @@ URL identity is scheme-, hostname-, and non-default-port-aware. HTTP(S) URLs
 without a host are rejected before they can enter a case, fixture, or dedupe
 decision.
 
+## Phase 27 Story correction measures
+
+`newsroom.evals.story_intelligence.story_correction_metrics` scores current
+Claim membership, historical membership, merge targets, split children, and
+stale current context separately from the existing pairwise clustering
+metrics. It also reports bounded manual-correction burden per 100 automatic
+assignments. Production counts and time-to-correction are derived from
+`claim_story_assignment_history`, `story_corrections`, and duplicate decision
+records through `GET /api/v1/story-intelligence/metrics`.
+
 ## 5. v1 baseline
 
 `newsroom/evals/baseline.py` scores the completed v1 implementation's *actual*

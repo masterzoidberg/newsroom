@@ -1,7 +1,7 @@
 import { FormEvent, useEffect, useState } from "react";
 import { apiFetch, formatDate, jsonBody, shortId } from "../lib/api";
 import { Badge, EmptyState, ErrorState, LoadingState, PageHeader, SectionCard, Stat } from "../components/ViewPrimitives";
-import type { Claim, ListResponse } from "../lib/types";
+import type { Claim, ListResponse, StoryCorrection, StoryLineage } from "../lib/types";
 
 type SearchItem = {
   entity_type: string;
@@ -73,6 +73,9 @@ export function WorkbenchView() {
   const [health, setHealth] = useState<Health | null>(null);
   const [coverage, setCoverage] = useState<CoverageResponse | null>(null);
   const [pendingClaims, setPendingClaims] = useState<ListResponse<Claim> | null>(null);
+  const [correctionStoryId, setCorrectionStoryId] = useState("");
+  const [correctionHistory, setCorrectionHistory] = useState<StoryCorrection[] | null>(null);
+  const [correctionLineage, setCorrectionLineage] = useState<StoryLineage | null>(null);
   const [error, setError] = useState<unknown>(null);
 
   useEffect(() => {
@@ -130,6 +133,20 @@ export function WorkbenchView() {
     finally { setLoadingSubject(false); }
   }
 
+  async function loadCorrectionStory(event: FormEvent) {
+    event.preventDefault();
+    if (!correctionStoryId.trim()) return;
+    setError(null);
+    try {
+      const identifier = encodeURIComponent(correctionStoryId.trim());
+      const [history, lineage] = await Promise.all([
+        apiFetch<{ items: StoryCorrection[] }>(`/stories/${identifier}/corrections`),
+        apiFetch<StoryLineage>(`/stories/${identifier}/lineage`),
+      ]);
+      setCorrectionHistory(history.items); setCorrectionLineage(lineage);
+    } catch (caught) { setError(caught); }
+  }
+
   const counts = health?.counts ?? {};
   return <>
     <PageHeader eyebrow="Research workbench" title="Search, compare, diagnose" description="Find authoritative Newsroom objects, compare exact evidence across documents, and see whether a monitor found no change or actually failed." />
@@ -173,6 +190,11 @@ export function WorkbenchView() {
     <div className="content-grid workbench-grid">
       <SectionCard title="Pending automatic Claims" description="Verified Claims awaiting deterministic Story assignment, with exact evidence provenance.">
         {pendingClaims ? pendingClaims.items.length ? <div className="workbench-result-list" aria-label="Pending automatic Claims">{pendingClaims.items.map((claim) => <article className="workbench-result" key={claim.id}><div><div className="workbench-result-meta"><Badge tone="amber">{claim.state}</Badge><code>{shortId(claim.id)}</code></div><h3>{claim.proposition}</h3><p>{claim.evidence.length} exact evidence span{claim.evidence.length === 1 ? "" : "s"} · analysis {shortId(claim.provenance.article_analysis_id)} · promotion {shortId(claim.provenance.promotion_id)}</p></div><span className="workbench-score">{formatDate(claim.created_at)}</span></article>)}</div> : <EmptyState title="No pending automatic Claims" description="Every verified automatic Claim is assigned or has moved beyond pending review." /> : <LoadingState label="Reading pending Claims" />}
+      </SectionCard>
+
+      <SectionCard title="Story correction context" description="Inspect current versus historical Story identity without losing the durable correction timeline.">
+        <form className="inline-form" onSubmit={(event) => void loadCorrectionStory(event)}><label htmlFor="workbench-correction-story">Story ID</label><input id="workbench-correction-story" value={correctionStoryId} onChange={(event) => setCorrectionStoryId(event.target.value)} placeholder="st_…" /><button className="secondary-button" type="submit">Open correction history</button></form>
+        {correctionLineage && <div className="subject-workbench"><p><Badge tone={correctionLineage.resolution.resolution === "active" ? "mint" : "amber"}>{correctionLineage.resolution.resolution}</Badge>{correctionLineage.resolution.canonical_story_id ? ` · canonical ${shortId(correctionLineage.resolution.canonical_story_id)}` : " · historical or split identity"}</p>{correctionHistory?.length ? <ul className="compact-list">{correctionHistory.slice(0, 10).map((item) => <li key={item.id}><Badge tone="neutral">{item.operation_type.replace(/_/g, " ")}</Badge> {item.reason || "No reason supplied."} · {formatDate(item.occurred_at)}</li>)}</ul> : <p className="muted">No corrections recorded.</p>}</div>}
       </SectionCard>
 
       <SectionCard title="Compare documents" description="Paste two to twenty Document IDs. Claims, contradictions, dates, numbers, primary-source use, and lineage stay tied to evidence IDs.">

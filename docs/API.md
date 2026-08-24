@@ -203,6 +203,40 @@ events, lineage edges, Story-document links, and revision-document links are
 append-only; corrections are represented by the existing Claim supersession
 chain and immutable Story revisions.
 
+## Advanced Story Intelligence and correction workflows
+
+Phase 27 keeps `claims.story_id` as the current membership pointer and exposes
+controlled, authenticated correction APIs. Historical `story_documents` rows
+remain observation provenance; current Story Documents and derived Story
+Entities are resolved from current Claim/Evidence membership.
+
+- `POST /claims/{claim_id}/reassign` moves a Claim with an expected current
+  Story and a human reason.
+- `POST /claims/{claim_id}/unassign` intentionally clears current Story
+  membership and blocks stale automatic reassignment.
+- `POST /stories/{story_id}/extract` moves selected Claims into a new active
+  Story without creating split lineage.
+- `POST /stories/{story_id}/merge-preview` and `/merge` preview and commit a
+  canonical merge. The source remains historical and merge effects on
+  Watches/Monitors are persisted.
+- `GET /stories/{story_id}/split-preview` and `POST /stories/{story_id}/split`
+  support explicit complete Claim groups; the source retires and children are
+  linked with `split_into` lineage.
+- `GET /stories/{story_id}/corrections` and `/lineage` expose bounded durable
+  organizational history and canonical/split resolution.
+- `GET /stories/{story_id}/duplicates`, plus `/duplicates/approve` and
+  `/duplicates/dismiss`, provide bounded duplicate review. Approval delegates
+  to the canonical merge path; dismissal is an append-only durable decision.
+- `GET /story-intelligence/metrics` reports correction burden from durable
+  membership history, correction aggregates, duplicate decisions, and the
+  resolver algorithm version.
+
+Every committed correction records one `story_corrections` aggregate, Claim
+membership transitions, and any lineage/duplicate decision in the same
+transaction, then queues the idempotent `story_correction_reconcile` Job.
+Downstream Report and Research Question reevaluation is best-effort and
+isolated after the correction commits.
+
 ## Research Questions and evidence gaps
 
 Phase 10 adds authenticated Research Question lifecycle and follow-up routes:

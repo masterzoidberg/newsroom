@@ -104,6 +104,33 @@ export type Story = {
   updated_at?: string;
 };
 
+export type StoryCorrection = {
+  id: string;
+  operation_type: "reassign" | "unassign" | "merge" | "split" | "extract" | "duplicate_dismissal";
+  origin: string;
+  actor: string | null;
+  reason_code: string;
+  reason: string;
+  cause_class: string;
+  occurred_at: string;
+  transitions?: Array<{ claim_id: string; from_story_id: string | null; to_story_id: string | null; reason: string }>;
+  lineage?: Array<{ source_story_id: string; target_story_id: string; relationship: string }>;
+};
+
+export type StoryLineage = {
+  story_id: string;
+  resolution: { resolution: string; canonical_story_id: string | null; resulting_story_ids: string[] };
+  incoming: Array<{ id: string; source_story_id: string; target_story_id: string; relationship: string }>;
+  outgoing: Array<{ id: string; source_story_id: string; target_story_id: string; relationship: string }>;
+};
+
+export type DuplicateSuggestion = {
+  source_story_id: string;
+  destination_story_id: string;
+  score: number;
+  evidence_hash: string;
+};
+
 export type Report = {
   id: string;
   name: string;
