@@ -77,6 +77,7 @@ class Prediction:
     primary_sources: tuple[str, ...] = ()
     synthesized_propositions: tuple[SynthesizedProposition, ...] = ()
     usage: UsageRecord = field(default_factory=UsageRecord)
+    semantic_results: dict[str, Any] = field(default_factory=dict)
 
 
 def _req(obj: dict, key: str) -> Any:
@@ -311,6 +312,11 @@ def validate_prediction(data: dict, case: Optional[EvaluationCase] = None) -> Pr
     if not set(primary_sources) <= predicted_candidate_ids:
         raise ValidationError("primary_sources references an unassigned candidate_id")
     usage = _validate_usage(data.get("usage", {}))
+    semantic_results = data.get("semantic_results", {})
+    if not isinstance(semantic_results, dict):
+        raise ValidationError("semantic_results must be an object")
+    if any(not isinstance(key, str) or not key.strip() for key in semantic_results):
+        raise ValidationError("semantic_results keys must be non-empty strings")
 
     return Prediction(
         prediction_id=prediction_id,
@@ -323,6 +329,7 @@ def validate_prediction(data: dict, case: Optional[EvaluationCase] = None) -> Pr
         primary_sources=primary_sources,
         synthesized_propositions=propositions,
         usage=usage,
+        semantic_results=dict(semantic_results),
     )
 
 
@@ -366,6 +373,7 @@ def prediction_to_dict(pred: Prediction) -> dict:
             {"text": p.text, "claim_ids": list(p.claim_ids)}
             for p in pred.synthesized_propositions
         ],
+        "semantic_results": dict(pred.semantic_results),
         "usage": {
             "acquisition_requests": pred.usage.acquisition_requests,
             "paid_requests": pred.usage.paid_requests,

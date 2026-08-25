@@ -30,6 +30,7 @@ from .prediction import validate_prediction, Prediction
 from .metrics import score, ScoreResult
 from .baseline import load_v1_export, run_baseline
 from .taxonomy import CASE_TYPES, CASE_TYPE_LABELS
+from .lite import load_contract
 
 
 def _print_json(obj) -> None:
@@ -67,6 +68,16 @@ def _cmd_summary() -> int:
     for t in sorted(counts):
         label = CASE_TYPE_LABELS.get(t, t)
         print(f"  {counts[t]:>3}  {t:<28} {label}")
+    return 0
+
+
+def _cmd_lite_contract() -> int:
+    contract = load_contract()
+    print(f"Lite contract VALID: {contract['contract_id']}")
+    print(f"questions: {len(contract['questions'])}")
+    print(f"corpus_cutoff: {contract['corpus_cutoff']}")
+    print(f"provider/model: {contract['provider']}/{contract['model']}")
+    print("results: not run; Full-vs-Lite verdict is intentionally unavailable")
     return 0
 
 
@@ -179,6 +190,7 @@ def build_parser() -> argparse.ArgumentParser:
     sub.add_parser("validate", help="validate the corpus")
     sub.add_parser("list", help="list cases")
     sub.add_parser("summary", help="taxonomy distribution")
+    sub.add_parser("lite-contract", help="validate the frozen Lite benchmark contract")
 
     p_replay = sub.add_parser("replay", help="replay one fixture")
     p_replay.add_argument("case_id")
@@ -202,6 +214,8 @@ def main(argv: Optional[list[str]] = None) -> int:
         return _cmd_list()
     if args.command == "summary":
         return _cmd_summary()
+    if args.command == "lite-contract":
+        return _cmd_lite_contract()
     if args.command == "replay":
         return _cmd_replay(args.case_id)
     if args.command == "baseline":

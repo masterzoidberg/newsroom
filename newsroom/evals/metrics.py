@@ -453,6 +453,31 @@ def economics_metrics(case: EvaluationCase, pred: Prediction) -> EconomicsMetric
 
 
 @dataclass(frozen=True)
+class SemanticMetrics:
+    assertion_count: int
+    passed_count: int
+    failed_assertion_ids: tuple[str, ...]
+
+
+def semantic_metrics(case: EvaluationCase, pred: Prediction) -> SemanticMetrics:
+    missing = object()
+    failed = tuple(
+        assertion.assertion_id
+        for assertion in case.semantic_assertions
+        if pred.semantic_results.get(
+            assertion.assertion_id,
+            pred.semantic_results.get(assertion.metric, missing),
+        )
+        != assertion.expected
+    )
+    return SemanticMetrics(
+        assertion_count=len(case.semantic_assertions),
+        passed_count=len(case.semantic_assertions) - len(failed),
+        failed_assertion_ids=failed,
+    )
+
+
+@dataclass(frozen=True)
 class ScoreResult:
     case_id: str
     system: str
@@ -461,6 +486,7 @@ class ScoreResult:
     evidence: EvidenceMetrics
     primary_source: PrimarySourceMetrics
     economics: EconomicsMetrics
+    semantic: SemanticMetrics
 
     def as_dict(self) -> dict:
         return {
@@ -520,6 +546,11 @@ class ScoreResult:
                 "useful_story_count": self.economics.useful_story_count,
                 "cost_per_useful_story": round(self.economics.cost_per_useful_story, 6),
             },
+            "semantic": {
+                "assertion_count": self.semantic.assertion_count,
+                "passed_count": self.semantic.passed_count,
+                "failed_assertion_ids": list(self.semantic.failed_assertion_ids),
+            },
         }
 
 
@@ -536,4 +567,5 @@ def score(case: EvaluationCase, pred: Prediction) -> ScoreResult:
         evidence=evidence_metrics(case, pred),
         primary_source=primary_source_metrics(case, pred),
         economics=economics_metrics(case, pred),
+        semantic=semantic_metrics(case, pred),
     )

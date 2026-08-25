@@ -1,0 +1,16 @@
+{
+  "schema_version": 1,
+  "case_id": "retracted-evidence",
+  "title": "A correction leaves the earlier claim disputed",
+  "description": "A source says its earlier report was wrong. The correction is preserved as contradictory evidence and the earlier Claim becomes disputed; the case does not invent a separate retraction state.",
+  "case_type": "official_correction",
+  "monitored_targets": [{"kind": "story", "ref": "story-retracted"}],
+  "observation_window": {"start": "2026-08-01T00:00:00Z", "end": "2026-08-06T00:00:00Z"},
+  "provenance": {"source": "synthetic", "note": "Tests retraction state separately from document version history."},
+  "reviewer_notes": "The correction contradicts the earlier Claim; the historical Evidence remains auditable.",
+  "candidates": [{"candidate_id": "retracted", "canonical_url": "https://source.test/retraction", "title": "Source corrects report", "source": "web", "publisher": "Source", "content_hash": "422310f93d46cc1a17494d499d07c8bff8e14113811be35146fa60dff1675d04", "content_type": "excerpt", "excerpt": "The source says its earlier report was wrong."}],
+  "gold_groups": [{"event_id": "evt-retraction", "candidate_ids": ["retracted"], "rationale": "One correction event."}],
+  "gold_claims": [{"claim_id": "cl-retracted", "event_id": "evt-retraction", "proposition": "The earlier report was accurate.", "importance": "major", "expected_state": "disputed"}],
+  "gold_evidence": [{"evidence_id": "ev-retraction", "claim_id": "cl-retracted", "candidate_id": "retracted", "excerpt": "The source says its earlier report was wrong.", "relationship": "contradicts"}],
+  "expected_primary_sources": [], "noise_candidates": [], "contradictions": [{"claim_id": "cl-retracted", "evidence_id": "ev-retraction", "note": "The correction contradicts the earlier claim."}], "material_changes": [], "semantic_assertions": [{"id": "correction_state", "metric": "claim.state", "expected": "disputed"}]
+}

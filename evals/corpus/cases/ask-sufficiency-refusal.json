@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "case_id": "ask-sufficiency-refusal",
+  "title": "Research context cannot answer Ask by itself",
+  "description": "A Research Question and open Gap are relevant context, but no qualifying Claim and Evidence support the requested answer. Ask must return insufficient_evidence rather than a contextual answer presented as grounded.",
+  "case_type": "rumor_unsubstantiated",
+  "monitored_targets": [{"kind": "research_question", "ref": "question-ask"}],
+  "observation_window": {"start": null, "end": null},
+  "provenance": {"source": "synthetic", "note": "Tests the general evidence sufficiency invariant."},
+  "reviewer_notes": "Derived context may qualify a grounded answer but cannot satisfy the evidence threshold.",
+  "candidates": [{"candidate_id": "context", "canonical_url": "https://research.test/question", "title": "Open Research Question", "source": "local", "publisher": "Newsroom", "content_hash": "1bc30f32122da7f634321fc7faae1e638cdd907aeaadf37ade30af8d2193b026", "content_type": "excerpt", "excerpt": "The question remains open."}],
+  "gold_groups": [{"event_id": "evt-context", "candidate_ids": ["context"], "rationale": "This is a context record, not evidence."}],
+  "gold_claims": [], "gold_evidence": [], "expected_primary_sources": [], "noise_candidates": ["context"], "contradictions": [], "material_changes": [], "semantic_assertions": [{"id": "ask_refusal", "metric": "ask.refusal_code", "expected": "insufficient_evidence"}]
+}

@@ -9,9 +9,37 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
-from typing import Optional
-
 from .schema import EvaluationCase, ValidationError, validate_case
+
+
+class DuplicateJSONKey(ValueError):
+    """Raised when a JSON object repeats a key instead of overwriting it."""
+
+    def __init__(self, key: str):
+        super().__init__(f"duplicate JSON key {key!r}")
+        self.key = key
+
+
+def _reject_duplicate_keys(pairs: list[tuple[str, object]]) -> dict[str, object]:
+    result: dict[str, object] = {}
+    for key, value in pairs:
+        if key in result:
+            raise DuplicateJSONKey(key)
+        result[key] = value
+    return result
+
+
+def _load_json(path: Path) -> dict:
+    try:
+        with open(path, "r", encoding="utf-8") as fh:
+            data = json.load(fh, object_pairs_hook=_reject_duplicate_keys)
+    except DuplicateJSONKey as exc:
+        raise ValidationError(f"{path.name}: duplicate key {exc.key!r}") from exc
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ValidationError(f"{path.name}: cannot parse JSON: {exc}") from exc
+    if not isinstance(data, dict):
+        raise ValidationError(f"{path.name}: case must be a JSON object")
+    return data
 
 
 def _repo_root() -> Path:
@@ -51,16 +79,14 @@ def load_case(case_id: str) -> EvaluationCase:
     path = cases_dir() / key
     if not path.is_file():
         raise ValidationError(f"case not found: {case_id}")
-    with open(path, "r", encoding="utf-8") as fh:
-        data = json.load(fh)
+    data = _load_json(path)
     return validate_case(data)
 
 
 def load_all_cases() -> dict[str, EvaluationCase]:
     cases: dict[str, EvaluationCase] = {}
     for path in discover_case_files():
-        with open(path, "r", encoding="utf-8") as fh:
-            data = json.load(fh)
+        data = _load_json(path)
         case = validate_case(data)
         cases[case.case_id] = case
     return cases
@@ -78,9 +104,8 @@ def validate_corpus() -> tuple[list[str], dict[str, EvaluationCase]]:
 
     for path in discover_case_files():
         try:
-            with open(path, "r", encoding="utf-8") as fh:
-                data = json.load(fh)
-        except (OSError, json.JSONDecodeError) as exc:
+            data = _load_json(path)
+        except ValidationError as exc:
             errors.append(f"{path.name}: cannot parse JSON: {exc}")
             continue
         try:

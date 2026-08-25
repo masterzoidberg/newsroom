@@ -1,6 +1,9 @@
 """Tests for corpus loading, validation, and taxonomy coverage."""
 from __future__ import annotations
 
+import json
+from pathlib import Path
+
 import pytest
 
 from newsroom.evals.corpus import (
@@ -9,6 +12,8 @@ from newsroom.evals.corpus import (
     load_case,
     discover_case_files,
 )
+from newsroom.evals.metrics import score
+from newsroom.evals.prediction import validate_prediction
 from newsroom.evals.schema import ValidationError
 from newsroom.evals.taxonomy import CASE_TYPES
 
@@ -64,3 +69,71 @@ def test_expected_primary_sources_reference_candidates():
         ids = {c.candidate_id for c in case.candidates}
         for pid in case.expected_primary_sources:
             assert pid in ids
+
+
+def test_duplicate_json_keys_are_rejected(tmp_path, monkeypatch):
+    cases = tmp_path / "corpus" / "cases"
+    cases.mkdir(parents=True)
+    (tmp_path / "fixtures").mkdir()
+    (cases / "duplicate.json").write_text(
+        '{"schema_version": 1, "schema_version": 1}', encoding="utf-8"
+    )
+    monkeypatch.setenv("NEWSROOM_EVALS_DIR", str(tmp_path))
+
+    errors, valid = validate_corpus()
+
+    assert valid == {}
+    assert errors and "duplicate key 'schema_version'" in errors[0]
+
+
+def test_silent_edit_case_uses_distinct_content_hashes():
+    case = load_case("silent-document-edit-version")
+    hashes = {candidate.content_hash for candidate in case.candidates}
+    assert len(hashes) == 2
+
+
+def test_content_hash_must_use_canonical_sha256_shape():
+    raw = json.loads(
+        (Path(__file__).resolve().parents[1] / "evals" / "corpus" / "cases" / "silent-document-edit-version.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    raw["candidates"][0]["content_hash"] = "sha256:placeholder"
+    with pytest.raises(ValidationError, match="lowercase SHA-256"):
+        from newsroom.evals.schema import validate_case
+
+        validate_case(raw)
+
+
+def test_phase2875_semantic_cases_are_machine_scored():
+    case_ids = (
+        "ask-sufficiency-refusal",
+        "conservative-absence",
+        "late-dependency-discovery",
+        "late-story-correction",
+        "late-story-split",
+        "retracted-evidence",
+        "silent-document-edit-version",
+        "single-dependency-group-support",
+    )
+    for case_id in case_ids:
+        case = load_case(case_id)
+        assert case.semantic_assertions, case_id
+        prediction = validate_prediction(
+            {
+                "prediction_id": f"prediction-{case_id}",
+                "case_id": case_id,
+                "system": "semantic-test",
+                "story_groups": [
+                    {"story_id": f"story-{candidate.candidate_id}", "candidate_ids": [candidate.candidate_id]}
+                    for candidate in case.candidates
+                ],
+                "semantic_results": {
+                    assertion.assertion_id: assertion.expected
+                    for assertion in case.semantic_assertions
+                },
+            },
+            case=case,
+        )
+        semantic = score(case, prediction).semantic
+        assert semantic.assertion_count == semantic.passed_count

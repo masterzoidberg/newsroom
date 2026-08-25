@@ -134,6 +134,13 @@ class MaterialChange:
 
 
 @dataclass(frozen=True)
+class SemanticAssertion:
+    assertion_id: str
+    metric: str
+    expected: Any
+
+
+@dataclass(frozen=True)
 class EvaluationCase:
     schema_version: int
     case_id: str
@@ -152,6 +159,7 @@ class EvaluationCase:
     noise_candidates: tuple[str, ...] = ()
     contradictions: tuple[Contradiction, ...] = ()
     material_changes: tuple[MaterialChange, ...] = ()
+    semantic_assertions: tuple[SemanticAssertion, ...] = ()
 
 
 # ---------------------------------------------------------------------------
@@ -269,6 +277,15 @@ def _validate_candidate(raw: dict, index: int) -> CandidateDocument:
     if not isinstance(raw, dict):
         raise ValidationError(f"candidate[{index}] must be an object")
     candidate_id = validate_id(raw.get("candidate_id"), f"candidate[{index}].candidate_id")
+    content_hash = _opt_str(raw, "content_hash")
+    # Existing provider-neutral callers may use opaque hashes (the original
+    # schema allowed any non-empty string). Reject the misleading synthetic
+    # ``sha256:label`` form in corpus cases; committed cases use the runtime's
+    # lowercase hexadecimal SHA-256 convention.
+    if content_hash is not None and content_hash.lower().startswith("sha256:"):
+        raise ValidationError(
+            f"candidate[{index}].content_hash must be a lowercase SHA-256 hex digest"
+        )
     return CandidateDocument(
         candidate_id=candidate_id,
         canonical_url=validate_url(raw.get("canonical_url"), f"candidate[{index}].canonical_url"),
@@ -277,7 +294,7 @@ def _validate_candidate(raw: dict, index: int) -> CandidateDocument:
         publisher=_opt_str(raw, "publisher"),
         published_at=_parse_timestamp(_opt_str(raw, "published_at"), "published_at"),
         retrieved_at=_parse_timestamp(_opt_str(raw, "retrieved_at"), "retrieved_at"),
-        content_hash=_opt_str(raw, "content_hash"),
+        content_hash=content_hash,
         content_type=_enum(_req_str(raw, "content_type"), CONTENT_TYPES, "content_type"),
         excerpt=_opt_str(raw, "excerpt"),
         notes=_opt_str(raw, "notes"),
@@ -388,6 +405,17 @@ def validate_case(data: dict) -> EvaluationCase:
     candidate_ids = {c.candidate_id for c in candidates}
     if len(candidate_ids) != len(candidates):
         raise ValidationError("duplicate candidate_id values")
+    content_hash_signatures: dict[str, tuple[Optional[str], str]] = {}
+    for candidate in candidates:
+        if candidate.content_hash is None:
+            continue
+        signature = (candidate.excerpt, candidate.content_type)
+        previous = content_hash_signatures.get(candidate.content_hash)
+        if previous is not None and previous != signature:
+            raise ValidationError(
+                f"content_hash {candidate.content_hash!r} is reused for materially different candidate content"
+            )
+        content_hash_signatures[candidate.content_hash] = signature
 
     groups = tuple(
         _validate_group(g, i) for i, g in enumerate(_req_list(data, "gold_groups"))
@@ -431,6 +459,26 @@ def validate_case(data: dict) -> EvaluationCase:
         )
 
     material_changes = tuple(_mk_material_change(m) for m in _req_list(data, "material_changes"))
+
+    semantic_assertions_out: list[SemanticAssertion] = []
+    seen_assertion_ids: set[str] = set()
+    for index, raw_assertion in enumerate(_req_list(data, "semantic_assertions")):
+        if not isinstance(raw_assertion, dict):
+            raise ValidationError(f"semantic_assertions[{index}] must be an object")
+        assertion_id = validate_id(raw_assertion.get("id"), f"semantic_assertions[{index}].id")
+        if assertion_id in seen_assertion_ids:
+            raise ValidationError(f"duplicate semantic assertion id {assertion_id!r}")
+        metric = _req_str(raw_assertion, "metric")
+        if "expected" not in raw_assertion:
+            raise ValidationError(f"semantic_assertions[{index}].expected is required")
+        seen_assertion_ids.add(assertion_id)
+        semantic_assertions_out.append(
+            SemanticAssertion(
+                assertion_id=assertion_id,
+                metric=metric,
+                expected=raw_assertion["expected"],
+            )
+        )
 
     expected_primary = _validate_id_list(
         _req_list(data, "expected_primary_sources"), "expected_primary_sources"
@@ -547,6 +595,7 @@ def validate_case(data: dict) -> EvaluationCase:
         noise_candidates=noise,
         contradictions=contradictions,
         material_changes=material_changes,
+        semantic_assertions=tuple(semantic_assertions_out),
     )
 
 

@@ -1,0 +1,16 @@
+{
+  "schema_version": 1,
+  "case_id": "silent-document-edit-version",
+  "title": "Silent document edit preserves version provenance",
+  "description": "A publisher changes a page without changing its URL or title. The first and second retrievals must remain separate DocumentVersions with exact Evidence spans tied to the version retrieved.",
+  "case_type": "mutating_document",
+  "monitored_targets": [{"kind": "source", "ref": "source-silent-edit"}],
+  "observation_window": {"start": "2026-08-01T00:00:00Z", "end": "2026-08-04T00:00:00Z"},
+  "provenance": {"source": "synthetic", "note": "Tests silent same-URL edit and version-level provenance."},
+  "reviewer_notes": "A later version may supersede a Claim, but it must not mutate the earlier span.",
+  "candidates": [{"candidate_id": "before", "canonical_url": "https://publisher.test/page", "title": "Policy page", "source": "official", "publisher": "Publisher", "content_hash": "97a360ebb747aefa51d2583ca5351c53078de9db7ceb34589dcecb5c928a75a4", "content_type": "excerpt", "excerpt": "The threshold is 10."}, {"candidate_id": "after", "canonical_url": "https://publisher.test/page", "title": "Policy page", "source": "official", "publisher": "Publisher", "content_hash": "0fe43955c036098be6f454f9b71661edf4c1cd9511a9b2cadb9be6c37ffe02f3", "content_type": "excerpt", "excerpt": "The threshold is 12."}],
+  "gold_groups": [{"event_id": "evt-version", "candidate_ids": ["before", "after"], "rationale": "Same Document identity with two immutable versions."}],
+  "gold_claims": [{"claim_id": "cl-before", "event_id": "evt-version", "proposition": "The threshold was 10.", "importance": "major", "expected_state": "superseded"}, {"claim_id": "cl-after", "event_id": "evt-version", "proposition": "The threshold is 12.", "importance": "major", "expected_state": "supported", "supersedes_claim_id": "cl-before"}],
+  "gold_evidence": [{"evidence_id": "ev-before", "claim_id": "cl-before", "candidate_id": "before", "excerpt": "The threshold is 10.", "relationship": "supports"}, {"evidence_id": "ev-after", "claim_id": "cl-after", "candidate_id": "after", "excerpt": "The threshold is 12.", "relationship": "supports"}],
+  "expected_primary_sources": ["after"], "noise_candidates": [], "contradictions": [], "material_changes": [{"event_id": "evt-version", "claim_id": "cl-after", "description": "Silent edit creates a new DocumentVersion and supersedes the earlier Claim."}], "semantic_assertions": [{"id": "distinct_versions", "metric": "document_versions.distinct_hashes", "expected": "distinct_versions_distinct_hashes"}]
+}

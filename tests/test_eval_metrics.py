@@ -254,3 +254,25 @@ def test_score_result_is_serializable():
     d = r.as_dict()
     assert d["case_id"] == "metric-case"
     assert d["event"]["precision"] == 1.0
+
+
+def test_semantic_assertions_are_scored_as_machine_metrics():
+    case = _case(
+        semantic_assertions=[
+            {"id": "state", "metric": "claim.state", "expected": "disputed"},
+        ]
+    )
+    passing = _pred(
+        [{"story_id": "s1", "candidate_ids": ["a", "b"]}, {"story_id": "s2", "candidate_ids": ["c"]}],
+        semantic_results={"claim.state": "disputed"},
+    )
+    failing = _pred(
+        [{"story_id": "s1", "candidate_ids": ["a", "b"]}, {"story_id": "s2", "candidate_ids": ["c"]}],
+        semantic_results={"claim.state": "supported"},
+    )
+
+    passing_score = score(case, passing)
+    failing_score = score(case, failing)
+    assert passing_score.semantic.passed_count == 1
+    assert failing_score.semantic.passed_count == 0
+    assert failing_score.semantic.failed_assertion_ids == ("state",)

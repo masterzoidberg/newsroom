@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "case_id": "conservative-absence",
+  "title": "No result is not evidence of absence",
+  "description": "A developing story has no qualifying retrieval for the relevant window. The correct behavior is uncertainty or refusal, never a qualified negative based on an expected channel supplied by a caller.",
+  "case_type": "developing_story",
+  "monitored_targets": [{"kind": "research_question", "ref": "question-absence"}],
+  "observation_window": {"start": "2026-08-05T00:00:00Z", "end": "2026-08-05T23:59:59Z"},
+  "provenance": {"source": "synthetic", "note": "No absence claim is licensed without qualifying grounding evidence."},
+  "reviewer_notes": "Ask must refuse when this is the only context.",
+  "candidates": [{"candidate_id": "unrelated", "canonical_url": "https://outlet.test/other", "title": "Unrelated update", "source": "web", "publisher": "Outlet", "content_hash": "3a004639f76fe826e0438b58481fd304edfd985a6f4e747fe3ddc50746c5d446", "content_type": "excerpt", "excerpt": "An unrelated update."}],
+  "gold_groups": [{"event_id": "evt-other", "candidate_ids": ["unrelated"], "rationale": "The only retrieved item is unrelated."}],
+  "gold_claims": [], "gold_evidence": [], "expected_primary_sources": [], "noise_candidates": ["unrelated"], "contradictions": [], "material_changes": [], "semantic_assertions": [{"id": "absence_uncertainty", "metric": "ask.outcome", "expected": "uncertainty_or_refusal"}]
+}

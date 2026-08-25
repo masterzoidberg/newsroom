@@ -1,0 +1,19 @@
+{
+  "schema_version": 1,
+  "case_id": "late-story-split",
+  "title": "A late review splits two similar events",
+  "description": "Two documents were grouped because their subjects and dates were similar. A later human split preserves both complete Claim groups and marks the original Story as historical.",
+  "case_type": "similar_distinct_events",
+  "monitored_targets": [{"kind": "story", "ref": "story-similar"}],
+  "observation_window": {"start": "2026-08-01T00:00:00Z", "end": "2026-08-12T00:00:00Z"},
+  "provenance": {"source": "synthetic", "note": "Tests late Story split and historical membership."},
+  "reviewer_notes": "False merge is more harmful than preserving a visible split decision.",
+  "candidates": [
+    {"candidate_id": "event-a", "canonical_url": "https://a.test/event", "title": "Company A event", "source": "web", "publisher": "Outlet A", "content_hash": "54b0ab8658ce3cb32d433b12da842649f7595a71dfd4d73846f41b3c5da24879", "content_type": "excerpt", "excerpt": "Company A held an event."},
+    {"candidate_id": "event-b", "canonical_url": "https://b.test/event", "title": "Company B event", "source": "web", "publisher": "Outlet B", "content_hash": "094aec554305ef88d970a861fe851c9b2892b129ef7c91489a33df3686a48fd4", "content_type": "excerpt", "excerpt": "Company B held an event."}
+  ],
+  "gold_groups": [{"event_id": "evt-a", "candidate_ids": ["event-a"], "rationale": "Distinct event A."}, {"event_id": "evt-b", "candidate_ids": ["event-b"], "rationale": "Distinct event B."}],
+  "gold_claims": [{"claim_id": "cl-a", "event_id": "evt-a", "proposition": "Company A held an event.", "importance": "major", "expected_state": "supported"}, {"claim_id": "cl-b", "event_id": "evt-b", "proposition": "Company B held an event.", "importance": "major", "expected_state": "supported"}],
+  "gold_evidence": [{"evidence_id": "ev-a", "claim_id": "cl-a", "candidate_id": "event-a", "excerpt": "Company A held an event.", "relationship": "supports"}, {"evidence_id": "ev-b", "claim_id": "cl-b", "candidate_id": "event-b", "excerpt": "Company B held an event.", "relationship": "supports"}],
+  "expected_primary_sources": [], "noise_candidates": [], "contradictions": [], "material_changes": [{"event_id": "evt-a", "description": "Human split creates separate current Story records."}], "semantic_assertions": [{"id": "split_history", "metric": "story.current_history", "expected": "split_current_with_history"}]
+}

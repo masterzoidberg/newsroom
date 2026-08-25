@@ -1,0 +1,19 @@
+{
+  "schema_version": 1,
+  "case_id": "late-dependency-discovery",
+  "title": "A dependency is discovered after initial publication",
+  "description": "Two outlets initially look like separate support. A later lineage decision connects the derivative document to the primary, so the system must recompute the dependency group without rewriting Claim or Evidence history.",
+  "case_type": "duplicate_syndication",
+  "monitored_targets": [{"kind": "story", "ref": "story-late-dependency"}],
+  "observation_window": {"start": "2026-08-01T00:00:00Z", "end": "2026-08-04T00:00:00Z"},
+  "provenance": {"source": "synthetic", "note": "Reserved .test domains; semantic regression case."},
+  "reviewer_notes": "The late lineage edge must change dependency grouping, not source identity or Claim membership.",
+  "candidates": [
+    {"candidate_id": "primary", "canonical_url": "https://primary.test/release", "title": "Agency publishes release", "source": "official", "publisher": "Agency", "content_hash": "c72e3a80967fda79c40f961807d40dda88e2426f9568dfb7ffcc4d0398ccafb1", "content_type": "excerpt", "excerpt": "The agency published the release."},
+    {"candidate_id": "derivative", "canonical_url": "https://outlet.test/release", "title": "Outlet repeats agency release", "source": "web", "publisher": "Outlet", "content_hash": "fed19c0ecad9c1faed8012aff733511d54ddc1cacd492edb636d33f87d325905", "content_type": "excerpt", "excerpt": "The outlet repeats the agency release."}
+  ],
+  "gold_groups": [{"event_id": "evt-late-dependency", "candidate_ids": ["primary", "derivative"], "rationale": "One event; dependency is discovered later."}],
+  "gold_claims": [{"claim_id": "cl-release", "event_id": "evt-late-dependency", "proposition": "The agency published the release.", "importance": "major", "expected_state": "supported"}],
+  "gold_evidence": [{"evidence_id": "ev-primary", "claim_id": "cl-release", "candidate_id": "primary", "excerpt": "The agency published the release.", "relationship": "supports"}],
+  "expected_primary_sources": ["primary"], "noise_candidates": [], "contradictions": [], "material_changes": [], "semantic_assertions": [{"id": "dependency_groups", "metric": "source_robustness.dependency_group_count", "expected": 1}]
+}

@@ -1,0 +1,16 @@
+{
+  "schema_version": 1,
+  "case_id": "late-story-correction",
+  "title": "A late correction moves a Claim to the canonical Story",
+  "description": "An automatic assignment is initially wrong. A human correction arrives after later evidence, and current Claim membership must change while the assignment history remains auditable.",
+  "case_type": "official_correction",
+  "monitored_targets": [{"kind": "story", "ref": "story-correction"}],
+  "observation_window": {"start": "2026-08-01T00:00:00Z", "end": "2026-08-10T00:00:00Z"},
+  "provenance": {"source": "synthetic", "note": "Tests late human Story correction."},
+  "reviewer_notes": "Correction history is organizational history, not new evidence.",
+  "candidates": [{"candidate_id": "report", "canonical_url": "https://outlet.test/report", "title": "Report on event", "source": "web", "publisher": "Outlet", "content_hash": "be96a0db5aad2bfc7eb5d982775c996e616090a23eb069859f6bfd2cf4847cf4", "content_type": "excerpt", "excerpt": "The report describes the event."}],
+  "gold_groups": [{"event_id": "evt-correction", "candidate_ids": ["report"], "rationale": "One report."}],
+  "gold_claims": [{"claim_id": "cl-correction", "event_id": "evt-correction", "proposition": "The report describes the event.", "importance": "major", "expected_state": "supported"}],
+  "gold_evidence": [{"evidence_id": "ev-correction", "claim_id": "cl-correction", "candidate_id": "report", "excerpt": "The report describes the event.", "relationship": "supports"}],
+  "expected_primary_sources": [], "noise_candidates": [], "contradictions": [], "material_changes": [{"event_id": "evt-correction", "claim_id": "cl-correction", "description": "Late human correction changes current Story membership."}], "semantic_assertions": [{"id": "correction_history", "metric": "story.current_history", "expected": "corrected_current_with_history"}]
+}

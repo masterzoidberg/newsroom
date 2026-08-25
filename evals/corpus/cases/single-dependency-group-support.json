@@ -1,0 +1,16 @@
+{
+  "schema_version": 1,
+  "case_id": "single-dependency-group-support",
+  "title": "Many publications can be one dependency group",
+  "description": "Three supporting Documents come from three Source records, but two are known rewrites of the same primary Document. The answer should expose the group structure and avoid calling the publications independent confirmation.",
+  "case_type": "multi_outlet",
+  "monitored_targets": [{"kind": "story", "ref": "story-dependency"}],
+  "observation_window": {"start": "2026-08-02T00:00:00Z", "end": "2026-08-03T00:00:00Z"},
+  "provenance": {"source": "synthetic", "note": "Tests current connected components and cautious language."},
+  "reviewer_notes": "A single dependency group is transparent; no fragility score is needed.",
+  "candidates": [{"candidate_id": "primary", "canonical_url": "https://primary.test/item", "title": "Primary item", "source": "official", "publisher": "Primary", "content_hash": "5a9a10e027212a4765e797e94413865bcdf613fb4d997fecacc62410568c9862", "content_type": "excerpt", "excerpt": "The event occurred."}, {"candidate_id": "rewrite-a", "canonical_url": "https://a.test/item", "title": "Rewrite A", "source": "web", "publisher": "A", "content_hash": "5a9a10e027212a4765e797e94413865bcdf613fb4d997fecacc62410568c9862", "content_type": "excerpt", "excerpt": "The event occurred."}, {"candidate_id": "rewrite-b", "canonical_url": "https://b.test/item", "title": "Rewrite B", "source": "web", "publisher": "B", "content_hash": "5a9a10e027212a4765e797e94413865bcdf613fb4d997fecacc62410568c9862", "content_type": "excerpt", "excerpt": "The event occurred."}],
+  "gold_groups": [{"event_id": "evt-dependency", "candidate_ids": ["primary", "rewrite-a", "rewrite-b"], "rationale": "One event with known dependency relationships."}],
+  "gold_claims": [{"claim_id": "cl-dependency", "event_id": "evt-dependency", "proposition": "The event occurred.", "importance": "major", "expected_state": "supported"}],
+  "gold_evidence": [{"evidence_id": "ev-dependency", "claim_id": "cl-dependency", "candidate_id": "primary", "excerpt": "The event occurred.", "relationship": "supports"}],
+  "expected_primary_sources": ["primary"], "noise_candidates": [], "contradictions": [], "material_changes": [], "semantic_assertions": [{"id": "no_independent_corroboration", "metric": "source_robustness.independent_corroboration", "expected": false}]
+}

@@ -1,0 +1,56 @@
+{
+  "contract_id": "newsroom-lite-20q-v1",
+  "frozen": true,
+  "corpus_root": "evals/corpus/cases",
+  "corpus_cutoff": "2026-08-25T00:00:00Z",
+  "provider": "openai",
+  "model": "gpt-4o-mini",
+  "temperature": 0.0,
+  "deterministic": true,
+  "frozen_corpus": {
+    "status": "unbound_until_dogfood_freeze",
+    "snapshot_path": null,
+    "manifest_hash": null
+  },
+  "prompt_version": "lite-document-synthesis-v1",
+  "context_budget_tokens": 6000,
+  "retrieval_limit": 8,
+  "retrieval": {
+    "method": "sqlite_fts5",
+    "entity_types": ["document"],
+    "ranking": "bm25",
+    "citation_limit": 8
+  },
+  "scoring": {
+    "dimensions": ["answer_correctness", "citation_entailment", "citation_completeness", "conservative_refusal"],
+    "scale": "0-2 per dimension",
+    "falsification": "Lite is falsified if it answers an intentionally unanswerable question as established fact or cites a document that does not entail the answer."
+  },
+  "blinding": {
+    "question_order": "shuffle_with_seed",
+    "case_ids": "opaque_until_scored",
+    "reveal": "after_rubric_scoring"
+  },
+  "questions": [
+    {"id": "q01", "category": "factual", "question": "What product launch is described, and what date and quantity are explicitly reported?", "case_ids": ["official-announcement-product-launch"]},
+    {"id": "q02", "category": "factual", "question": "What changed in the reported death toll across the available documents?", "case_ids": ["changing-death-toll"]},
+    {"id": "q03", "category": "factual", "question": "What earnings figure is corrected, and what is the corrected value?", "case_ids": ["correction-earnings"]},
+    {"id": "q04", "category": "factual", "question": "What regulatory rule was announced and which authority is attributed as its source?", "case_ids": ["official-announcement-regulatory-rule"]},
+    {"id": "q05", "category": "factual", "question": "What funding amount and participants are supported by the source set?", "case_ids": ["primary-vs-secondary-nous-funding"]},
+    {"id": "q06", "category": "factual", "question": "What happened in the developing outage story according to the latest document?", "case_ids": ["developing-story-outage"]},
+    {"id": "q07", "category": "conservative_absence", "question": "Can the corpus establish that no additional product announcement exists? State only what the documents support.", "case_ids": ["conservative-absence"]},
+    {"id": "q08", "category": "conservative_absence", "question": "Can the corpus establish that a person was not involved in the reported event?", "case_ids": ["rumor-unsubstantiated-exec"]},
+    {"id": "q09", "category": "conservative_absence", "question": "Can a lack of retrieved reporting establish that a regulatory response did not happen?", "case_ids": ["conservative-absence"]},
+    {"id": "q10", "category": "conservative_absence", "question": "Is the available source set exhaustive enough to prove that no corroborating account exists?", "case_ids": ["single-dependency-group-support"]},
+    {"id": "q11", "category": "dependency_corroboration", "question": "Which documents are linked by a known dependency relationship and how should that affect corroboration?", "case_ids": ["late-dependency-discovery"]},
+    {"id": "q12", "category": "dependency_corroboration", "question": "How many known dependency groups support the central event, and what remains uncertain?", "case_ids": ["single-dependency-group-support"]},
+    {"id": "q13", "category": "dependency_corroboration", "question": "Does the source set contain separate known dependency groups or only repeated propagation of one report?", "case_ids": ["duplicate-syndication-hermes-v0201"]},
+    {"id": "q14", "category": "dependency_corroboration", "question": "What new lineage fact changes the interpretation of the earlier source agreement?", "case_ids": ["late-dependency-discovery"]},
+    {"id": "q15", "category": "what_changed", "question": "What changed between the two versions of the document, and which version is later?", "case_ids": ["silent-document-edit-version"]},
+    {"id": "q16", "category": "what_changed", "question": "What correction changed the current Story understanding, and what evidence caused it?", "case_ids": ["late-story-correction"]},
+    {"id": "q17", "category": "what_changed", "question": "Why was one Story split into distinct events, and what evidence distinguishes them?", "case_ids": ["late-story-split"]},
+    {"id": "q18", "category": "unanswerable", "question": "What will the named organization announce next month?", "case_ids": ["official-announcement-product-launch"]},
+    {"id": "q19", "category": "unanswerable", "question": "Which source is secretly coordinating the reporting campaign?", "case_ids": ["single-dependency-group-support"]},
+    {"id": "q20", "category": "unanswerable", "question": "What was the private motive of the person mentioned in the documents?", "case_ids": ["rumor-unsubstantiated-exec"]}
+  ]
+}
