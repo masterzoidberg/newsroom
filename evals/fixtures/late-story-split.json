@@ -1,0 +1,10 @@
+{
+  "schema_version": 1,
+  "fixture_id": "semantic-late-story-split",
+  "case_id": "late-story-split",
+  "channel": "semantic_seed",
+  "captured_at": "2026-08-25T00:00:00Z",
+  "query": {"mode": "semantic"},
+  "documents": [{"candidate_id": "event-a", "canonical_url": "https://a.test/event", "title": "Company A event", "source": "web", "publisher": "Outlet A", "content_type": "excerpt", "excerpt": "Company A held an event."}, {"candidate_id": "event-b", "canonical_url": "https://b.test/event", "title": "Company B event", "source": "web", "publisher": "Outlet B", "content_type": "excerpt", "excerpt": "Company B held an event."}],
+  "content_hash": "ecb8a5d714214ecf492565cd058a2e2ac16356963ba73602ce1eaa49e53cb8a5"
+}

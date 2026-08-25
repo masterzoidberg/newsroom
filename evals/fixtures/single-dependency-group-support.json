@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "fixture_id": "semantic-single-dependency-group-support",
+  "case_id": "single-dependency-group-support",
+  "channel": "semantic_seed",
+  "captured_at": "2026-08-25T00:00:00Z",
+  "query": {"mode": "semantic"},
+  "documents": [
+    {"candidate_id": "primary", "canonical_url": "https://primary.test/item", "title": "Event occurred", "source": "official", "publisher": "Primary", "content_type": "excerpt", "excerpt": "The event occurred.", "proposed_event_key": "event-occurred"},
+    {"candidate_id": "rewrite-a", "canonical_url": "https://a.test/item", "title": "Event occurred", "source": "web", "publisher": "A", "content_type": "excerpt", "excerpt": "The event occurred.", "proposed_event_key": "event-occurred"},
+    {"candidate_id": "rewrite-b", "canonical_url": "https://b.test/item", "title": "Event occurred", "source": "web", "publisher": "B", "content_type": "excerpt", "proposed_event_key": "event-occurred"}
+  ],
+  "content_hash": "f3fbf262046c689e87012a85d5e2a7933ffe08d6c157effcdb4082a62d42a6ae"
+}

@@ -123,7 +123,7 @@ def test_schema32_history_and_hypothesis_gap_survive_upgrade(tmp_path):
 
     result = apply_migrations(db_path)
 
-    assert result.current_version == 35
+    assert result.current_version == 36
     conn = sqlite3.connect(db_path)
     conn.row_factory = sqlite3.Row
     try:
@@ -144,7 +144,7 @@ def test_schema32_history_and_hypothesis_gap_survive_upgrade(tmp_path):
         assert "useful" in (legacy["note"] or "")
 
         review = conn.execute(
-            "SELECT * FROM blind_spot_review_history WHERE source_id = 'blind-1'"
+            "SELECT * FROM blind_spot_review_history WHERE original_suggestion_id = 'blind-1'"
         ).fetchone()
         assert review is not None
         assert review["review_status"] == "dismissed"
@@ -167,7 +167,7 @@ def test_schema32_history_and_hypothesis_gap_survive_upgrade(tmp_path):
 
 def test_fresh_and_schema34_migrations_are_idempotent(tmp_path):
     fresh = tmp_path / "fresh.sqlite"
-    assert apply_migrations(fresh).current_version == 35
+    assert apply_migrations(fresh).current_version == 36
     assert apply_migrations(fresh).applied_versions == ()
 
     schema34 = tmp_path / "schema34.sqlite"
@@ -213,7 +213,7 @@ def test_fresh_and_schema34_migrations_are_idempotent(tmp_path):
         conn.close()
 
     result = apply_migrations(schema34)
-    assert result.applied_versions == (35,)
+    assert result.applied_versions == (35, 36)
     assert apply_migrations(schema34).applied_versions == ()
 
 
@@ -401,7 +401,7 @@ def test_research_contrary_strategy_requires_canonical_basis(tmp_db):
     )
     execution.questions.link_claim(question["id"], claim["id"], "contradicts", origin="manual")
     strategy = execution._safe_contrary_strategy(question["id"])
-    assert strategy["status"] == "attempted"
+    assert strategy["status"] == "available"
     assert strategy["query"] == "The event did not happen"
     assert strategy["basis"] == {"type": "contradictory_claim", "claim_id": claim["id"]}
 

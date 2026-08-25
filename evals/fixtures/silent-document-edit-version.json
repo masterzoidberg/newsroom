@@ -1,0 +1,10 @@
+{
+  "schema_version": 1,
+  "fixture_id": "semantic-silent-document-edit-version",
+  "case_id": "silent-document-edit-version",
+  "channel": "semantic_seed",
+  "captured_at": "2026-08-25T00:00:00Z",
+  "query": {"mode": "semantic"},
+  "documents": [{"candidate_id": "before", "canonical_url": "https://publisher.test/page", "title": "Policy page", "source": "official", "publisher": "Publisher", "content_type": "excerpt", "excerpt": "The threshold is 10."}, {"candidate_id": "after", "canonical_url": "https://publisher.test/page", "title": "Policy page", "source": "official", "publisher": "Publisher", "content_type": "excerpt", "excerpt": "The threshold is 12."}],
+  "content_hash": "0e66941046615579a112a0b2084bb68871a92203637734a8e983ad7592fd0008"
+}

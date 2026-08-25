@@ -14,7 +14,7 @@ import time
 from collections import defaultdict
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any, Callable, Mapping
 
 from . import storage
 from .domain import DomainConflict, DomainNotFound, DomainValidation, new_id, utc_now
@@ -919,7 +919,7 @@ class ResearchQuestionService:
             result = self._task_dict(row)
             result["queries"] = [
                 dict(item) for item in conn.execute(
-                    "SELECT id, query, query_hash, strategy, ordinal, created_at FROM research_task_queries WHERE task_id = ? ORDER BY ordinal, id LIMIT 100",
+                    "SELECT id, query, query_hash, strategy, ordinal, created_at, execution_state, executed_at FROM research_task_queries WHERE task_id = ? ORDER BY ordinal, id LIMIT 100",
                     (task_id,),
                 ).fetchall()
             ]
@@ -1697,6 +1697,7 @@ class ResearchQuestionExecutionService:
         external_search: Any | None = None,
         acquirer: Any | None = None,
         router: Any | None = None,
+        clock: Callable[[], str] | None = None,
     ):
         self.db_path = Path(db_path)
         self.questions = questions or ResearchQuestionService(db_path)
@@ -1704,6 +1705,10 @@ class ResearchQuestionExecutionService:
         self._external_search = external_search
         self._acquirer = acquirer
         self._router = router
+        self._clock = clock or utc_now
+
+    def _now(self) -> str:
+        return self._clock()
 
     def handlers(self) -> dict[str, Any]:
         return {self.questions.job_type: self.handle}
@@ -1829,7 +1834,7 @@ class ResearchQuestionExecutionService:
             raw.append((f"{question['question']} {gap_terms}", "gap"))
         if gap_type == "contradiction_review":
             contrary = self._safe_contrary_strategy(str(question["id"]))
-            if contrary["status"] == "attempted":
+            if contrary["status"] == "available":
                 raw.append((str(contrary["query"]), "contrary_canonical_basis"))
         if self._router is not None and allow_provider:
             try:
@@ -1887,15 +1892,22 @@ class ResearchQuestionExecutionService:
         if row is None or not str(row[1] or "").strip():
             return {"status": "unavailable", "reason": "no_safe_contrary_strategy_available"}
         return {
-            "status": "attempted",
+            "status": "available",
             "query": str(row[1]).strip(),
             "basis": {"type": "contradictory_claim", "claim_id": row[0]},
         }
 
-    def _recent_query_hashes(self, task: Mapping[str, Any], *, cooldown_seconds: int) -> set[str]:
+    def _recent_query_hashes(
+        self,
+        task: Mapping[str, Any],
+        *,
+        cooldown_seconds: int,
+        now: str | None = None,
+    ) -> set[str]:
         if cooldown_seconds <= 0:
             return set()
-        cutoff = datetime.fromisoformat(utc_now().replace("Z", "+00:00")) - timedelta(seconds=cooldown_seconds)
+        current = datetime.fromisoformat((now or self._now()).replace("Z", "+00:00"))
+        cutoff = current - timedelta(seconds=cooldown_seconds)
         scope_column = "gap_id" if str(task.get("gap_id") or "").strip() else "question_id"
         scope_id = str(task.get(scope_column) or "")
         if not scope_id:
@@ -1907,7 +1919,9 @@ class ResearchQuestionExecutionService:
                 SELECT DISTINCT q.query_hash
                 FROM research_task_queries AS q
                 JOIN research_tasks AS t ON t.id = q.task_id
-                WHERE t.{scope_column} = ? AND q.created_at >= ?
+                WHERE t.{scope_column} = ?
+                  AND q.execution_state IN ('executed', 'failed')
+                  AND COALESCE(q.executed_at, q.created_at) >= ?
                 """,
                 (scope_id, cutoff.isoformat().replace("+00:00", "Z")),
             ).fetchall()
@@ -1922,11 +1936,12 @@ class ResearchQuestionExecutionService:
         query_plan: list[tuple[str, str]],
         *,
         retry_reason: str = "",
+        now: str | None = None,
     ) -> tuple[list[tuple[str, str]], list[str]]:
         if retry_reason.strip():
             return query_plan, []
         cooldown = int(question.get("pursuit_cooldown_seconds") or 0)
-        recent = self._recent_query_hashes(task, cooldown_seconds=cooldown)
+        recent = self._recent_query_hashes(task, cooldown_seconds=cooldown, now=now)
         if not recent:
             return query_plan, []
         executable: list[tuple[str, str]] = []
@@ -1939,14 +1954,40 @@ class ResearchQuestionExecutionService:
                 executable.append((query, strategy))
         return executable, suppressed
 
-    def _persist_query(self, task_id: str, query: str, strategy: str, ordinal: int) -> None:
+    def _persist_query(
+        self,
+        task_id: str,
+        query: str,
+        strategy: str,
+        ordinal: int,
+        *,
+        execution_state: str = "executed",
+        executed_at: str | None = None,
+    ) -> None:
+        if execution_state not in {"planned", "executed", "duplicate_suppressed", "failed"}:
+            raise DomainValidation("invalid Research query execution state")
+        digest = hashlib.sha256(query.encode("utf-8")).hexdigest()
+        timestamp = executed_at or (self._now() if execution_state in {"executed", "failed"} else None)
+        conn = storage.connect(self.db_path)
+        try:
+            with storage.write_tx(conn):
+                conn.execute(
+                    "INSERT OR IGNORE INTO research_task_queries(id, task_id, query, query_hash, strategy, ordinal, created_at, execution_state, executed_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    (new_id("rqq"), task_id, query[:500], digest, strategy[:50], ordinal, self._now(), execution_state, timestamp),
+                )
+        finally:
+            conn.close()
+
+    def _mark_query_state(self, task_id: str, query: str, execution_state: str) -> None:
+        if execution_state not in {"executed", "failed"}:
+            raise DomainValidation("query execution may only finish as executed or failed")
         digest = hashlib.sha256(query.encode("utf-8")).hexdigest()
         conn = storage.connect(self.db_path)
         try:
             with storage.write_tx(conn):
                 conn.execute(
-                    "INSERT OR IGNORE INTO research_task_queries(id, task_id, query, query_hash, strategy, ordinal, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
-                    (new_id("rqq"), task_id, query[:500], digest, strategy[:50], ordinal, utc_now()),
+                    "UPDATE research_task_queries SET execution_state = ?, executed_at = ? WHERE task_id = ? AND query_hash = ? AND execution_state = 'planned'",
+                    (execution_state, self._now(), task_id, digest),
                 )
         finally:
             conn.close()
@@ -1987,7 +2028,14 @@ class ResearchQuestionExecutionService:
         finally:
             conn.close()
 
-    def _research(self, query_plan: list[tuple[str, str]], cap: int, *, deadline: float | None = None) -> list[dict[str, Any]]:
+    def _research(
+        self,
+        query_plan: list[tuple[str, str]],
+        cap: int,
+        *,
+        deadline: float | None = None,
+        task_id: str | None = None,
+    ) -> list[dict[str, Any]]:
         search = self._search_service()
         findings: dict[tuple[str, str], dict[str, Any]] = {}
         for candidate, _strategy in query_plan:
@@ -1998,7 +2046,15 @@ class ResearchQuestionExecutionService:
             try:
                 result = search.search(candidate, entity_types=["claim", "evidence"], page_size=cap)
             except DomainValidation:
+                if task_id:
+                    self._mark_query_state(task_id, candidate, "failed")
                 continue
+            except Exception:
+                if task_id:
+                    self._mark_query_state(task_id, candidate, "failed")
+                raise
+            if task_id:
+                self._mark_query_state(task_id, candidate, "executed")
             for item in result.get("items", []):
                 key = (item["entity_type"], item["entity_id"])
                 if key not in findings:
@@ -2117,10 +2173,10 @@ class ResearchQuestionExecutionService:
             retry_reason=str(payload.get("retry_reason") or ""),
         )
         for ordinal, (planned_query, strategy) in enumerate(query_plan):
-            self._persist_query(task["id"], planned_query, strategy, ordinal)
+            self._persist_query(task["id"], planned_query, strategy, ordinal, execution_state="planned")
         for ordinal, planned_query in enumerate(duplicate_suppressed, start=len(query_plan)):
-            self._persist_query(task["id"], planned_query, "duplicate_suppressed", ordinal)
-        findings = self._research(query_plan, cap=task_limits["max_candidates"], deadline=deadline)
+            self._persist_query(task["id"], planned_query, "duplicate_suppressed", ordinal, execution_state="duplicate_suppressed")
+        findings = self._research(query_plan, cap=task_limits["max_candidates"], deadline=deadline, task_id=task["id"])
         claims = [item for item in findings if item["entity_type"] == "claim"]
         evidence = [item for item in findings if item["entity_type"] == "evidence"]
         for rank, item in enumerate(findings):
@@ -2229,6 +2285,19 @@ class ResearchQuestionExecutionService:
         contrary_strategy = {"status": "not_applicable"}
         if str(_decode(task.get("plan_json")).get("gap_type") or "") == "contradiction_review":
             contrary_strategy = self._safe_contrary_strategy(question_id)
+            if contrary_strategy.get("status") == "available":
+                contrary_query = " ".join(self._tokens(str(contrary_strategy["query"])))
+                digest = hashlib.sha256(contrary_query.encode("utf-8")).hexdigest()
+                conn = storage.connect(self.db_path)
+                try:
+                    row = conn.execute(
+                        "SELECT execution_state FROM research_task_queries WHERE task_id = ? AND query_hash = ? ORDER BY ordinal DESC LIMIT 1",
+                        (task["id"], digest),
+                    ).fetchone()
+                finally:
+                    conn.close()
+                if row is not None:
+                    contrary_strategy = {**contrary_strategy, "status": str(row[0])}
         if duplicate_suppressed:
             note = f"{note}; suppressed {len(duplicate_suppressed)} duplicate quer{'y' if len(duplicate_suppressed) == 1 else 'ies'}"
         return {

@@ -304,9 +304,9 @@ def _insert_version_for_future_processing(db: Path, fixture: dict[str, Any], ide
 
 
 def test_phase21h_migration_is_additive_and_idempotent(tmp_db):
-    assert apply_migrations(tmp_db).current_version == 35
+    assert apply_migrations(tmp_db).current_version == 36
     assert apply_migrations(tmp_db).applied_versions == ()
-    assert migration_status(tmp_db)[-1] == 35
+    assert migration_status(tmp_db)[-1] == 36
     conn = storage.connect(tmp_db)
     try:
         tables = {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}

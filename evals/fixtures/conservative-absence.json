@@ -1,0 +1,10 @@
+{
+  "schema_version": 1,
+  "fixture_id": "semantic-conservative-absence",
+  "case_id": "conservative-absence",
+  "channel": "semantic_seed",
+  "captured_at": "2026-08-25T00:00:00Z",
+  "query": {"mode": "semantic"},
+  "documents": [{"candidate_id": "unrelated", "canonical_url": "https://outlet.test/other", "title": "Unrelated update", "source": "web", "publisher": "Outlet", "content_type": "excerpt", "excerpt": "An unrelated update."}],
+  "content_hash": "6804f59c9c70c675f92c70938a41edde38deb0bd337e17c40d133f6c71d54578"
+}

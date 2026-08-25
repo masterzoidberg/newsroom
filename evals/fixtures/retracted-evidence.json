@@ -1,0 +1,10 @@
+{
+  "schema_version": 1,
+  "fixture_id": "semantic-retracted-evidence",
+  "case_id": "retracted-evidence",
+  "channel": "semantic_seed",
+  "captured_at": "2026-08-25T00:00:00Z",
+  "query": {"mode": "semantic"},
+  "documents": [{"candidate_id": "retracted", "canonical_url": "https://source.test/retraction", "title": "Source corrects report", "source": "web", "publisher": "Source", "content_type": "excerpt", "excerpt": "The source says its earlier report was wrong."}],
+  "content_hash": "eade7a260d793bf34e728392f5985846787425e5fe26d33ba519ed89c58f12b6"
+}

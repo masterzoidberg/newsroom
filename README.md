@@ -38,7 +38,7 @@ bounded Task Scheduler restart configuration, and opt-in private Tailscale Serve
 configuration with final acceptance rehearsal evidence; final promotion remains
 pending.
 
-The post-audit roadmap is authoritative at `plan/phases/README.md`. Phases
+The post-audit roadmap is authoritative at `plan/phases-v2/README.md`. Phases
 01–16 remain historical implementation records; **Phase 21 — Structured
 Article Analysis and one real AI provider** is complete (offline gate; Live
 Test B pending an operator-provided credential), following the completed
@@ -78,7 +78,7 @@ excerpts by unique exact code-point match, and atomically persists immutable
 verified EvidenceSpans, pending Claims, and ClaimEvidence links. Ambiguous,
 fabricated, and out-of-slice candidates fail closed; model offsets are never
 trusted, and legacy/manual spans remain distinct. The current applied schema
-is migration 0034 / schema version 34. Phase 23A–E now connect verified
+is migration 0036 / schema version 36. Phase 23A–E now connect verified
 automatic Claims to deterministic Story resolution, audited Claim acceptance,
 evidence-bound Living Reports, exact-cause Alerts, and durable in-app delivery.
 The complete chain has bounded compatibility/status APIs, logical-export
@@ -95,6 +95,12 @@ computed on demand from lineage; Attention is a read-time queue with append-only
 human decisions; Research Gaps are canonical; and Simple/Advanced changes
 navigation density only. Ask refuses when no qualifying Evidence grounds the
 answer.
+
+Phase 28.875 is the active final acceptance closure for the Phase 28.5/28.75
+correction chain. Phase 29 remains blocked until independent acceptance.
+Dogfood starts only after acceptance with an explicitly user-approved subject
+and Source set; Phase 29 may then proceed in parallel with dogfood, while Phase
+30 waits for the dogfood and Full-vs-Lite evidence.
 
 ## Authority
 

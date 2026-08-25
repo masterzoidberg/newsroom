@@ -1,0 +1,10 @@
+{
+  "schema_version": 1,
+  "fixture_id": "semantic-late-dependency-discovery",
+  "case_id": "late-dependency-discovery",
+  "channel": "semantic_seed",
+  "captured_at": "2026-08-25T00:00:00Z",
+  "query": {"mode": "semantic"},
+  "documents": [{"candidate_id": "primary", "canonical_url": "https://primary.test/release", "title": "Agency publishes release", "source": "official", "publisher": "Agency", "content_type": "excerpt", "excerpt": "The agency published the release.", "proposed_event_key": "agency-release"}, {"candidate_id": "derivative", "canonical_url": "https://outlet.test/release", "title": "Outlet repeats agency release", "source": "web", "publisher": "Outlet", "content_type": "excerpt", "excerpt": "The agency published the release.", "proposed_event_key": "agency-release"}],
+  "content_hash": "f6c18704a1b4c4d45b51a3e135a3f55202bec28511565e61d1f48980586e694b"
+}

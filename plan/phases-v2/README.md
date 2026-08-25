@@ -1,21 +1,38 @@
 # Active Phase Plan
 
-Phase 27 — Advanced Story Intelligence is complete and committed.
+Phase 27 — Advanced Story Intelligence is complete.
 
-Phase 28 — Intelligence Quality and Experience is implemented and committed, but
-is **not accepted**. The Phase 28 → Phase 29 adversarial review
-(`docs/reviews/PHASE_29_PRE_IMPLEMENTATION_ADVERSARIAL_REVIEW.md`) found six P0
-defects in the Phase 28 derived layer, including one that causes Ask to state a
-search Newsroom did not perform.
+Phase 28.5 and Phase 28.75 implemented the architecture correction chain but
+remain subject to final acceptance. **Phase 28.875 — Final Acceptance Closure**
+is the active phase and is the authority for the remaining semantic, Research,
+benchmark, migration, documentation, and repository-artifact gates.
 
-The next permitted work is:
+Phase 29 is **blocked until Phase 28.875 is independently reviewed and
+accepted**. No Phase 29 implementation has started.
 
-- **Phase 28.5 — Correctness, Honesty, and Surface Reduction**
+After acceptance, dogfood begins only with an explicitly user-approved subject
+and approved Source set. Phase 29 may then proceed in parallel with the real
+Watch dogfood window. Phase 30 waits for the dogfood window and the resulting
+Full-vs-Lite evidence.
 
-Phase 28.5 is a remediation and subtraction phase. It must end with fewer lines,
-tables, Jobs, routes, and navigation items than Phase 28. It also starts the
-real-Watch dogfood clock, so the Full-vs-Lite verdict can land before Phase 30.
+The live repository is implementation authority. Preserve unrelated work;
+never reset, clean, rewrite history, or push as part of phase closure.
 
-Phase 29 is **blocked until Phase 28.5 is accepted**, after which its 29.0 stage
-should be deleted as completed. Phase 30 remains sequenced after Phase 29 and
-additionally waits for the dogfood window to close.
+## Authority
+
+1. `plan/STANDALONE_NEWSROOM_PRODUCT_SPEC.md` — product contract.
+2. `plan/MASTER_PLAN.md` — implementation sequence and gates.
+3. `docs/ARCHITECTURE.md` — architecture overview.
+4. `Phase 28.875` — current acceptance closure.
+
+## Validation baseline
+
+```powershell
+python -m pytest -q
+ruff check newsroom tests
+```
+
+Frontend checks run from `frontend` with `npm run lint`, `npm run typecheck`,
+and `npm run build`. Mypy remains informational under the existing baseline
+policy. Dogfood and a final Full-vs-Lite quality verdict remain external actions
+after explicit acceptance and snapshot selection.

@@ -29,6 +29,7 @@ from .replay import load_fixture, validate_fixture
 from .prediction import validate_prediction, Prediction
 from .metrics import score, ScoreResult
 from .baseline import load_v1_export, run_baseline
+from .semantic import run_normal_evaluation
 from .taxonomy import CASE_TYPES, CASE_TYPE_LABELS
 from .lite import load_contract
 
@@ -149,7 +150,7 @@ def _score_case(case_id: str, prediction_file: str, as_json: bool) -> int:
 def _cmd_baseline(as_json: bool) -> int:
     _, valid = validate_corpus()
     export = load_v1_export()
-    results = run_baseline(valid, export)
+    results = run_normal_evaluation()
 
     if as_json:
         _print_json(
@@ -161,7 +162,7 @@ def _cmd_baseline(as_json: bool) -> int:
         )
         return 0
 
-    print(f"v1 baseline ({export.system}) — {len(results)} case(s)")
+    print(f"normal evaluation ({export.system} + newsroom semantic) — {len(results)} case(s)")
     print(f"source_db: {export.source_db}")
     print(f"note: {export.note}")
     print()

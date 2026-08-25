@@ -40,7 +40,7 @@ def test_cli_baseline_json(capsys):
     out = capsys.readouterr().out
     data = json.loads(out)
     assert data["system"] == "hermes-v1"
-    assert len(data["results"]) == 4
+    assert len(data["results"]) == 12
 
 
 def test_cli_score(capsys, tmp_path):

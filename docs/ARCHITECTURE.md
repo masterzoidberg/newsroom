@@ -655,7 +655,7 @@ manual evidence; automatic Claims begin story-less and may only receive a
 controlled, audited initial Story association. No Story matching, Story
 creation, Story evolution, Report, or Alert automation is introduced here.
 
-The current applied schema is migration 0034 / schema version 34 (see
+The current applied schema is migration 0036 / schema version 36 (see
 `newsroom/migrations.py`). Migration 0015 added the Phase 18 content artifact
 substrate; migration 0016 added the Phase 19 processing-ownership column
 (`jobs.document_version_id`), the durable result column (`jobs.result_json`),
@@ -677,8 +677,12 @@ nullable current Claim Story pointers, append-only Attention decisions, and
 reviewable Hypotheses. Migration 0033 removes the non-canonical Coverage,
 evidence-family, fragility, blind-spot, and old Attention projections. Migration
 0034 makes `research_question_gaps` the single Research Gap authority and lets
-Hypotheses originate a canonical discriminating gap. These analytical records
-do not replace the canonical evidence ledger.
+Hypotheses originate a canonical discriminating gap. Migration 0036 renames
+the preserved Blind Spot suggestion key to `original_suggestion_id`, records
+the actual preservation time in `preserved_at`, and adds explicit Research
+query execution states (`planned`, `executed`, `duplicate_suppressed`, and
+`failed`) with `executed_at`. These analytical records do not replace the
+canonical evidence ledger.
 
 Due Research Questions use a separate bounded scheduler path: each tick can
 enqueue at most one durable `research_question` Job per due Question, and the

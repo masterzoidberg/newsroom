@@ -3670,6 +3670,23 @@ MIGRATION_0035_CHECKSUM = hashlib.sha256(
 ).hexdigest()
 
 
+# 0036: make preserved review history and Research query execution states
+# truthful at the schema boundary.  ``source_id`` was a misleading name for
+# the preserved suggestion identifier; query rows now distinguish planned,
+# executed, suppressed, and failed work.
+MIGRATION_0036_STATEMENTS: tuple[str, ...] = (
+    "DROP TRIGGER IF EXISTS blind_spot_review_history_immutable_update",
+    "DROP TRIGGER IF EXISTS blind_spot_review_history_immutable_delete",
+    "ALTER TABLE blind_spot_review_history RENAME COLUMN source_id TO original_suggestion_id",
+    "ALTER TABLE research_task_queries ADD COLUMN execution_state TEXT NOT NULL DEFAULT 'planned' CHECK (execution_state IN ('planned', 'executed', 'duplicate_suppressed', 'failed'))",
+    "ALTER TABLE research_task_queries ADD COLUMN executed_at TEXT",
+)
+
+MIGRATION_0036_CHECKSUM = hashlib.sha256(
+    "\n".join(MIGRATION_0036_STATEMENTS).encode("utf-8")
+).hexdigest()
+
+
 @dataclass(frozen=True)
 class MigrationResult:
     applied_versions: tuple[int, ...]
@@ -3752,6 +3769,7 @@ def apply_migrations(db_path: Optional[str | Path] = None) -> MigrationResult:
                 33: MIGRATION_0033_STATEMENTS,
                 34: MIGRATION_0034_STATEMENTS,
                 35: MIGRATION_0035_STATEMENTS,
+                36: MIGRATION_0036_STATEMENTS,
             }
             for version, statements in migrations.items():
                 if version in existing:
@@ -3773,6 +3791,29 @@ def apply_migrations(db_path: Optional[str | Path] = None) -> MigrationResult:
                                 f"ALTER TABLE attention_decisions ADD COLUMN {name} {definition}"
                             )
                 now = utc_now()
+                if version == 36:
+                    conn.execute(
+                        "UPDATE blind_spot_review_history SET preserved_at = ? WHERE preserved_at = original_created_at",
+                        (now,),
+                    )
+                    conn.execute(
+                        """
+                        CREATE TRIGGER blind_spot_review_history_immutable_update
+                        BEFORE UPDATE ON blind_spot_review_history
+                        BEGIN
+                            SELECT RAISE(ABORT, 'blind spot review history is append-only');
+                        END
+                        """
+                    )
+                    conn.execute(
+                        """
+                        CREATE TRIGGER blind_spot_review_history_immutable_delete
+                        BEFORE DELETE ON blind_spot_review_history
+                        BEGIN
+                            SELECT RAISE(ABORT, 'blind spot review history is append-only');
+                        END
+                        """
+                    )
                 conn.execute(
                     "INSERT INTO schema_migrations(version, applied_at) VALUES (?, ?)",
                     (version, now),

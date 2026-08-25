@@ -9,6 +9,9 @@ than the v1 reference?*
 - Metrics: `newsroom/evals/metrics.py`
 - Replay: `newsroom/evals/replay.py`
 - v1 baseline: `newsroom/evals/baseline.py`
+- executable semantic cases: `newsroom/evals/semantic.py`
+- Full/Lite contract runners: `newsroom/evals/benchmark.py` and
+  `newsroom/evals/lite.py`
 
 ## 1. Case taxonomy
 
@@ -71,7 +74,7 @@ reference known candidates.
 ## 3. Metric definitions
 
 The current corpus contains 38 bounded cases: 30 established cases plus eight
-Phase 28.75 regressions covering late dependency discovery, conservative
+Phase 28.875 regressions covering late dependency discovery, conservative
 absence language, Ask evidence-sufficiency refusal, late Story correction and
 split handling, dependency-group support, correction-versus-contradiction
 semantics, and silent DocumentVersion edits. These cases use the same
@@ -87,7 +90,11 @@ semantics remain deferred until the Phase 29A benchmark contract is frozen.
 
 All metrics are pure functions of a gold `EvaluationCase` and a `Prediction`.
 Predictions are provider-neutral structured outputs (see
-`newsroom/evals/prediction.py`).
+`newsroom/evals/prediction.py`). The eight closure cases are executed by
+`SemanticCaseRunner` against fresh migrated SQLite databases through the real
+Ask, SourceRobustness, StoryCorrection, Evidence, and DocumentVersion
+services; their observed values are then scored. The normal `baseline` CLI
+includes both the v1 results and these semantic assertion results.
 
 ### Lite comparator
 
@@ -99,9 +106,18 @@ provider, model, prompt version, temperature, context budget, retrieval limit,
 and citation limit. It retrieves Documents with SQLite FTS5 only. Lite does
 not read Claims, Stories, Coverage, or dependency groups; synthesis and
 document citations are supplied by the contracted model route through
-`newsroom/evals/lite.py`. Arbitrary databases and callables are rejected, while
-test doubles require an explicit test flag. No Full-vs-Lite result or product
-verdict has been run.
+`newsroom/evals/lite.py`. Arbitrary databases and production callables are
+rejected; deterministic callables are available only through the explicit
+`run_with_test_double` seam. `FullBenchmarkRunner` uses the real Ask adapter,
+and `PairedBenchmarkOrchestrator` rejects snapshot, corpus, question-contract,
+model/config, or blinding mismatches. No Full-vs-Lite quality verdict has been
+run.
+
+### Table-count convention
+
+When reporting schema size, `base tables` means all SQLite tables excluding
+`search_fts` and every FTS virtual/shadow table. Report SQLite total, FTS
+virtual/shadow count, base count, and logical-export table count separately.
 
 ### Event / Story metrics (pairwise over candidate documents)
 

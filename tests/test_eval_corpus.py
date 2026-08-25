@@ -12,8 +12,7 @@ from newsroom.evals.corpus import (
     load_case,
     discover_case_files,
 )
-from newsroom.evals.metrics import score
-from newsroom.evals.prediction import validate_prediction
+from newsroom.evals.semantic import SemanticCaseRunner
 from newsroom.evals.schema import ValidationError
 from newsroom.evals.taxonomy import CASE_TYPES
 
@@ -117,23 +116,6 @@ def test_phase2875_semantic_cases_are_machine_scored():
         "single-dependency-group-support",
     )
     for case_id in case_ids:
-        case = load_case(case_id)
-        assert case.semantic_assertions, case_id
-        prediction = validate_prediction(
-            {
-                "prediction_id": f"prediction-{case_id}",
-                "case_id": case_id,
-                "system": "semantic-test",
-                "story_groups": [
-                    {"story_id": f"story-{candidate.candidate_id}", "candidate_ids": [candidate.candidate_id]}
-                    for candidate in case.candidates
-                ],
-                "semantic_results": {
-                    assertion.assertion_id: assertion.expected
-                    for assertion in case.semantic_assertions
-                },
-            },
-            case=case,
-        )
-        semantic = score(case, prediction).semantic
-        assert semantic.assertion_count == semantic.passed_count
+        result = SemanticCaseRunner().run(case_id)
+        assert result.assertions, case_id
+        assert result.score.semantic.assertion_count == result.score.semantic.passed_count

@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Any, Callable, Mapping, Sequence
 
 from .. import storage
+from ..ai import AIRouter, CapabilityBundle, ClaimDraft, RoutePolicy
 from ..workbench import SearchService
 
 
@@ -209,12 +210,30 @@ class LiteDocument:
 class LiteHarness:
     """Retrieve documents and delegate synthesis through the frozen route."""
 
-    def __init__(self, db_path: str | Path, *, contract: Mapping[str, Any] | None = None):
+    def __init__(
+        self,
+        db_path: str | Path,
+        *,
+        contract: Mapping[str, Any] | None = None,
+        router: AIRouter | None = None,
+    ):
         self.db_path = Path(db_path).resolve()
         self.contract = _validate_contract(contract or load_contract())
         self.binding = _require_frozen_binding(self.db_path, self.contract)
         self.questions = {item["id"]: item for item in self.contract["questions"]}
         self.search = SearchService(self.db_path)
+        self.router = router
+        self.model_config = _model_config(self.contract)
+        self.identity = {
+            "snapshot_id": self.binding["snapshot_path"],
+            "corpus_manifest": self.binding["manifest_hash"],
+            "question_contract": {
+                "contract_id": self.contract["contract_id"],
+                "question_ids": tuple(sorted(self.questions)),
+            },
+            "model_config": dict(self.model_config),
+            "blinding": dict(self.contract["blinding"]),
+        }
 
     def retrieve(self, question: str, *, limit: int | None = None) -> list[LiteDocument]:
         retrieval_limit = int(self.contract["retrieval_limit"] if limit is None else limit)
@@ -235,23 +254,97 @@ class LiteHarness:
     def run(
         self,
         question_id: str,
-        synthesize: Callable[[str, Sequence[LiteDocument]], Mapping[str, Any]],
+        synthesize: Callable[[str, Sequence[LiteDocument]], Mapping[str, Any]] | None = None,
         *,
         model_config: Mapping[str, Any] | None = None,
         test_double: bool = False,
     ) -> dict[str, Any]:
+        """Run the production document-only path through the configured router.
+
+        Callable injection is intentionally not a production API. It remains
+        available through :meth:`run_with_test_double` so benchmark results
+        cannot silently become test-double results.
+        """
         if question_id not in self.questions:
             raise LiteBenchmarkError(f"unknown Lite question: {question_id}")
-        expected_config = _model_config(self.contract)
-        if test_double:
-            effective_config = dict(expected_config)
-        else:
-            effective_config = dict(model_config or getattr(synthesize, "lite_config", {}))
-            if effective_config != expected_config:
-                raise LiteBenchmarkError("Lite synthesis route does not match the frozen provider/model contract")
+        if synthesize is not None or test_double:
+            raise LiteBenchmarkError(
+                "Lite production runner rejects arbitrary callable injection; "
+                "the provider/model route is contract-bound; use run_with_test_double"
+            )
+        if model_config is not None and dict(model_config) != self.model_config:
+            raise LiteBenchmarkError("Lite synthesis route does not match the frozen provider/model contract")
+        router = self.router
+        if router is None:
+            if self.contract["provider"] != "local":
+                raise LiteBenchmarkError(
+                    "Lite production provider route is unavailable; configure the existing AIRouter"
+                )
+            router = AIRouter(
+                local=CapabilityBundle.local_defaults(),
+                policy=RoutePolicy(local_enabled=True, paid_enabled=False),
+            )
+            self.router = router
+        question = self.questions[question_id]["question"]
+        documents = self.retrieve(question)
+        answer = self._router_synthesis(question, documents, question_id=question_id)
+        return self._envelope(question_id, question, documents, answer, test_double=False)
+
+    def run_with_test_double(
+        self,
+        question_id: str,
+        synthesize: Callable[[str, Sequence[LiteDocument]], Mapping[str, Any]],
+        *,
+        model_config: Mapping[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Run a deterministic callable only at an explicit test seam."""
+        if question_id not in self.questions:
+            raise LiteBenchmarkError(f"unknown Lite question: {question_id}")
+        if model_config is not None and dict(model_config) != self.model_config:
+            raise LiteBenchmarkError("Lite test-double config does not match the frozen provider/model contract")
         question = self.questions[question_id]["question"]
         documents = self.retrieve(question)
         answer = dict(synthesize(question, documents))
+        return self._envelope(question_id, question, documents, answer, test_double=True)
+
+    def _router_synthesis(
+        self,
+        question: str,
+        documents: Sequence[LiteDocument],
+        *,
+        question_id: str,
+    ) -> dict[str, Any]:
+        claims = [
+            ClaimDraft(proposition=f"{document.title}: {document.excerpt[:1800]}")
+            for document in documents
+        ]
+        if not claims:
+            return {"text": "The frozen document corpus does not provide sufficient evidence to answer this question."}
+        router = self.router
+        if router is None:
+            raise LiteBenchmarkError("Lite AIRouter is not configured")
+        try:
+            output = router.synthesis(question, claims, work_id=f"lite:{question_id}")
+        except Exception as exc:
+            raise LiteBenchmarkError("Lite AIRouter synthesis failed") from exc
+        return {
+            "text": output.summary,
+            "headline": output.headline,
+            "summary": output.summary,
+            "cited_document_ids": [document.document_id for document in documents[: self.model_config["citation_limit"]]],
+            "confidence": output.confidence,
+        }
+
+    def _envelope(
+        self,
+        question_id: str,
+        question: str,
+        documents: Sequence[LiteDocument],
+        answer: Mapping[str, Any],
+        *,
+        test_double: bool,
+    ) -> dict[str, Any]:
+        answer = dict(answer)
         answer_id = str(answer.get("answer_id") or "").strip()
         if not answer_id:
             encoded_answer = json.dumps(answer, sort_keys=True, separators=(",", ":"), default=str)
@@ -272,7 +365,7 @@ class LiteHarness:
             "scope": "documents_only",
             "corpus_cutoff": self.contract["corpus_cutoff"],
             "frozen_corpus": self.binding,
-            "model_config": effective_config,
+            "model_config": dict(self.model_config),
             "blinding": dict(self.contract["blinding"]),
             "scoring": dict(self.contract["scoring"]),
             "scoring_version": "lite-scoring-v1",
