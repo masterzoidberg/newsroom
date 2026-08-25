@@ -221,15 +221,13 @@ export type AttentionItem = {
   object_id: string;
   reason_code: string;
   importance_score: number;
-  state: "open" | "seen" | "dismissed";
+  basis_fingerprint: string;
   explanation: Record<string, unknown>;
-  created_at: string;
-  updated_at: string;
+  decision?: { action: "seen" | "snoozed" | "not_useful"; actor?: string | null };
 };
 
 export type ExperienceState = {
   mode: "simple" | "advanced";
-  capabilities: Record<string, boolean>;
 };
 
 export type Briefing = {
@@ -302,7 +300,17 @@ export type ResearchQuestionDetail = ResearchQuestion & {
   claims?: ResearchQuestionClaim[];
   gaps?: ResearchQuestionGap[];
   tasks?: ResearchTask[];
+  hypotheses?: Hypothesis[];
   assessment_history?: Array<Record<string, unknown>>;
+};
+
+export type Hypothesis = {
+  id: string;
+  question_id: string;
+  statement: string;
+  status: "draft" | "approved" | "rejected" | "archived";
+  claims?: Array<{ claim_id: string; relationship: "supports" | "contradicts" | "discriminates" }>;
+  gaps?: Array<{ id: string; description: string; status: string }>;
 };
 
 export type AskCitation = {

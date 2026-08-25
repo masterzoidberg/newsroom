@@ -24,7 +24,7 @@ evidence/provenance inspection views, operator/admin surfaces, accessible
 keyboard navigation, and an installable same-origin PWA shell with offline
 fallback behavior. Phase 13 adds the bounded local research workbench:
 namespaced tags, notes/hypotheses, FTS search, evidence-bound comparison,
-Subject context/timelines, and state-derived coverage/health diagnostics.
+Subject context/timelines, and state-derived monitor-health diagnostics.
 Phase 14 adds bounded local Ask Newsroom conversations with object-scoped
 retrieval, structured fact/inference/uncertainty/contradiction classifications,
 resolvable citations, cancellation, and audit metadata without raw prompt
@@ -78,7 +78,7 @@ excerpts by unique exact code-point match, and atomically persists immutable
 verified EvidenceSpans, pending Claims, and ClaimEvidence links. Ambiguous,
 fabricated, and out-of-slice candidates fail closed; model offsets are never
 trusted, and legacy/manual spans remain distinct. The current applied schema
-is migration 0032 / schema version 32. Phase 23A–E now connect verified
+is migration 0034 / schema version 34. Phase 23A–E now connect verified
 automatic Claims to deterministic Story resolution, audited Claim acceptance,
 evidence-bound Living Reports, exact-cause Alerts, and durable in-app delivery.
 The complete chain has bounded compatibility/status APIs, logical-export
@@ -89,12 +89,12 @@ Monitor targets perform real acquisition today;
 schema/API but explicitly unsupported at runtime
 (`error`/`unsupported_target`).
 
-Phase 28 adds durable correction reconciliation hardening; explicit Coverage
-states and qualified absence; explainable Source dependency, evidence-family,
-fragility, counterfactual, and blind-spot analysis; cross-domain Attention;
-Simple/Advanced disclosure; and reviewable Hypotheses that remain outside the
-canonical Claim/Evidence path. The derived refresh handlers use the existing
-JobService and WorkerProcess.
+Phase 28.5 removes non-canonical Coverage, Blind Spot, evidence-family, and
+fragility runtime state. Source dependency groups and counterfactuals are
+computed on demand from lineage; Attention is a read-time queue with append-only
+human decisions; Research Gaps are canonical; and Simple/Advanced changes
+navigation density only. Ask refuses when no qualifying Evidence grounds the
+answer.
 
 ## Authority
 

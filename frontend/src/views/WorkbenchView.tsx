@@ -18,8 +18,14 @@ type SearchItem = {
 };
 type SearchResponse = { items: SearchItem[]; total: number; page: number; page_size: number; has_more: boolean; ranking?: string; facets?: Record<string, number> };
 type Health = { status: string; database: string; counts: Record<string, number>; distinctions: Record<string, string> };
-type CoverageItem = { monitor: { id: string; target_type: string; target_id: string }; coverage: Record<string, number | string | null> };
-type CoverageResponse = { items: CoverageItem[]; total: number };
+type MonitorHealthItem = { monitor: { id: string; target_type: string; target_id: string }; health: Record<string, number | string | null> };
+type MonitorHealthResponse = { items: MonitorHealthItem[]; total: number; bounded?: boolean; limit?: number };
+type DiagnosticsMetrics = {
+  story_assignment_corrections: { automatic_assignments: number; human_corrections: number; correction_rate: number };
+  alert_acknowledgement: { total: number; acknowledged: number; rate: number };
+  research_attempt_yield: { terminal_attempts: number; successful_attempts: number; yield: number };
+  attention: { action_count: number; dismissal_by_reason_code: Record<string, number> };
+};
 type SubjectPage = {
   subject: { canonical_name: string; subject_type: string; description: string; aliases: string[] };
   stories: Array<{ id: string; headline: string; lifecycle: string; material_change: number }>;
@@ -71,7 +77,8 @@ export function WorkbenchView() {
   const [loadingEntity, setLoadingEntity] = useState(false);
   const [loadingSubject, setLoadingSubject] = useState(false);
   const [health, setHealth] = useState<Health | null>(null);
-  const [coverage, setCoverage] = useState<CoverageResponse | null>(null);
+  const [monitorHealth, setMonitorHealth] = useState<MonitorHealthResponse | null>(null);
+  const [metrics, setMetrics] = useState<DiagnosticsMetrics | null>(null);
   const [pendingClaims, setPendingClaims] = useState<ListResponse<Claim> | null>(null);
   const [correctionStoryId, setCorrectionStoryId] = useState("");
   const [correctionHistory, setCorrectionHistory] = useState<StoryCorrection[] | null>(null);
@@ -81,10 +88,11 @@ export function WorkbenchView() {
   useEffect(() => {
     Promise.all([
       apiFetch<Health>("/diagnostics/health"),
-      apiFetch<CoverageResponse>("/diagnostics/coverage"),
+      apiFetch<MonitorHealthResponse>("/diagnostics/monitor-health"),
+      apiFetch<DiagnosticsMetrics>("/diagnostics/metrics"),
       apiFetch<ListResponse<Claim>>("/claims?state=pending&assignment=unassigned&provenance=automatic&page_size=25"),
     ])
-      .then(([healthResult, coverageResult, claimResult]) => { setHealth(healthResult); setCoverage(coverageResult); setPendingClaims(claimResult); })
+      .then(([healthResult, monitorHealthResult, metricsResult, claimResult]) => { setHealth(healthResult); setMonitorHealth(monitorHealthResult); setMetrics(metricsResult); setPendingClaims(claimResult); })
       .catch(setError);
   }, []);
 
@@ -181,9 +189,13 @@ export function WorkbenchView() {
         {entity && !loadingEntity && <div className="subject-workbench"><div className="story-summary"><div><p className="eyebrow">{entity.entity_type} Entity · {shortId(entity.id)}</p><h2>{entity.canonical_name}</h2><p>{entity.description || "No description recorded."}</p></div><Badge tone={entity.status === "active" ? "mint" : "amber"}>{entity.status}</Badge></div><p><strong>Aliases:</strong> {(entity.aliases ?? []).map((alias) => `${alias.alias} (${alias.alias_type})`).join(" · ") || "none"}</p><div className="stats-grid"><Stat label="Claims" value={entity.claims?.length ?? 0} /><Stat label="Questions" value={entity.research_questions?.length ?? 0} /><Stat label="Sources" value={entity.sources?.length ?? 0} /><Stat label="Tags" value={entity.tags?.length ?? 0} /></div><h3>Claim pivots</h3>{entity.claims?.length ? <ul className="compact-list">{entity.claims.slice(0, 20).map((claim) => <li key={claim.id}><Badge tone={claim.state === "supported" ? "mint" : claim.state === "disputed" ? "coral" : "amber"}>{claim.state}</Badge> <code>{shortId(claim.id)}</code> {claim.proposition}</li>)}</ul> : <p className="muted">No Claims linked.</p>}<h3>Research Questions</h3>{entity.research_questions?.length ? <ul className="compact-list">{entity.research_questions.slice(0, 20).map((question) => <li key={question.id}><Badge tone={question.assessment_state === "supported" ? "mint" : "amber"}>{question.assessment_state} · {question.status}</Badge> {question.question}</li>)}</ul> : <p className="muted">No Questions linked.</p>}</div>}
       </SectionCard>
 
-      <SectionCard title="Monitor coverage" description="Recorded state only. A quiet monitor and a failed run are different outcomes.">
-        {coverage?.items.length ? <div className="workbench-result-list">{coverage.items.slice(0, 8).map((item) => { const status = asText(item.coverage.latest_status, "not_run"); const tone = status.includes("failed") ? "coral" : status === "no_meaningful_change" ? "amber" : "mint"; return <article className="workbench-result" key={item.monitor.id}><div><div className="workbench-result-meta"><Badge tone={tone}>{status.replace(/_/g, " ")}</Badge><code>{shortId(item.monitor.id)}</code></div><h3>{item.monitor.target_type} monitor</h3><p>{asText(item.coverage.checks, "0")} checks · {asText(item.coverage.meaningful_change, "0")} meaningful changes · {asText(item.coverage.failed_acquisition, "0")} acquisition failures</p></div><span className="workbench-score">{formatDate(asText(item.coverage.last_checked_at, ""))}</span></article>; })}</div> : coverage ? <EmptyState title="No monitors yet" description="Create a Monitor to make coverage and health visible here." /> : <LoadingState label="Reading monitor coverage" />}
+      <SectionCard title="Monitor health" description="Recorded operational state only. A quiet monitor and a failed run are different outcomes.">
+        {monitorHealth?.items.length ? <div className="workbench-result-list">{monitorHealth.items.slice(0, 8).map((item) => { const status = asText(item.health.latest_status, "not_run"); const tone = status.includes("failed") ? "coral" : status === "no_meaningful_change" ? "amber" : "mint"; return <article className="workbench-result" key={item.monitor.id}><div><div className="workbench-result-meta"><Badge tone={tone}>{status.replace(/_/g, " ")}</Badge><code>{shortId(item.monitor.id)}</code></div><h3>{item.monitor.target_type} monitor</h3><p>{asText(item.health.checks, "0")} checks · {asText(item.health.meaningful_change, "0")} meaningful changes · {asText(item.health.failed_acquisition, "0")} acquisition failures</p></div><span className="workbench-score">{formatDate(asText(item.health.last_checked_at, ""))}</span></article>; })}</div> : monitorHealth ? <EmptyState title="No monitors yet" description="Create a Watch to make operational health visible here." /> : <LoadingState label="Reading monitor health" />}
         {health && <p className="status-note">Health: <strong>{health.status}</strong> · database {health.database}</p>}
+      </SectionCard>
+
+      <SectionCard title="Durable quality metrics" description="Read-only rates derived from assignment, alert, research-attempt, and Attention history.">
+        {metrics ? <><div className="stats-grid"><Stat label="Assignment corrections" value={`${(metrics.story_assignment_corrections.correction_rate * 100).toFixed(1)}%`} /><Stat label="Alert acknowledgement" value={`${(metrics.alert_acknowledgement.rate * 100).toFixed(1)}%`} /><Stat label="Research yield" value={`${(metrics.research_attempt_yield.yield * 100).toFixed(1)}%`} tone="mint" /><Stat label="Attention actions" value={metrics.attention.action_count} /></div><p className="status-note">Dismissals: {Object.entries(metrics.attention.dismissal_by_reason_code).map(([reason, count]) => `${reason.replace(/_/g, " ")} ${count}`).join(" · ") || "none"}</p></> : <LoadingState label="Reading durable metrics" />}
       </SectionCard>
     </div>
 

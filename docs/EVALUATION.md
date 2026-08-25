@@ -4,7 +4,7 @@ Evaluation is a permanent product subsystem (`newsroom.evals`). It answers:
 *how will we prove that standalone evidence-first Newsroom is actually better
 than the v1 reference?*
 
-- CLI: `python -m newsroom.evals {validate,list,summary,replay,baseline,score}`
+- CLI: `python -m newsroom.evals {validate,list,summary,lite-contract,replay,baseline,score}`
 - Case schema: `newsroom/evals/schema.py`
 - Metrics: `newsroom/evals/metrics.py`
 - Replay: `newsroom/evals/replay.py`
@@ -60,7 +60,8 @@ factual excerpts only. v1-derived cases store metadata, never article bodies.
 `EvaluationCase` — case_id, title, description, case_type, monitored_targets,
 observation_window, provenance, reviewer_notes, candidates, gold_groups,
 gold_claims, gold_evidence, expected_primary_sources, noise_candidates,
-contradictions, material_changes.
+contradictions, material_changes, and optional machine-verifiable
+`semantic_assertions`.
 
 Referential integrity is machine-validated: groups reference known candidates,
 claims reference known events, evidence references known claims and candidates,
@@ -69,17 +70,38 @@ reference known candidates.
 
 ## 3. Metric definitions
 
-Phase 28 adds bounded scenarios for explicit Coverage states and qualified
-negative language, syndicated/derivative evidence families, non-mutating
-fragility counterfactuals, blind-spot-to-Research planning, Attention reason
-codes, Simple/Advanced visibility over one database, and Hypothesis links that
-cannot affect factual Claims. These scenarios extend the existing evaluation
-corpus and use the same canonical evidence ledger; they do not create a second
-benchmark or truth path.
+The current corpus contains 38 bounded cases: 30 established cases plus eight
+Phase 28.75 regressions covering late dependency discovery, conservative
+absence language, Ask evidence-sufficiency refusal, late Story correction and
+split handling, dependency-group support, correction-versus-contradiction
+semantics, and silent DocumentVersion edits. These cases use the same
+canonical evidence ledger; they do not create a second truth path.
+
+Simple/Advanced navigation density, Attention acknowledgement, hypothesis
+provenance, migration history, and other product invariants are covered by
+engineering and integration tests, not misrepresented as corpus cases.
+
+Coverage, Blind Spots, persisted evidence families, and fragility scores are
+not runtime evaluation targets. Knowledge-time and historical-time Ask
+semantics remain deferred until the Phase 29A benchmark contract is frozen.
 
 All metrics are pure functions of a gold `EvaluationCase` and a `Prediction`.
 Predictions are provider-neutral structured outputs (see
 `newsroom/evals/prediction.py`).
+
+### Lite comparator
+
+The frozen Lite contract is `evals/lite/20q_contract.json` and is validated by
+`python -m newsroom.evals lite-contract`. A benchmark run must bind to an
+immutable SQLite online-backup snapshot whose document-corpus manifest matches
+the contract, and its synthesis adapter must declare the exact contracted
+provider, model, prompt version, temperature, context budget, retrieval limit,
+and citation limit. It retrieves Documents with SQLite FTS5 only. Lite does
+not read Claims, Stories, Coverage, or dependency groups; synthesis and
+document citations are supplied by the contracted model route through
+`newsroom/evals/lite.py`. Arbitrary databases and callables are rejected, while
+test doubles require an explicit test flag. No Full-vs-Lite result or product
+verdict has been run.
 
 ### Event / Story metrics (pairwise over candidate documents)
 
@@ -137,6 +159,16 @@ whitespace collapse). `important` = `importance == "major"`.
   for this metric are `supported` and `partially_supported`; pending,
   disputed, unsubstantiated, and superseded Claims do not ground synthesis.
   This is the Phase-0 measurable proxy for the closed-world synthesis invariant.
+
+### Semantic assertions
+
+Cases may declare `semantic_assertions` with a stable id, metric name, and
+expected JSON value. Predictions provide `semantic_results`; scoring accepts
+the assertion id (and supports the metric name as a compatibility alias) and
+reports assertion count, pass count, and failed ids. This is the bounded
+machine-verifiable layer for refusal codes, current-versus-historical Story
+state, dependency-group counts, and distinct document hashes; it does not
+invent unsupported domain states.
 
 ### Primary source
 
@@ -223,6 +255,7 @@ candidates. It is regenerable from the read-only v1 databases via
 python -m pytest -q                    # all tests, no network / Hermes / paid API / v1 DB
 python -m newsroom.evals validate      # corpus integrity
 python -m newsroom.evals summary       # taxonomy distribution
+python -m newsroom.evals lite-contract  # frozen Lite contract integrity
 python -m newsroom.evals baseline      # v1 baseline vs gold
 python -m newsroom.evals replay <id>   # deterministic replay of one case
 ```

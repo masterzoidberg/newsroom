@@ -72,30 +72,23 @@ Accepted Claims must be `supported` or `partially_supported` and have a
 supporting Evidence Span. Accepted Claim proposition text cannot be edited;
 corrections create a new Claim with `supersedes_claim_id`.
 
-## Phase 28 Coverage, robustness, and analysis
-
-Coverage uses authenticated routes under `/coverage/runs`: create a bounded
-expected denominator with `POST /coverage/runs`, record each item with
-`POST /coverage/runs/{id}/items/{item_key}`, and close it with
-`POST /coverage/runs/{id}/complete`. `GET /coverage/runs/{id}` returns explicit
-states, completeness, blocking states, and qualified-negative explanation.
-`GET /stories/{id}/coverage` and `/research-questions/{id}/priorities` provide
-bounded contextual views. Blind spots are generated/reviewed through
-`/coverage/runs/{id}/blind-spots`, `/coverage/blind-spots`, and the review route.
+## Dependency analysis, Attention, and Research review
 
 `GET /documents/{id}/dependencies` and
-`GET /sources/{id}/source-robustness` inspect dependency context. Stories and
-Claims expose `/source-robustness` plus read-only
-`/fragility/counterfactual` endpoints. Counterfactuals exclude evidence family
-IDs in memory and do not mutate canonical Claim/Evidence state.
+`GET /sources/{id}/source-robustness` compute bounded dependency groups from
+`document_lineage`. Stories and Claims expose `/source-robustness` plus
+read-only `/source-robustness/counterfactual` endpoints. Counterfactuals accept
+`exclude_document_ids` and `exclude_source_ids`; they never mutate canonical
+Claim or Evidence state. No Coverage, Blind Spot, evidence-family, or fragility
+table is exposed.
 
-`GET /attention`, `POST /attention/refresh`, and
-`POST /attention/{id}/feedback` expose the explainable Attention projection.
-`GET/PUT /experience` stores the Simple/Advanced disclosure mode. Hypotheses
-are created under `/research-questions/{id}/hypotheses`, linked to existing
-Claims through `/hypotheses/{id}/claims/{claim_id}`, given Gaps, and reviewed
-explicitly. These records are analytical/review state and are not factual
-Claim/Evidence alternatives.
+`GET /attention` and `GET /attention/{id}` return current read-time candidates.
+`POST /attention/{id}/decision` appends one explicit `seen`, `snoozed`, or
+`not_useful` decision bound to the candidate's material-cause fingerprint.
+`GET/PUT /experience` stores the Simple/Advanced navigation-density mode.
+Hypotheses are created under `/research-questions/{id}/hypotheses`, linked to
+existing Claims through `/hypotheses/{id}/claims/{claim_id}`, given canonical
+Research Gaps, and reviewed explicitly.
 
 ## Reports, briefings, and alerts
 
@@ -216,8 +209,9 @@ immutable provenance:
 - `POST /stories/{story_id}/evolution` records an explicitly classified
   observation; `GET /stories/{story_id}/timeline` returns evolution events,
   revision links, and document lineage.
-- `GET /stories/{story_id}/corroboration` reports publication count separately
-  from independent source/lineage groups.
+- `GET /stories/{story_id}/corroboration` reports publication count, Source
+  records, and known dependency groups without claiming independent
+  confirmation.
 - `GET/POST /documents/{document_id}/lineage` manages citations, syndication,
   wire propagation, rewritten reporting, and common-primary-document edges.
 - `GET/POST /stories/{story_id}/review` tracks the reviewed revision and exposes
@@ -328,9 +322,11 @@ Phase 13 adds the authenticated local research workbench:
 - `GET /subjects/{id}/workbench`, `/timeline`, and `/historical-context` expose
   Subject stories, revisions, evolution events, Claims, notes, and exact
   historical Evidence Spans.
-- `GET /diagnostics/health`, `/diagnostics/coverage`, and
-  `/monitors/{id}/diagnostics` derive health from recorded activity, acquisition
-  events, and job state. `no_meaningful_change`, `content_changed`,
+- `GET /diagnostics/health`, `/diagnostics/monitor-health`,
+  `/diagnostics/metrics`, and `/monitors/{id}/diagnostics` derive health from
+  recorded activity, acquisition events, and job state. Metrics are read-only
+  aggregates over durable assignment, alert, research-attempt, and Attention
+  history. `no_meaningful_change`, `content_changed`,
   `failed_acquisition`, and `failed_processing` are separate statuses;
   `content_changed` means acquisition detected changed content whose semantic
   relevance has not been evaluated yet.
