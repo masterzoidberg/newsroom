@@ -72,7 +72,7 @@ _EXPORT_COLUMNS: dict[str, tuple[str, ...]] = {
     "research_question_assessments": ("id", "question_id", "snapshot_hash", "state", "explanation", "supporting_claim_count", "contradicting_claim_count", "contextual_claim_count", "qualifying_evidence_count", "open_gap_count", "origin", "created_at"),
     "research_question_assessment_history": ("id", "question_id", "assessment_id", "from_state", "to_state", "reason_code", "claim_ids_json", "origin", "created_at"),
     "research_question_claim_overrides": ("id", "question_id", "claim_id", "relationship", "action", "reason", "actor", "created_at"),
-    "research_question_gaps": ("id", "question_id", "gap_key", "gap_type", "description", "rationale", "condition_json", "status", "origin", "assessment_hash", "first_seen_at", "last_evaluated_at", "satisfied_at", "dismissed_at", "dismissed_by", "dismissal_reason", "created_at", "updated_at"),
+    "research_question_gaps": ("id", "question_id", "gap_key", "gap_type", "description", "rationale", "condition_json", "status", "origin", "origin_hypothesis_id", "assessment_hash", "first_seen_at", "last_evaluated_at", "satisfied_at", "dismissed_at", "dismissed_by", "dismissal_reason", "created_at", "updated_at"),
     "research_question_gap_history": ("id", "gap_id", "from_status", "to_status", "reason_code", "assessment_hash", "task_id", "actor", "created_at"),
     "research_tasks": ("id", "question_id", "gap_id", "task_no", "mode", "status", "job_id", "attempt_id", "snapshot_hash", "plan_json", "limits_json", "outcome_json", "error_code", "error_detail", "next_attempt_at", "started_at", "completed_at", "created_at", "updated_at"),
     "research_question_entities": ("question_id", "entity_id", "origin", "created_at"),
@@ -105,25 +105,16 @@ _EXPORT_COLUMNS: dict[str, tuple[str, ...]] = {
     "tags": ("id", "name", "normalized_name", "namespace", "tag_type", "created_at", "updated_at"),
     "story_tags": ("story_id", "tag_id", "created_at"),
     "tag_assignments": ("id", "tag_id", "object_type", "object_id", "origin", "confidence", "reason", "created_at"),
-    "entity_merges": ("id", "from_entity_id", "into_entity_id", "reason", "actor", "created_at"),
     "knowledge_backfills": ("id", "kind", "status", "cursor", "processed", "row_limit", "batch_size", "error_code", "error_detail", "created_at", "updated_at", "completed_at"),
     "ask_conversations": ("id", "scope_type", "scope_id", "created_at", "updated_at"),
     "ask_runs": ("id", "conversation_id", "turn_number", "status", "retrieval_json", "citations_json", "refusal_code", "context_units", "provider_route", "estimated_cost_usd", "created_at", "completed_at"),
     "article_analyses": ("id", "document_version_id", "relevance_id", "monitor_id", "job_id", "scope_version", "artifact_id", "normalized_content_hash", "schema_version", "prompt_version", "provider", "model", "paid", "confidence", "input_char_count", "analyzed_char_count", "truncated", "input_view_version", "input_content_hash", "analyzed_content_hash", "invocation_id", "created_at"),
     "article_analysis_promotions": ("id", "promotion_identity", "article_analysis_id", "candidate_claim_index", "outcome_code", "claim_id", "evidence_span_ids_json", "created_at"),
     "story_target_resolution_history": ("id", "target_kind", "target_id", "historical_story_id", "selected_story_ids_json", "resolution", "actor", "created_at"),
-    "coverage_runs": ("id", "target_type", "target_id", "target_version", "window_start", "window_end", "policy_version", "included_sources_json", "excluded_sources_json", "status", "causing_job_id", "created_at", "completed_at"),
-    "coverage_items": ("id", "run_id", "item_key", "channel_type", "source_id", "source_class", "required", "state", "observation_refs_json", "reason", "observed_at", "created_at", "updated_at"),
-    "coverage_summaries": ("run_id", "expected_count", "required_count", "observed_count", "complete_count", "completeness", "qualified_negative", "state_counts_json", "explanation_json", "created_at"),
-    "evidence_families": ("id", "family_key", "label", "origin", "authority", "algorithm_version", "created_at", "updated_at"),
-    "evidence_family_members": ("family_id", "document_id", "source_id", "relationship", "confidence", "created_at"),
-    "evidence_fragility_analyses": ("id", "target_type", "target_id", "input_fingerprint", "claim_ids_json", "distinct_source_count", "lineage_group_count", "evidence_family_count", "fragility_score", "support_paths_json", "explanation_json", "created_at"),
-    "blind_spot_suggestions": ("id", "target_type", "target_id", "source_class", "coverage_run_id", "priority", "reason", "status", "created_at", "reviewed_at", "reviewed_by"),
-    "attention_items": ("id", "object_type", "object_id", "reason_code", "importance_score", "state", "source_fingerprint", "explanation_json", "created_at", "updated_at"),
-    "attention_feedback": ("id", "attention_id", "feedback", "actor", "created_at"),
+    "blind_spot_review_history": ("id", "source_id", "target_type", "target_id", "source_class", "coverage_run_id", "priority", "review_status", "reviewer", "reviewed_at", "reason", "original_created_at", "preserved_at"),
+    "attention_decisions": ("id", "object_type", "object_id", "reason_code", "basis_fingerprint", "action", "actor", "created_at", "snoozed_until", "legacy_action", "note"),
     "hypotheses": ("id", "question_id", "statement", "status", "origin", "provider_route", "created_at", "updated_at", "approved_at", "approved_by"),
     "hypothesis_claim_links": ("id", "hypothesis_id", "claim_id", "relationship", "created_at"),
-    "hypothesis_gaps": ("id", "hypothesis_id", "description", "status", "created_at", "updated_at"),
     "hypothesis_history": ("id", "hypothesis_id", "from_status", "to_status", "actor", "reason", "created_at"),
 }
 
@@ -303,6 +294,73 @@ def export_logical(
         raise
 
 
+def import_logical(
+    source: str | Path,
+    destination: str | Path,
+    *,
+    max_rows: int = 100_000,
+) -> dict[str, Any]:
+    """Import an allow-listed Class A/B JSONL export into a fresh database."""
+    if isinstance(max_rows, bool) or not isinstance(max_rows, int) or max_rows < 1:
+        raise ValueError("max_rows must be a positive integer")
+    source_path = _path(source)
+    destination_path = _path(destination)
+    if destination_path.exists() and destination_path.stat().st_size:
+        raise OperationsError("logical import destination must be a fresh or empty file")
+    records: list[tuple[str, dict[str, Any]]] = []
+    header: dict[str, Any] | None = None
+    ended = False
+    with source_path.open("r", encoding="utf-8") as stream:
+        for line in stream:
+            payload = json.loads(line)
+            if isinstance(payload, dict) and payload.get("format") == "newsroom-logical-export-v1":
+                if header is not None or records:
+                    raise OperationsError("logical export has an invalid header")
+                header = payload
+                continue
+            if isinstance(payload, dict) and payload.get("format") == "newsroom-logical-export-end":
+                if ended or int(payload.get("rows", -1)) != len(records):
+                    raise OperationsError("logical export has an invalid terminator")
+                ended = True
+                continue
+            if ended or not isinstance(payload, dict) or not isinstance(payload.get("data"), dict):
+                raise OperationsError("logical export contains an invalid record")
+            table = payload.get("table")
+            if table not in _EXPORT_COLUMNS:
+                raise OperationsError(f"logical export table is not allow-listed: {table}")
+            records.append((str(table), payload["data"]))
+            if len(records) > max_rows:
+                raise ExportLimitExceeded("logical import row limit exceeded")
+    if header is None or not ended:
+        raise OperationsError("logical export is incomplete")
+
+    apply_migrations(destination_path)
+    conn = storage.connect(destination_path)
+    try:
+        conn.execute("PRAGMA foreign_keys = OFF")
+        with storage.write_tx(conn):
+            for table, data in records:
+                columns = tuple(column for column in _EXPORT_COLUMNS[table] if column in data and column in _table_columns(conn, table))
+                if not columns:
+                    continue
+                quoted = ", ".join(f'"{column}"' for column in columns)
+                placeholders = ", ".join("?" for _ in columns)
+                conn.execute(
+                    f'INSERT OR IGNORE INTO "{table}" ({quoted}) VALUES ({placeholders})',
+                    tuple(data[column] for column in columns),
+                )
+        conn.execute("PRAGMA foreign_keys = ON")
+        foreign_key_errors = [tuple(row) for row in conn.execute("PRAGMA foreign_key_check")]
+        if foreign_key_errors:
+            raise OperationsError("logical import failed foreign-key validation")
+        integrity = check_database(destination_path)
+        if not integrity.ok:
+            raise OperationsError("logical import failed authority integrity validation")
+        return {"rows_imported": len(records), "tables": sorted({table for table, _ in records}), "verified": True}
+    finally:
+        conn.close()
+
+
 def retain_backups(
     backup_dir: str | Path,
     *,
@@ -362,6 +420,7 @@ __all__ = [
     "OperationsError",
     "backup_database",
     "export_logical",
+    "import_logical",
     "purge_expired_sessions",
     "restore_database",
     "retain_backups",

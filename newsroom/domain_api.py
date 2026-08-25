@@ -40,7 +40,6 @@ from .workbench import ComparisonService, DiagnosticsService, SearchService, Wor
 from .ask import AskService
 from .knowledge import KnowledgeService
 from .story_corrections import StoryCorrectionService
-from .coverage import CoverageService
 from .source_robustness import SourceRobustnessService
 from .attention import AttentionService
 from .hypotheses import HypothesisService
@@ -700,44 +699,9 @@ class StoryTargetResolutionWrite(StrictModel):
     disable: bool = False
 
 
-class CoverageChannelWrite(StrictModel):
-    key: str = Field(min_length=1, max_length=200)
-    channel_type: str = Field(min_length=1, max_length=100)
-    source_id: Optional[str] = Field(default=None, max_length=200)
-    source_class: str = Field(default="", max_length=100)
-    required: bool = True
-
-
-class CoverageRunCreate(StrictModel):
-    target_type: str = Field(pattern="^(watch|research_question|story|ask|source)$")
-    target_id: str = Field(min_length=1, max_length=200)
-    window_start: str = Field(min_length=1, max_length=64)
-    window_end: str = Field(min_length=1, max_length=64)
-    expected_channels: list[CoverageChannelWrite] = Field(default_factory=list, max_length=500)
-    included_sources: list[dict[str, Any] | str] = Field(default_factory=list, max_length=500)
-    excluded_sources: list[dict[str, Any] | str] = Field(default_factory=list, max_length=500)
-    target_version: str = Field(default="", max_length=200)
-    policy_version: str = Field(default="coverage_v1", max_length=100)
-    causing_job_id: Optional[str] = Field(default=None, max_length=200)
-
-
-class CoverageItemWrite(StrictModel):
-    state: str = Field(pattern="^(observed|not_found|not_observed|not_searched|failed_acquisition|out_of_scope|stale)$")
-    observation_refs: list[str] = Field(default_factory=list, max_length=100)
-    reason: str = Field(default="", max_length=4000)
-    observed_at: Optional[str] = Field(default=None, max_length=64)
-
-
-class CoverageCompleteWrite(StrictModel):
-    status: Optional[str] = Field(default=None, pattern="^(completed|partial|failed)$")
-
-
-class BlindSpotReviewWrite(StrictModel):
-    status: str = Field(pattern="^(approved|dismissed|used)$")
-
-
-class AttentionFeedbackWrite(StrictModel):
-    feedback: str = Field(pattern="^(useful|not_important|already_knew|needs_investigation|mute_pattern)$")
+class AttentionDecisionWrite(StrictModel):
+    action: str = Field(pattern="^(seen|snoozed|not_useful)$")
+    snooze_days: int = Field(default=7, ge=1, le=30)
 
 
 class ExperienceModeWrite(StrictModel):
@@ -764,7 +728,8 @@ class HypothesisReviewWrite(StrictModel):
 
 
 class CounterfactualWrite(StrictModel):
-    excluded_family_ids: list[str] = Field(default_factory=list, max_length=100)
+    exclude_document_ids: list[str] = Field(default_factory=list, max_length=100)
+    exclude_source_ids: list[str] = Field(default_factory=list, max_length=100)
 
 
 class StoryExtractWrite(StrictModel):
@@ -1029,7 +994,6 @@ def create_domain_router(
     diagnostics = DiagnosticsService(service.db_path)
     workbench = WorkbenchService(service.db_path)
     ask = AskService(service.db_path)
-    coverage = CoverageService(service.db_path)
     source_robustness = SourceRobustnessService(service.db_path)
     attention = AttentionService(service.db_path)
     hypotheses = HypothesisService(service.db_path)
@@ -1258,10 +1222,15 @@ def create_domain_router(
         read_guard(request)
         return diagnostics.health()
 
-    @router.get("/diagnostics/coverage")
-    async def diagnostics_coverage(request: Request):
+    @router.get("/diagnostics/monitor-health")
+    async def diagnostics_monitor_health(request: Request):
         read_guard(request)
-        return diagnostics.coverage()
+        return diagnostics.monitor_health()
+
+    @router.get("/diagnostics/metrics")
+    async def diagnostics_metrics(request: Request):
+        read_guard(request)
+        return diagnostics.metrics()
 
     @router.get("/monitors/{identifier}/diagnostics")
     async def monitor_diagnostics(request: Request, identifier: str):
@@ -1782,6 +1751,11 @@ def create_domain_router(
         write_guard(request)
         return hypotheses.add_gap(identifier, payload.description)
 
+    @router.get("/hypotheses/{identifier}/compare/{other_identifier}")
+    async def compare_hypotheses(request: Request, identifier: str, other_identifier: str):
+        read_guard(request)
+        return hypotheses.compare(identifier, other_identifier)
+
     @router.get("/hypotheses/{identifier}")
     async def get_hypothesis(request: Request, identifier: str):
         read_guard(request)
@@ -1889,11 +1863,12 @@ def create_domain_router(
     async def list_alerts(
         request: Request,
         status: Optional[str] = None,
+        min_importance: Optional[float] = Query(None, ge=0, le=1),
         page: int = Query(1, ge=1),
         page_size: int = Query(25, ge=1, le=100),
     ):
         read_guard(request)
-        return alerts.list_alerts(status=status, page=page, page_size=page_size)
+        return alerts.list_alerts(status=status, min_importance=min_importance, page=page, page_size=page_size)
 
     @router.get("/alerts/{identifier}")
     async def get_alert(request: Request, identifier: str):
@@ -2222,22 +2197,20 @@ def create_domain_router(
         read_guard(request)
         return service.get_story(identifier, include_deleted=include_deleted)
 
-    @router.get("/stories/{identifier}/coverage")
-    async def story_coverage(request: Request, identifier: str, limit: int = Query(20, ge=1, le=200)):
-        read_guard(request)
-        return {"items": coverage.list_runs(target_type="story", target_id=identifier, limit=limit)}
-
     @router.get("/stories/{identifier}/source-robustness")
     async def story_source_robustness(request: Request, identifier: str):
         read_guard(request)
-        summary = source_robustness.evidence_summary("story", identifier)
-        summary["fragility"] = source_robustness.analyze_fragility("story", identifier)
-        return summary
+        return source_robustness.evidence_summary("story", identifier)
 
-    @router.post("/stories/{identifier}/fragility/counterfactual")
-    async def story_fragility_counterfactual(request: Request, identifier: str, payload: CounterfactualWrite):
+    @router.post("/stories/{identifier}/source-robustness/counterfactual")
+    async def story_source_robustness_counterfactual(request: Request, identifier: str, payload: CounterfactualWrite):
         read_guard(request)
-        return source_robustness.counterfactual("story", identifier, payload.excluded_family_ids)
+        return source_robustness.counterfactual(
+            "story",
+            identifier,
+            exclude_document_ids=payload.exclude_document_ids,
+            exclude_source_ids=payload.exclude_source_ids,
+        )
 
     @router.patch("/stories/{identifier}")
     async def patch_story(request: Request, identifier: str, payload: StoryPatch):
@@ -2268,14 +2241,17 @@ def create_domain_router(
     @router.get("/claims/{identifier}/source-robustness")
     async def claim_source_robustness(request: Request, identifier: str):
         read_guard(request)
-        summary = source_robustness.evidence_summary("claim", identifier)
-        summary["fragility"] = source_robustness.analyze_fragility("claim", identifier)
-        return summary
+        return source_robustness.evidence_summary("claim", identifier)
 
-    @router.post("/claims/{identifier}/fragility/counterfactual")
-    async def claim_fragility_counterfactual(request: Request, identifier: str, payload: CounterfactualWrite):
+    @router.post("/claims/{identifier}/source-robustness/counterfactual")
+    async def claim_source_robustness_counterfactual(request: Request, identifier: str, payload: CounterfactualWrite):
         read_guard(request)
-        return source_robustness.counterfactual("claim", identifier, payload.excluded_family_ids)
+        return source_robustness.counterfactual(
+            "claim",
+            identifier,
+            exclude_document_ids=payload.exclude_document_ids,
+            exclude_source_ids=payload.exclude_source_ids,
+        )
 
     @router.post("/claims/{identifier}/state")
     async def set_claim_state(request: Request, identifier: str, payload: ClaimStateWrite):
@@ -2561,72 +2537,20 @@ def create_domain_router(
         read_guard(request)
         return monitors.scope_history(identifier, page=page, page_size=page_size)
 
-    @router.get("/coverage/runs")
-    async def list_coverage_runs(
-        request: Request,
-        target_type: Optional[str] = None,
-        target_id: Optional[str] = None,
-        limit: int = Query(50, ge=1, le=200),
-    ):
-        read_guard(request)
-        return {"items": coverage.list_runs(target_type=target_type, target_id=target_id, limit=limit)}
-
-    @router.post("/coverage/runs", status_code=201)
-    async def create_coverage_run(request: Request, payload: CoverageRunCreate):
-        write_guard(request)
-        values = payload.model_dump()
-        values["expected_channels"] = [item.model_dump() for item in payload.expected_channels]
-        return coverage.create_run(**values)
-
-    @router.get("/coverage/runs/{identifier}")
-    async def get_coverage_run(request: Request, identifier: str):
-        read_guard(request)
-        return coverage.get_run(identifier)
-
-    @router.post("/coverage/runs/{identifier}/items/{item_key}")
-    async def record_coverage_item(request: Request, identifier: str, item_key: str, payload: CoverageItemWrite):
-        write_guard(request)
-        return coverage.record_item(identifier, item_key, **payload.model_dump())
-
-    @router.post("/coverage/runs/{identifier}/complete")
-    async def complete_coverage_run(request: Request, identifier: str, payload: CoverageCompleteWrite):
-        write_guard(request)
-        return coverage.complete(identifier, status=payload.status)
-
-    @router.get("/coverage/blind-spots")
-    async def list_blind_spots(request: Request, target_type: Optional[str] = None, target_id: Optional[str] = None, status: Optional[str] = None, limit: int = Query(100, ge=1, le=500)):
-        read_guard(request)
-        return coverage.list_blind_spots(target_type=target_type, target_id=target_id, status=status, limit=limit)
-
-    @router.post("/coverage/runs/{identifier}/blind-spots")
-    async def generate_blind_spots(request: Request, identifier: str):
-        write_guard(request)
-        return coverage.generate_blind_spots(identifier)
-
-    @router.post("/coverage/blind-spots/{identifier}/review")
-    async def review_blind_spot(request: Request, identifier: str, payload: BlindSpotReviewWrite):
-        user = write_guard(request)
-        return coverage.review_blind_spot(identifier, payload.status, actor=user.user_id)
-
     @router.get("/attention")
-    async def list_attention(request: Request, state: Optional[str] = None, limit: int = Query(100, ge=1, le=500)):
+    async def list_attention(request: Request, limit: int = Query(100, ge=1, le=500)):
         read_guard(request)
-        return attention.list(state=state, limit=limit)
-
-    @router.post("/attention/refresh")
-    async def refresh_attention(request: Request, limit: int = Query(200, ge=1, le=500)):
-        write_guard(request)
-        return attention.refresh(limit=limit)
+        return attention.list(limit=limit)
 
     @router.get("/attention/{identifier}")
     async def get_attention(request: Request, identifier: str):
         read_guard(request)
         return attention.get(identifier)
 
-    @router.post("/attention/{identifier}/feedback")
-    async def feedback_attention(request: Request, identifier: str, payload: AttentionFeedbackWrite):
+    @router.post("/attention/{identifier}/decision")
+    async def decide_attention(request: Request, identifier: str, payload: AttentionDecisionWrite):
         user = write_guard(request)
-        return attention.feedback(identifier, payload.feedback, actor=user.user_id)
+        return attention.decide(identifier, payload.action, actor=user.user_id, snooze_days=payload.snooze_days)
 
     @router.post("/relevance/evaluate")
     async def evaluate_relevance(request: Request, payload: RelevanceEvaluate):

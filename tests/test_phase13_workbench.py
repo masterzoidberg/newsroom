@@ -171,9 +171,9 @@ def test_subject_context_and_monitor_diagnostics_distinguish_no_change_from_fail
     assert first_span["id"] in {item["id"] for item in context["historical_context"]["evidence"]}
 
     diagnostics = DiagnosticsService(tmp_db).monitor(monitor["id"])
-    assert diagnostics["coverage"]["no_meaningful_change"] == 1
-    assert diagnostics["coverage"]["failed_processing"] == 1
-    assert diagnostics["coverage"]["latest_status"] == "failed_processing"
+    assert diagnostics["health"]["no_meaningful_change"] == 1
+    assert diagnostics["health"]["failed_processing"] == 1
+    assert diagnostics["health"]["latest_status"] == "failed_processing"
     health = DiagnosticsService(tmp_db).health()
     assert health["status"] in {"healthy", "degraded"}
     assert health["counts"]["failed_acquisitions"] == 1
@@ -186,6 +186,7 @@ def test_phase13_api_is_authenticated_and_mutations_remain_csrf_protected(tmp_pa
     assert client.post("/api/v1/auth/setup", json={"username": "admin", "password": "a-long-test-password-12345"}).status_code == 201
     assert client.post("/api/v1/auth/login", json={"username": "admin", "password": "a-long-test-password-12345"}).status_code == 200
     assert client.get("/api/v1/diagnostics/health").status_code == 200
+    assert client.get("/api/v1/diagnostics/metrics").status_code == 200
     assert client.get("/api/v1/search?q=launch").status_code == 200
     assert client.post(
         "/api/v1/workbench/notes",

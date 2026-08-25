@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import sqlite3
 from pathlib import Path
 from typing import Any
@@ -31,7 +32,7 @@ class HypothesisService:
     def _result(conn: sqlite3.Connection, row: sqlite3.Row) -> dict[str, Any]:
         result = dict(row)
         result["claims"] = [dict(item) for item in conn.execute("SELECT * FROM hypothesis_claim_links WHERE hypothesis_id = ? ORDER BY created_at, id", (row["id"],)).fetchall()]
-        result["gaps"] = [dict(item) for item in conn.execute("SELECT * FROM hypothesis_gaps WHERE hypothesis_id = ? ORDER BY created_at, id", (row["id"],)).fetchall()]
+        result["gaps"] = [dict(item) for item in conn.execute("SELECT * FROM research_question_gaps WHERE origin_hypothesis_id = ? ORDER BY created_at, id", (row["id"],)).fetchall()]
         result["history"] = [dict(item) for item in conn.execute("SELECT * FROM hypothesis_history WHERE hypothesis_id = ? ORDER BY created_at, id", (row["id"],)).fetchall()]
         return result
 
@@ -106,6 +107,34 @@ class HypothesisService:
         finally:
             conn.close()
 
+    def compare(self, identifier: str, other_identifier: str) -> dict[str, Any]:
+        if identifier == other_identifier:
+            raise DomainValidation("a hypothesis cannot be compared with itself")
+        conn = storage.connect(self.db_path)
+        try:
+            left = self._result(conn, self._require(conn, identifier))
+            right = self._result(conn, self._require(conn, other_identifier))
+            if left["question_id"] != right["question_id"]:
+                raise DomainValidation("hypotheses must belong to the same Research Question")
+            left_claims = {item["claim_id"]: item["relationship"] for item in left["claims"]}
+            right_claims = {item["claim_id"]: item["relationship"] for item in right["claims"]}
+            shared = sorted(set(left_claims) & set(right_claims))
+            return {
+                "question_id": left["question_id"],
+                "left": {"id": left["id"], "statement": left["statement"], "status": left["status"]},
+                "right": {"id": right["id"], "statement": right["statement"], "status": right["status"]},
+                "shared_claim_ids": shared,
+                "left_only_claim_ids": sorted(set(left_claims) - set(right_claims)),
+                "right_only_claim_ids": sorted(set(right_claims) - set(left_claims)),
+                "relationship_conflicts": [
+                    {"claim_id": claim_id, "left": left_claims[claim_id], "right": right_claims[claim_id]}
+                    for claim_id in shared if left_claims[claim_id] != right_claims[claim_id]
+                ],
+                "shared_gap_ids": sorted({item["id"] for item in left["gaps"]} & {item["id"] for item in right["gaps"]}),
+            }
+        finally:
+            conn.close()
+
     def add_gap(self, identifier: str, description: str) -> dict[str, Any]:
         description = str(description or "").strip()
         if not description or len(description) > 4_000:
@@ -113,11 +142,25 @@ class HypothesisService:
         conn = storage.connect(self.db_path)
         try:
             with storage.write_tx(conn):
-                self._require(conn, identifier)
-                gap_id = new_id("hypothesis-gap")
+                hypothesis = self._require(conn, identifier)
+                gap_id = new_id("rqg")
                 now = utc_now()
-                conn.execute("INSERT INTO hypothesis_gaps(id, hypothesis_id, description, created_at, updated_at) VALUES (?, ?, ?, ?, ?)", (gap_id, identifier, description, now, now))
-                return dict(conn.execute("SELECT * FROM hypothesis_gaps WHERE id = ?", (gap_id,)).fetchone())
+                gap_key = "discriminating:" + hashlib.sha256(description.casefold().encode("utf-8")).hexdigest()[:32]
+                conn.execute(
+                    """
+                    INSERT INTO research_question_gaps
+                        (id, question_id, gap_key, gap_type, description, rationale,
+                         condition_json, status, origin, origin_hypothesis_id,
+                         first_seen_at, last_evaluated_at, created_at, updated_at)
+                    VALUES (?, ?, ?, 'discriminating', ?, ?, '{}', 'open', 'manual', ?, ?, ?, ?, ?)
+                    """,
+                    (gap_id, hypothesis["question_id"], gap_key, description, "Discriminating gap proposed by this Hypothesis.", identifier, now, now, now, now),
+                )
+                conn.execute(
+                    "INSERT INTO research_question_gap_history(id, gap_id, from_status, to_status, reason_code, actor, created_at) VALUES (?, ?, NULL, 'open', 'hypothesis_discriminating_gap', ?, ?)",
+                    (new_id("rqgh"), gap_id, "user", now),
+                )
+                return dict(conn.execute("SELECT * FROM research_question_gaps WHERE id = ?", (gap_id,)).fetchone())
         except sqlite3.IntegrityError as exc:
             raise DomainConflict("hypothesis gap already exists") from exc
         finally:

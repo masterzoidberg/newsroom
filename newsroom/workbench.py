@@ -843,7 +843,7 @@ class WorkbenchService:
 
 
 class DiagnosticsService:
-    """Derive coverage and health from recorded monitor/acquisition/job state."""
+    """Derive bounded monitor health from recorded operational state."""
 
     def __init__(self, db_path: str | Path):
         self.db_path = Path(db_path)
@@ -854,7 +854,7 @@ class DiagnosticsService:
             monitor = conn.execute("SELECT * FROM monitors WHERE id = ?", (monitor_id,)).fetchone()
             if monitor is None:
                 raise DomainNotFound("monitor not found")
-            activities = conn.execute("SELECT * FROM monitor_activity WHERE monitor_id = ? ORDER BY observed_at DESC, rowid DESC LIMIT 1000", (monitor_id,)).fetchall()
+            activities = conn.execute("SELECT * FROM monitor_activity WHERE monitor_id = ? ORDER BY observed_at DESC, rowid DESC LIMIT 500", (monitor_id,)).fetchall()
             counts = {"checks": len(activities), "meaningful_change": 0, "content_change": 0, "no_meaningful_change": 0, "partial": 0, "failed_processing": 0}
             for row in activities:
                 if row["outcome"] == "relevant_change":
@@ -897,7 +897,7 @@ class DiagnosticsService:
                 )]
             if source_ids:
                 acquisition_failures = conn.execute(
-                    f"SELECT COUNT(*) FROM acquisition_events WHERE outcome IN ('failed', 'error', 'blocked', 'timeout') AND source_id IN ({_placeholders(source_ids)})",
+                    f"SELECT COUNT(*) FROM acquisition_events WHERE outcome IN ('failed', 'blocked') AND source_id IN ({_placeholders(source_ids)})",
                     source_ids,
                 ).fetchone()[0]
             else:
@@ -918,18 +918,81 @@ class DiagnosticsService:
             counts["failed_acquisition"] = acquisition_failures
             counts["latest_status"] = latest_status
             counts["last_checked_at"] = latest["observed_at"] if latest else None
-            return {"monitor": _as_dict(monitor), "coverage": counts, "activities": [_as_dict(row) for row in activities[:100]], "source_ids": source_ids, "interpretation": {"no_meaningful_change": "The monitor ran successfully and recorded no relevant change.", "content_changed": "Acquisition detected changed content whose semantic relevance has not been evaluated yet.", "failed_acquisition": "A source acquisition failed before evidence processing.", "failed_processing": "The monitor recorded an operational processing error."}}
+            return {"monitor": _as_dict(monitor), "health": counts, "activities": [_as_dict(row) for row in activities[:100]], "source_ids": source_ids, "interpretation": {"no_meaningful_change": "The monitor ran successfully and recorded no relevant change.", "content_changed": "Acquisition detected changed content whose semantic relevance has not been evaluated yet.", "failed_acquisition": "A source acquisition failed before evidence processing.", "failed_processing": "The monitor recorded an operational processing error."}}
         finally:
             conn.close()
 
-    def coverage(self) -> dict[str, Any]:
+    def monitor_health(self) -> dict[str, Any]:
         conn = storage.connect(self.db_path)
         try:
-            monitor_ids = [row[0] for row in conn.execute("SELECT id FROM monitors ORDER BY id")]
+            monitor_ids = [row[0] for row in conn.execute("SELECT id FROM monitors ORDER BY id LIMIT 200")]
         finally:
             conn.close()
         items = [self.monitor(identifier) for identifier in monitor_ids]
-        return {"items": items, "total": len(items)}
+        return {"items": items, "total": len(items), "bounded": True, "limit": 200}
+
+    def metrics(self) -> dict[str, Any]:
+        """Return read-only quality metrics derived from durable event history."""
+        conn = storage.connect(self.db_path)
+        try:
+            automatic_assignments = int(conn.execute(
+                "SELECT COUNT(*) FROM claim_story_assignment_history WHERE origin = 'automatic'"
+            ).fetchone()[0])
+            human_corrections = int(conn.execute(
+                "SELECT COUNT(*) FROM claim_story_assignment_history WHERE origin = 'human' AND correction_id IS NOT NULL"
+            ).fetchone()[0])
+            alert_total = int(conn.execute("SELECT COUNT(*) FROM alerts").fetchone()[0])
+            acknowledged_alerts = int(conn.execute(
+                "SELECT COUNT(*) FROM alerts WHERE status = 'acknowledged'"
+            ).fetchone()[0])
+            terminal_attempts = int(conn.execute(
+                "SELECT COUNT(*) FROM research_question_attempts WHERE status IN ('succeeded', 'partial', 'failed', 'cancelled')"
+            ).fetchone()[0])
+            successful_attempts = int(conn.execute(
+                "SELECT COUNT(*) FROM research_question_attempts WHERE status IN ('succeeded', 'partial')"
+            ).fetchone()[0])
+            attention_actions = int(conn.execute("SELECT COUNT(*) FROM attention_decisions").fetchone()[0])
+            decision_counts = {
+                row[0]: int(row[1])
+                for row in conn.execute(
+                    "SELECT reason_code, COUNT(*) FROM attention_decisions GROUP BY reason_code ORDER BY reason_code"
+                )
+            }
+            dismissals = {
+                row[0]: int(row[1])
+                for row in conn.execute(
+                    "SELECT reason_code, COUNT(*) FROM attention_decisions WHERE action = 'not_useful' GROUP BY reason_code ORDER BY reason_code"
+                )
+            }
+            return {
+                "story_assignment_corrections": {
+                    "automatic_assignments": automatic_assignments,
+                    "human_corrections": human_corrections,
+                    "correction_rate": round(human_corrections / automatic_assignments, 4) if automatic_assignments else 0.0,
+                },
+                "alert_acknowledgement": {
+                    "total": alert_total,
+                    "acknowledged": acknowledged_alerts,
+                    "rate": round(acknowledged_alerts / alert_total, 4) if alert_total else 0.0,
+                    "acknowledgement_rate": round(acknowledged_alerts / alert_total, 4) if alert_total else 0.0,
+                },
+                "research_attempt_yield": {
+                    "terminal_attempts": terminal_attempts,
+                    "successful_attempts": successful_attempts,
+                    "yield": round(successful_attempts / terminal_attempts, 4) if terminal_attempts else 0.0,
+                },
+                "attention": {
+                    "action_count": attention_actions,
+                    "decision_count_by_reason_code": decision_counts,
+                    "dismissal_by_reason_code": dismissals,
+                    "dismissal_rate_by_reason_code": {
+                        reason: round(dismissals.get(reason, 0) / count, 4) if count else 0.0
+                        for reason, count in decision_counts.items()
+                    },
+                },
+            }
+        finally:
+            conn.close()
 
     def health(self) -> dict[str, Any]:
         conn = storage.connect(self.db_path)
@@ -940,7 +1003,7 @@ class DiagnosticsService:
                 "sources": conn.execute("SELECT COUNT(*) FROM sources WHERE deleted_at IS NULL").fetchone()[0],
                 "documents": conn.execute("SELECT COUNT(*) FROM documents").fetchone()[0],
                 "stories": conn.execute("SELECT COUNT(*) FROM stories WHERE deleted_at IS NULL").fetchone()[0],
-                "failed_acquisitions": conn.execute("SELECT COUNT(*) FROM acquisition_events WHERE outcome IN ('failed', 'error', 'blocked', 'timeout')").fetchone()[0],
+                "failed_acquisitions": conn.execute("SELECT COUNT(*) FROM acquisition_events WHERE outcome IN ('failed', 'blocked')").fetchone()[0],
                 "failed_processing": conn.execute("SELECT COUNT(*) FROM monitor_activity WHERE outcome = 'error'").fetchone()[0],
                 "failed_jobs": conn.execute("SELECT COUNT(*) FROM jobs WHERE status = 'failed'").fetchone()[0],
                 "no_meaningful_change": conn.execute("SELECT COUNT(*) FROM monitor_activity WHERE outcome = 'no_change'").fetchone()[0],

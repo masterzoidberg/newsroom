@@ -12,6 +12,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from . import storage
 from .domain import DomainConflict, DomainNotFound, DomainValidation, new_id, utc_now
 from .evidence import ACCEPTED_STATES, claim_set_hash
+from .source_robustness import SourceRobustnessService
 
 
 REPORT_TARGET_TYPES = frozenset({"monitor", "story", "topic", "subject", "source", "research_question"})
@@ -38,10 +39,6 @@ def _decode(value: str | None, default: Any) -> Any:
         return json.loads(value)
     except (TypeError, json.JSONDecodeError):
         return default
-
-
-def _table_exists(conn: sqlite3.Connection, table: str) -> bool:
-    return conn.execute("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?", (table,)).fetchone() is not None
 
 
 def _encode(value: Any) -> str:
@@ -336,7 +333,6 @@ class LivingReportService:
         conn: sqlite3.Connection,
         story_ids: list[str],
         claims: list[sqlite3.Row],
-        coverage_target_id: str | None = None,
     ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
         claim_ids = [claim["id"] for claim in claims]
         claim_id_set = set(claim_ids)
@@ -365,24 +361,15 @@ class LivingReportService:
         strength = []
         contradictions = []
         evidence_by_claim: dict[str, list[sqlite3.Row]] = {}
+        dependency_service = SourceRobustnessService(self.db_path)
         for claim in claims:
             evidence = self._claim_evidence(conn, claim["id"])
             evidence_by_claim[claim["id"]] = evidence
             support = [item for item in evidence if item["relationship"] == "supports"]
             conflict = [item for item in evidence if item["relationship"] == "contradicts"]
             source_ids = _unique([item["source_id"] for item in support])
-            family_count = conn.execute(
-                """
-                SELECT COUNT(DISTINCT efm.family_id)
-                FROM claim_evidence ce
-                JOIN evidence_spans es ON es.id = ce.evidence_span_id
-                JOIN document_versions dv ON dv.id = es.document_version_id
-                JOIN evidence_family_members efm ON efm.document_id = dv.document_id
-                WHERE ce.claim_id = ? AND ce.relationship = 'supports'
-                """,
-                (claim["id"],),
-            ).fetchone()[0] if _table_exists(conn, "evidence_family_members") else 0
-            strength.append({"story_id": claim["story_id"], "claim_id": claim["id"], "supporting_evidence_count": len(support), "contradicting_evidence_count": len(conflict), "distinct_source_count": len(source_ids), "evidence_family_count": family_count, "state": claim["state"]})
+            dependency = dependency_service.evidence_summary("claim", claim["id"])
+            strength.append({"story_id": claim["story_id"], "claim_id": claim["id"], "supporting_evidence_count": len(support), "contradicting_evidence_count": len(conflict), "distinct_source_count": len(source_ids), "dependency_group_count": dependency["dependency_group_count"], "largest_group_share": dependency["largest_group_share"], "state": claim["state"]})
             if claim["state"] == "disputed" or conflict:
                 contradictions.append({"claim_id": claim["id"], "proposition": claim["proposition"], "evidence_span_ids": [item["evidence_span_id"] for item in conflict]})
         question_params: list[Any] = []
@@ -399,15 +386,6 @@ class LivingReportService:
         suggestions = []
         if question_clauses:
             suggestions = [dict(item) for item in conn.execute(f"SELECT rgs.id, rgs.suggestion, rgs.rationale, rgs.expected_information_value, rgs.suggestion_type, rgs.origin_type, rgs.origin_id FROM research_gap_suggestions rgs WHERE rgs.status = 'pending' AND ({' OR '.join('(' + clause.replace('rq.', 'rgs.') + ')' for clause in question_clauses)}) ORDER BY rgs.expected_information_value DESC, rgs.created_at, rgs.id LIMIT 100", question_params).fetchall()]
-        coverage_gaps = []
-        if _table_exists(conn, "coverage_runs"):
-            coverage_targets = story_ids or ([coverage_target_id] if coverage_target_id else [])
-            if coverage_targets:
-                placeholders = ",".join("?" for _ in coverage_targets)
-                coverage_gaps = [dict(item) for item in conn.execute(
-                    f"SELECT id, target_type, target_id, status, window_start, window_end FROM coverage_runs WHERE target_id IN ({placeholders}) AND status <> 'completed' ORDER BY created_at DESC, id DESC LIMIT 10",
-                    coverage_targets,
-                ).fetchall()]
         sections = {
             "current_status": f"{len(active_stories)} active Story record(s) with {len(claim_ids)} accepted Claim(s).",
             "what_changed": [],
@@ -416,7 +394,6 @@ class LivingReportService:
             "contradictions": contradictions,
             "unresolved_questions": unresolved,
             "recommended_investigations": suggestions,
-            "coverage_gaps": coverage_gaps,
         }
         return sections, [{"text": claim["proposition"], "claim_ids": [claim["id"]]} for claim in claims if claim["id"] in claim_id_set]
 
@@ -494,9 +471,7 @@ class LivingReportService:
             raise DomainConflict("archived living reports cannot be generated")
         story_ids = self._story_ids(conn, report)
         claims = self._accepted_claims(conn, story_ids)
-        sections, propositions = self._collect_sections(
-            conn, story_ids, claims, report["target_id"]
-        )
+        sections, propositions = self._collect_sections(conn, story_ids, claims)
         current_claim_ids = [claim["id"] for claim in claims]
         current_hash = claim_set_hash(current_claim_ids)
         input_identity = _report_input_identity(sections, propositions)
@@ -1041,14 +1016,22 @@ class AlertService:
         finally:
             conn.close()
 
-    def list_alerts(self, *, status: str | None = None, page: int = 1, page_size: int = 25) -> dict[str, Any]:
+    def list_alerts(self, *, status: str | None = None, min_importance: float | None = None, page: int = 1, page_size: int = 25) -> dict[str, Any]:
         if status is not None and status not in ALERT_STATUSES:
             raise DomainValidation("invalid alert status")
         if page < 1 or page_size < 1 or page_size > 100:
             raise DomainValidation("invalid alert page")
         conn = storage.connect(self.db_path)
         try:
-            clause, params = ("status = ?", [status]) if status else ("1 = 1", [])
+            clauses: list[str] = []
+            params: list[Any] = []
+            if status:
+                clauses.append("status = ?")
+                params.append(status)
+            if min_importance is not None:
+                clauses.append("importance_score >= ?")
+                params.append(min_importance)
+            clause = " AND ".join(clauses) or "1 = 1"
             total = conn.execute(f"SELECT COUNT(*) FROM alerts WHERE {clause}", params).fetchone()[0]
             rows = conn.execute(f"SELECT * FROM alerts WHERE {clause} ORDER BY created_at DESC, id DESC LIMIT ? OFFSET ?", [*params, page_size, (page - 1) * page_size]).fetchall()
             return {"items": [self._alert_result(conn, row) for row in rows], "page": page, "page_size": page_size, "total": total}

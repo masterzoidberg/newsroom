@@ -33,5 +33,5 @@ def test_frontend_production_build_contains_pwa_shell_and_product_surfaces():
         (FRONTEND / "src" / name).read_text(encoding="utf-8")
         for name in ("App.tsx", "components/AppShell.tsx")
     )
-    for label in ("Inbox", "Story & evidence", "Documents", "Monitors", "Alerts", "Settings"):
+    for label in ("Home", "Stories", "Documents", "Watches", "Alerts", "Settings"):
         assert label in app_source

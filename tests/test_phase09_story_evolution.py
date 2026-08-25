@@ -194,13 +194,13 @@ def test_evolution_records_lineage_independent_corroboration_and_review_attentio
         candidate={"event_key": "acme-release", "entities": ["Acme"], "locations": []},
     )
     assert evolution.corroboration(story["id"])["publication_count"] == 2
-    assert evolution.corroboration(story["id"])["independent_source_count"] == 2
+    assert evolution.corroboration(story["id"])["dependency_group_count"] == 2
     assert evolution.corroboration(story["id"])["lineage_group_count"] == 2
 
     evolution.link_lineage(
         second_doc["id"], first_doc["id"], "syndicated_from", rationale="wire copy"
     )
-    assert evolution.corroboration(story["id"])["independent_source_count"] == 1
+    assert evolution.corroboration(story["id"])["dependency_group_count"] == 1
 
     review = evolution.review(story["id"], "saved", story["current_revision"]["id"])
     assert review["review_status"] == "saved"

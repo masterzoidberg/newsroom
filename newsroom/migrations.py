@@ -3458,6 +3458,218 @@ MIGRATION_0032_CHECKSUM = hashlib.sha256(
 ).hexdigest()
 
 
+# 0033: remove untrustworthy Phase 28 projections. Coverage, blind spots,
+# persisted dependency families, fragility analyses, and the insert-only
+# Attention queue were never canonical state. Human decisions are copied into
+# narrow append-only history before those runtime projections are removed.
+MIGRATION_0033_STATEMENTS: tuple[str, ...] = (
+    """
+    CREATE TABLE blind_spot_review_history (
+        id TEXT PRIMARY KEY,
+        source_id TEXT NOT NULL,
+        target_type TEXT NOT NULL,
+        target_id TEXT NOT NULL,
+        source_class TEXT NOT NULL,
+        coverage_run_id TEXT,
+        priority REAL NOT NULL,
+        review_status TEXT NOT NULL,
+        reviewer TEXT,
+        reviewed_at TEXT,
+        reason TEXT NOT NULL DEFAULT '',
+        original_created_at TEXT NOT NULL,
+        preserved_at TEXT NOT NULL
+    )
+    """,
+    """
+    INSERT INTO blind_spot_review_history
+        (id, source_id, target_type, target_id, source_class, coverage_run_id,
+         priority, review_status, reviewer, reviewed_at, reason,
+         original_created_at, preserved_at)
+    SELECT 'blind-spot-history:' || id, id, target_type, target_id, source_class,
+           coverage_run_id, priority, status, reviewed_by, reviewed_at, reason,
+           created_at, created_at
+    FROM blind_spot_suggestions
+    WHERE reviewed_at IS NOT NULL
+       OR reviewed_by IS NOT NULL
+       OR status <> 'pending'
+    """,
+    """
+    CREATE TRIGGER blind_spot_review_history_immutable_update
+    BEFORE UPDATE ON blind_spot_review_history
+    BEGIN
+        SELECT RAISE(ABORT, 'blind spot review history is append-only');
+    END
+    """,
+    """
+    CREATE TRIGGER blind_spot_review_history_immutable_delete
+    BEFORE DELETE ON blind_spot_review_history
+    BEGIN
+        SELECT RAISE(ABORT, 'blind spot review history is append-only');
+    END
+    """,
+    "DROP TABLE IF EXISTS evidence_fragility_analyses",
+    "DROP TABLE IF EXISTS evidence_family_members",
+    "DROP TABLE IF EXISTS evidence_families",
+    "DROP TABLE IF EXISTS coverage_summaries",
+    "DROP TABLE IF EXISTS coverage_items",
+    "DROP TABLE IF EXISTS coverage_runs",
+    """
+    CREATE TABLE attention_decisions (
+        id TEXT PRIMARY KEY,
+        object_type TEXT NOT NULL,
+        object_id TEXT NOT NULL,
+        reason_code TEXT NOT NULL,
+        basis_fingerprint TEXT NOT NULL,
+        action TEXT NOT NULL CHECK (action IN ('seen', 'snoozed', 'not_useful', 'legacy')),
+        actor TEXT,
+        created_at TEXT NOT NULL,
+        snoozed_until TEXT,
+        legacy_action TEXT,
+        note TEXT
+    )
+    """,
+    """
+    CREATE INDEX attention_decisions_identity_idx
+    ON attention_decisions(object_type, object_id, reason_code, basis_fingerprint, created_at DESC, id DESC)
+    """,
+    """
+    INSERT INTO attention_decisions
+        (id, object_type, object_id, reason_code, basis_fingerprint, action,
+         actor, created_at, legacy_action, note)
+    SELECT 'legacy-attention:' || f.id, i.object_type, i.object_id,
+           i.reason_code, i.source_fingerprint,
+           CASE WHEN f.feedback = 'not_important' THEN 'not_useful' ELSE 'legacy' END,
+           f.actor, f.created_at,
+           CASE WHEN f.feedback = 'not_important' THEN NULL ELSE f.feedback END,
+           CASE WHEN f.feedback = 'not_important' THEN NULL
+                ELSE 'Preserved legacy Attention feedback: ' || f.feedback ||
+                     '; no exact current action was assumed.' END
+    FROM attention_feedback f
+    JOIN attention_items i ON i.id = f.attention_id
+    """,
+    "DROP TABLE IF EXISTS attention_feedback",
+    "DROP TABLE IF EXISTS attention_items",
+    "DROP TABLE IF EXISTS blind_spot_suggestions",
+)
+
+MIGRATION_0033_CHECKSUM = hashlib.sha256(
+    "\n".join(MIGRATION_0033_STATEMENTS).encode("utf-8")
+).hexdigest()
+
+
+# 0034: one Research Gap authority.  Hypotheses can originate a canonical
+# discriminating gap, but Research Tasks remain the only executor.
+MIGRATION_0034_STATEMENTS: tuple[str, ...] = (
+    "DROP INDEX IF EXISTS research_question_gaps_question_idx",
+    "DROP TABLE IF EXISTS research_question_gaps_new_0034",
+    """
+    CREATE TABLE research_question_gaps_new_0034 (
+        id TEXT PRIMARY KEY,
+        question_id TEXT NOT NULL REFERENCES research_questions(id) ON DELETE CASCADE,
+        gap_key TEXT NOT NULL,
+        gap_type TEXT NOT NULL CHECK (gap_type IN ('supporting_evidence','contradiction_review','independent_support','dependency_group_support','primary_source','discriminating')),
+        description TEXT NOT NULL,
+        rationale TEXT NOT NULL DEFAULT '',
+        condition_json TEXT NOT NULL DEFAULT '{}',
+        status TEXT NOT NULL DEFAULT 'open' CHECK (status IN ('open','pursuing','satisfied','dismissed','blocked')),
+        origin TEXT NOT NULL CHECK (origin IN ('automatic','manual')),
+        origin_hypothesis_id TEXT REFERENCES hypotheses(id) ON DELETE SET NULL,
+        assessment_hash TEXT,
+        first_seen_at TEXT NOT NULL,
+        last_evaluated_at TEXT NOT NULL,
+        satisfied_at TEXT,
+        dismissed_at TEXT,
+        dismissed_by TEXT,
+        dismissal_reason TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        UNIQUE(question_id, gap_key)
+    )
+    """,
+    """
+    INSERT INTO research_question_gaps_new_0034
+        (id, question_id, gap_key, gap_type, description, rationale,
+         condition_json, status, origin, origin_hypothesis_id, assessment_hash,
+         first_seen_at, last_evaluated_at, satisfied_at, dismissed_at,
+         dismissed_by, dismissal_reason, created_at, updated_at)
+    SELECT id, question_id, gap_key, gap_type, description, rationale,
+           condition_json, status, origin, NULL, assessment_hash,
+           first_seen_at, last_evaluated_at, satisfied_at, dismissed_at,
+           dismissed_by, dismissal_reason, created_at, updated_at
+    FROM research_question_gaps
+    """,
+    """
+    INSERT INTO research_question_gaps_new_0034
+        (id, question_id, gap_key, gap_type, description, rationale,
+         condition_json, status, origin, origin_hypothesis_id, assessment_hash,
+         first_seen_at, last_evaluated_at, satisfied_at, dismissed_at,
+         dismissed_by, dismissal_reason, created_at, updated_at)
+    SELECT 'hypothesis-gap:' || hg.id, h.question_id, 'hypothesis:' || hg.id,
+           'discriminating', hg.description,
+           'Migrated from the retired Hypothesis Gap record.', '{}',
+           CASE hg.status WHEN 'used' THEN 'satisfied' WHEN 'dismissed' THEN 'dismissed' ELSE 'open' END,
+           'manual', hg.hypothesis_id, NULL, hg.created_at, hg.updated_at,
+           CASE WHEN hg.status = 'used' THEN hg.updated_at ELSE NULL END,
+           CASE WHEN hg.status = 'dismissed' THEN hg.updated_at ELSE NULL END,
+           NULL, CASE WHEN hg.status = 'dismissed' THEN 'Migrated Hypothesis Gap dismissal' ELSE NULL END,
+           hg.created_at, hg.updated_at
+    FROM hypothesis_gaps hg
+    JOIN hypotheses h ON h.id = hg.hypothesis_id
+    """,
+    "DROP TABLE research_question_gaps",
+    "ALTER TABLE research_question_gaps_new_0034 RENAME TO research_question_gaps",
+    "CREATE INDEX research_question_gaps_question_idx ON research_question_gaps(question_id, status, updated_at, id)",
+    "DROP TABLE IF EXISTS hypothesis_gaps",
+)
+
+MIGRATION_0034_CHECKSUM = hashlib.sha256(
+    "\n".join(MIGRATION_0034_STATEMENTS).encode("utf-8")
+).hexdigest()
+
+
+# 0035: forward compatibility for schema-34 development databases. The
+# unaccepted Phase 28.5 migrations now create the richer Attention history
+# shape, while this migration adds the fields to already-created schema-34
+# databases without pretending their discarded legacy rows can be recovered.
+MIGRATION_0035_STATEMENTS: tuple[str, ...] = (
+    """
+    CREATE TABLE IF NOT EXISTS blind_spot_review_history (
+        id TEXT PRIMARY KEY,
+        source_id TEXT NOT NULL,
+        target_type TEXT NOT NULL,
+        target_id TEXT NOT NULL,
+        source_class TEXT NOT NULL,
+        coverage_run_id TEXT,
+        priority REAL NOT NULL,
+        review_status TEXT NOT NULL,
+        reviewer TEXT,
+        reviewed_at TEXT,
+        reason TEXT NOT NULL DEFAULT '',
+        original_created_at TEXT NOT NULL,
+        preserved_at TEXT NOT NULL
+    )
+    """,
+    """
+    CREATE TRIGGER IF NOT EXISTS blind_spot_review_history_immutable_update
+    BEFORE UPDATE ON blind_spot_review_history
+    BEGIN
+        SELECT RAISE(ABORT, 'blind spot review history is append-only');
+    END
+    """,
+    """
+    CREATE TRIGGER IF NOT EXISTS blind_spot_review_history_immutable_delete
+    BEFORE DELETE ON blind_spot_review_history
+    BEGIN
+        SELECT RAISE(ABORT, 'blind spot review history is append-only');
+    END
+    """,
+)
+
+MIGRATION_0035_CHECKSUM = hashlib.sha256(
+    "\n".join(MIGRATION_0035_STATEMENTS).encode("utf-8")
+).hexdigest()
+
+
 @dataclass(frozen=True)
 class MigrationResult:
     applied_versions: tuple[int, ...]
@@ -3537,12 +3749,29 @@ def apply_migrations(db_path: Optional[str | Path] = None) -> MigrationResult:
                 30: MIGRATION_0030_STATEMENTS,
                 31: MIGRATION_0031_STATEMENTS,
                 32: MIGRATION_0032_STATEMENTS,
+                33: MIGRATION_0033_STATEMENTS,
+                34: MIGRATION_0034_STATEMENTS,
+                35: MIGRATION_0035_STATEMENTS,
             }
             for version, statements in migrations.items():
                 if version in existing:
                     continue
                 for statement in statements:
                     conn.execute(statement)
+                if version == 35:
+                    columns = {
+                        row[1]
+                        for row in conn.execute("PRAGMA table_info('attention_decisions')")
+                    }
+                    for name, definition in (
+                        ("snoozed_until", "TEXT"),
+                        ("legacy_action", "TEXT"),
+                        ("note", "TEXT"),
+                    ):
+                        if name not in columns:
+                            conn.execute(
+                                f"ALTER TABLE attention_decisions ADD COLUMN {name} {definition}"
+                            )
                 now = utc_now()
                 conn.execute(
                     "INSERT INTO schema_migrations(version, applied_at) VALUES (?, ?)",

@@ -16,6 +16,7 @@ from newsroom.operations import (
     ExportLimitExceeded,
     backup_database,
     export_logical,
+    import_logical,
     purge_expired_sessions,
     restore_database,
     retain_backups,
@@ -56,7 +57,7 @@ def test_backup_restore_upgrade_and_integrity_rehearsal_are_verified(tmp_db, tmp
 
     upgraded = upgrade_database(tmp_db)
     assert upgraded["verified"] is True
-    assert migration_status(tmp_db) == tuple(range(1, 33))
+    assert migration_status(tmp_db) == tuple(range(1, 36))
 
 
 def test_logical_export_is_streamed_and_excludes_secrets_prompts_and_note_bodies(tmp_db, tmp_path):
@@ -97,6 +98,29 @@ def test_logical_export_is_streamed_and_excludes_secrets_prompts_and_note_bodies
 
     with pytest.raises(ExportLimitExceeded):
         export_logical(tmp_db, tmp_path / "too-small.jsonl", max_rows=1)
+
+
+def test_logical_import_preserves_attention_decisions_and_rechecks_authority(tmp_db, tmp_path):
+    apply_migrations(tmp_db)
+    conn = storage.connect(tmp_db)
+    try:
+        conn.execute(
+            "INSERT INTO attention_decisions(id, object_type, object_id, reason_code, basis_fingerprint, action, actor, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            ("attention-export", "alert", "alert-export", "correction", "basis-v1", "not_useful", "tester", "2026-08-25T00:00:00Z"),
+        )
+    finally:
+        conn.close()
+    export_path = export_logical(tmp_db, tmp_path / "attention.jsonl")
+    destination = tmp_path / "imported.db"
+    result = import_logical(export_path, destination)
+    assert result["verified"] is True
+    conn = storage.connect(destination)
+    try:
+        row = conn.execute("SELECT action, actor FROM attention_decisions WHERE id = 'attention-export'").fetchone()
+        assert tuple(row) == ("not_useful", "tester")
+        assert list(conn.execute("PRAGMA foreign_key_check")) == []
+    finally:
+        conn.close()
 
 
 def test_backup_retention_keeps_newest_files_and_session_purge_is_bounded(tmp_db, tmp_path):

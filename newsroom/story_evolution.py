@@ -781,15 +781,12 @@ class StoryEvolutionService:
             group_sources: dict[str, set[str]] = {}
             for row in rows:
                 group_sources.setdefault(self._lineage_group(conn, row["document_id"]), set()).add(row["source_id"])
-            independent_keys = {
-                group if len(source_ids) > 1 else next(iter(source_ids))
-                for group, source_ids in group_sources.items()
-            }
             result = {
                 "publication_count": len(document_ids),
-                "independent_source_count": len(independent_keys),
                 "distinct_source_count": len({row["source_id"] for row in rows}),
                 "lineage_group_count": len(groups),
+                "dependency_group_count": len(groups),
+                "dependency_groups": [{"id": group, "document_ids": sorted({row["document_id"] for row in rows if self._lineage_group(conn, row["document_id"]) == group})} for group in sorted(groups)],
                 "document_ids": document_ids,
             }
         finally:
@@ -800,13 +797,12 @@ class StoryEvolutionService:
             "claim" if claim_id is not None else "story",
             claim_id or story_id,
         )
-        result["distinct_source_count"] = robustness["distinct_source_count"] or result["distinct_source_count"]
-        result["lineage_group_count"] = robustness["lineage_group_count"] or result["lineage_group_count"]
-        result["evidence_family_count"] = robustness["evidence_family_count"]
-        result["fragility"] = SourceRobustnessService(self.db_path).analyze_fragility(
-            "claim" if claim_id is not None else "story",
-            claim_id or story_id,
-        )
+        if robustness["claim_ids"]:
+            result["distinct_source_count"] = robustness["distinct_source_count"] or result["distinct_source_count"]
+            result["lineage_group_count"] = robustness["lineage_group_count"] or result["lineage_group_count"]
+            result["dependency_group_count"] = robustness["dependency_group_count"]
+            result["dependency_groups"] = robustness["dependency_groups"]
+            result["largest_group_share"] = robustness["largest_group_share"]
         return result
 
     def _new_update(self, conn: sqlite3.Connection, story_id: str) -> bool:
