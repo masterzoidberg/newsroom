@@ -11,6 +11,7 @@ import hashlib
 import re
 import sqlite3
 import time
+from collections import defaultdict
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Mapping
@@ -31,7 +32,7 @@ ATTEMPT_STATUSES = frozenset({"planned", "running", "succeeded", "partial", "fai
 TERMINAL_RQ_ATTEMPT_STATUSES = frozenset({"succeeded", "partial", "failed", "cancelled"})
 SUGGESTION_TYPES = frozenset({"question", "search", "source"})
 SUGGESTION_STATUSES = frozenset({"pending", "accepted", "rejected", "converted"})
-GAP_TYPES = frozenset({"supporting_evidence", "contradiction_review", "independent_support", "primary_source"})
+GAP_TYPES = frozenset({"supporting_evidence", "contradiction_review", "dependency_group_support", "independent_support", "primary_source", "discriminating"})
 GAP_STATUSES = frozenset({"open", "pursuing", "satisfied", "dismissed", "blocked"})
 RESEARCH_TASK_STATUSES = frozenset({
     "planned", "running", "completed_with_evidence", "completed_with_candidates",
@@ -550,6 +551,7 @@ class ResearchQuestionService:
         contextual_claim_ids: list[str] = []
         qualifying_evidence_ids: set[str] = set()
         source_ids: set[str] = set()
+        support_document_ids: set[str] = set()
         primary_source_ids: set[str] = set()
         for link in conn.execute(
             "SELECT l.*, c.state FROM research_question_claims AS l JOIN claims AS c ON c.id = l.claim_id WHERE l.question_id = ? ORDER BY l.created_at, l.claim_id, l.relationship",
@@ -559,7 +561,7 @@ class ResearchQuestionService:
                 continue
             evidence = conn.execute(
                 """
-                SELECT ce.evidence_span_id, d.source_id, s.default_quality, s.source_kind
+                SELECT ce.evidence_span_id, dv.document_id, d.source_id, s.default_quality, s.source_kind
                 FROM claim_evidence AS ce
                 JOIN evidence_spans AS es ON es.id = ce.evidence_span_id
                 JOIN document_versions AS dv ON dv.id = es.document_version_id
@@ -573,6 +575,7 @@ class ResearchQuestionService:
             for evidence_row in evidence:
                 qualifying_evidence_ids.add(evidence_row["evidence_span_id"])
                 source_ids.add(evidence_row["source_id"])
+                support_document_ids.add(evidence_row["document_id"])
                 if evidence_row["default_quality"] == "primary" or evidence_row["source_kind"] == "official":
                     primary_source_ids.add(evidence_row["source_id"])
             qualified = bool(evidence) and link["state"] in {"supported", "partially_supported", "disputed"}
@@ -590,7 +593,7 @@ class ResearchQuestionService:
         ):
             evidence_row = conn.execute(
                 """
-                SELECT es.id, d.source_id, s.default_quality, s.source_kind
+                SELECT es.id, dv.document_id, d.source_id, s.default_quality, s.source_kind
                 FROM evidence_spans AS es
                 JOIN document_versions AS dv ON dv.id = es.document_version_id
                 JOIN documents AS d ON d.id = dv.document_id
@@ -603,6 +606,7 @@ class ResearchQuestionService:
                 continue
             qualifying_evidence_ids.add(evidence_row["id"])
             source_ids.add(evidence_row["source_id"])
+            support_document_ids.add(evidence_row["document_id"])
             if evidence_row["default_quality"] == "primary" or evidence_row["source_kind"] == "official":
                 primary_source_ids.add(evidence_row["source_id"])
             relationship = "supports" if link["relationship"] == "resolves" else link["relationship"]
@@ -613,7 +617,12 @@ class ResearchQuestionService:
 
         criteria = _decode(question["criteria_json"])
         min_support = max(1, int(criteria.get("min_supporting_claims", 1) or 1))
-        min_independent = max(0, int(criteria.get("min_independent_sources", 0) or 0))
+        min_dependency_groups = max(0, int(criteria.get("min_dependency_groups", criteria.get("min_independent_sources", 0)) or 0))
+        dependency_group_ids: set[str] = set()
+        if support_document_ids:
+            from .source_robustness import SourceRobustnessService
+
+            dependency_group_ids = {SourceRobustnessService._lineage_group_tx(conn, identifier) for identifier in sorted(support_document_ids)}
         require_primary = bool(criteria.get("require_primary_source", False))
         support_count = len(set(supporting_claim_ids))
         contradiction_count = len(set(contradicting_claim_ids))
@@ -645,13 +654,13 @@ class ResearchQuestionService:
                 "Canonical evidence currently points against the Question without qualifying support.",
                 {"minimum_supporting_claims": min_support}, False,
             ))
-        if min_independent:
-            independent_qualifies = len(source_ids) >= min_independent
+        if min_dependency_groups:
+            dependency_groups_qualify = len(dependency_group_ids) >= min_dependency_groups
             desired.append((
-                f"independent_support:{min_independent}", "independent_support",
-                f"Support from at least {min_independent} independent Source(s)",
-                "The configured independent-source threshold has not been met.",
-                {"minimum": min_independent}, independent_qualifies,
+                f"dependency_group_support:{min_dependency_groups}", "dependency_group_support",
+                f"Support across at least {min_dependency_groups} known dependency group(s)",
+                "The configured dependency-group threshold has not been met.",
+                {"minimum": min_dependency_groups}, dependency_groups_qualify,
             ))
         if require_primary:
             desired.append((
@@ -1135,7 +1144,7 @@ class ResearchQuestionService:
 
     @staticmethod
     def _lineage_groups(conn: sqlite3.Connection, document_ids: list[str]) -> int:
-        """Count independent document/source groups without trusting publication count."""
+        """Count current document dependency groups without trusting publication count."""
         if not document_ids:
             return 0
         nodes = set(document_ids)
@@ -1193,9 +1202,9 @@ class ResearchQuestionService:
             gaps.append(("missing_support", {"supporting_evidence_count": 0}))
         if supporting:
             document_ids = list(dict.fromkeys(row["document_id"] for row in supporting))
-            independent = self._lineage_groups(conn, document_ids)
-            if independent < 2:
-                gaps.append(("weak_independence", {"independent_group_count": independent, "document_ids": document_ids}))
+            dependency_groups = self._lineage_groups(conn, document_ids)
+            if dependency_groups < 2:
+                gaps.append(("weak_independence", {"dependency_group_count": dependency_groups, "document_ids": document_ids}))
         primary = [
             row for row in supporting
             if row["default_quality"] == "primary" or row["source_kind"] == "official"
@@ -1211,7 +1220,7 @@ class ResearchQuestionService:
             "unsubstantiated_claim": "the unsubstantiated claim",
             "missing_support": "the claim",
             "contradiction": "the conflicting reports",
-            "weak_independence": "the claim's independent corroboration",
+            "weak_independence": "the claim's known dependency-group diversity",
             "missing_primary_source": "a primary or official source",
             "missing_claims": "the story's important claims",
         }
@@ -1229,8 +1238,8 @@ class ResearchQuestionService:
         if suggestion_type == "question":
             return f"What evidence would resolve {subject}: {proposition}?", rationale, value
         if suggestion_type == "search":
-            return f'Find independent evidence for "{proposition}" and check official or primary sources.', rationale, value - 0.05
-        return f"Candidate source search: identify an independent primary or official source about {proposition}.", rationale, value - 0.1
+            return f'Find evidence from a new known dependency group for "{proposition}" and check official or primary sources.', rationale, value - 0.05
+        return f"Candidate source search: identify a primary or official source from a new known dependency group about {proposition}.", rationale, value - 0.1
 
     def _persist_gap_suggestions(
         self,
@@ -1358,6 +1367,7 @@ class ResearchQuestionService:
         gap_id: str | None = None,
         limits: Mapping[str, Any] | None = None,
         allow_active_replay: bool = False,
+        retry_reason: str | None = None,
     ) -> dict[str, Any]:
         """Create one bounded Research Task and enqueue its existing Job type."""
         if mode not in ATTEMPT_MODES:
@@ -1493,6 +1503,7 @@ class ResearchQuestionService:
                     "question": question_text,
                     "mode": mode,
                     "query": query,
+                    "retry_reason": str(retry_reason or ""),
                     "plan": plan,
                     "limits": task_limits,
                     "budget": {
@@ -1811,12 +1822,15 @@ class ResearchQuestionExecutionService:
         gap_type = str(plan.get("gap_type") or "")
         gap_terms = {
             "supporting_evidence": "evidence support",
-            "contradiction_review": "contradiction rebuttal",
-            "independent_support": "independent source",
+            "dependency_group_support": "known dependency group",
             "primary_source": "official primary source",
         }.get(gap_type)
         if gap_terms:
             raw.append((f"{question['question']} {gap_terms}", "gap"))
+        if gap_type == "contradiction_review":
+            contrary = self._safe_contrary_strategy(str(question["id"]))
+            if contrary["status"] == "attempted":
+                raw.append((str(contrary["query"]), "contrary_canonical_basis"))
         if self._router is not None and allow_provider:
             try:
                 from .ai import ResearchPlanRequest
@@ -1852,6 +1866,78 @@ class ResearchQuestionExecutionService:
             if len(output) >= limit:
                 break
         return output
+
+    def _safe_contrary_strategy(self, question_id: str) -> dict[str, Any]:
+        """Return a bounded contrary query only from an explicit canonical basis."""
+        conn = storage.connect(self.db_path)
+        try:
+            row = conn.execute(
+                """
+                SELECT c.id, c.proposition
+                FROM research_question_claims AS rqc
+                JOIN claims AS c ON c.id = rqc.claim_id
+                WHERE rqc.question_id = ? AND rqc.relationship = 'contradicts'
+                ORDER BY rqc.created_at, c.id
+                LIMIT 1
+                """,
+                (question_id,),
+            ).fetchone()
+        finally:
+            conn.close()
+        if row is None or not str(row[1] or "").strip():
+            return {"status": "unavailable", "reason": "no_safe_contrary_strategy_available"}
+        return {
+            "status": "attempted",
+            "query": str(row[1]).strip(),
+            "basis": {"type": "contradictory_claim", "claim_id": row[0]},
+        }
+
+    def _recent_query_hashes(self, task: Mapping[str, Any], *, cooldown_seconds: int) -> set[str]:
+        if cooldown_seconds <= 0:
+            return set()
+        cutoff = datetime.fromisoformat(utc_now().replace("Z", "+00:00")) - timedelta(seconds=cooldown_seconds)
+        scope_column = "gap_id" if str(task.get("gap_id") or "").strip() else "question_id"
+        scope_id = str(task.get(scope_column) or "")
+        if not scope_id:
+            return set()
+        conn = storage.connect(self.db_path)
+        try:
+            rows = conn.execute(
+                f"""
+                SELECT DISTINCT q.query_hash
+                FROM research_task_queries AS q
+                JOIN research_tasks AS t ON t.id = q.task_id
+                WHERE t.{scope_column} = ? AND q.created_at >= ?
+                """,
+                (scope_id, cutoff.isoformat().replace("+00:00", "Z")),
+            ).fetchall()
+            return {str(row[0]) for row in rows}
+        finally:
+            conn.close()
+
+    def _suppress_recent_queries(
+        self,
+        task: Mapping[str, Any],
+        question: Mapping[str, Any],
+        query_plan: list[tuple[str, str]],
+        *,
+        retry_reason: str = "",
+    ) -> tuple[list[tuple[str, str]], list[str]]:
+        if retry_reason.strip():
+            return query_plan, []
+        cooldown = int(question.get("pursuit_cooldown_seconds") or 0)
+        recent = self._recent_query_hashes(task, cooldown_seconds=cooldown)
+        if not recent:
+            return query_plan, []
+        executable: list[tuple[str, str]] = []
+        suppressed: list[str] = []
+        for query, strategy in query_plan:
+            digest = hashlib.sha256(query.encode("utf-8")).hexdigest()
+            if digest in recent:
+                suppressed.append(query)
+            else:
+                executable.append((query, strategy))
+        return executable, suppressed
 
     def _persist_query(self, task_id: str, query: str, strategy: str, ordinal: int) -> None:
         digest = hashlib.sha256(query.encode("utf-8")).hexdigest()
@@ -1907,7 +1993,7 @@ class ResearchQuestionExecutionService:
         for candidate, _strategy in query_plan:
             if deadline is not None and time.monotonic() >= deadline:
                 break
-            if len(findings) >= cap:
+            if len(findings) >= cap * 3:
                 break
             try:
                 result = search.search(candidate, entity_types=["claim", "evidence"], page_size=cap)
@@ -1917,9 +2003,39 @@ class ResearchQuestionExecutionService:
                 key = (item["entity_type"], item["entity_id"])
                 if key not in findings:
                     findings[key] = item
-                if len(findings) >= cap:
+                if len(findings) >= cap * 3:
                     break
-        return list(findings.values())
+        classes: dict[str, list[dict[str, Any]]] = defaultdict(list)
+        source_ids = {str(item.get("source_id")) for item in findings.values() if item.get("source_id")}
+        source_classes: dict[str, str] = {}
+        if source_ids:
+            conn = storage.connect(self.db_path)
+            try:
+                placeholders = ",".join("?" for _ in source_ids)
+                source_classes = {
+                    row["id"]: str(row["source_kind"] or "unknown")
+                    for row in conn.execute(
+                        f"SELECT id, source_kind FROM sources WHERE id IN ({placeholders})", sorted(source_ids)
+                    )
+                }
+            finally:
+                conn.close()
+        for item in findings.values():
+            source_id = str(item.get("source_id") or "")
+            classes[source_classes.get(source_id, "unknown")].append(item)
+        for items in classes.values():
+            items.sort(key=lambda item: (str(item.get("entity_type") or ""), str(item.get("entity_id") or "")))
+        selected: list[dict[str, Any]] = []
+        while len(selected) < cap and classes:
+            for source_class in sorted(tuple(classes)):
+                items = classes[source_class]
+                if items:
+                    selected.append(items.pop(0))
+                    if len(selected) >= cap:
+                        break
+                if not items:
+                    classes.pop(source_class, None)
+        return selected
 
     def _external_candidates(
         self,
@@ -1994,8 +2110,16 @@ class ResearchQuestionExecutionService:
             min(task_limits["max_queries"], 25),
             allow_provider=task_limits["max_provider_calls"] > 0,
         )
+        query_plan, duplicate_suppressed = self._suppress_recent_queries(
+            task,
+            question,
+            query_plan,
+            retry_reason=str(payload.get("retry_reason") or ""),
+        )
         for ordinal, (planned_query, strategy) in enumerate(query_plan):
             self._persist_query(task["id"], planned_query, strategy, ordinal)
+        for ordinal, planned_query in enumerate(duplicate_suppressed, start=len(query_plan)):
+            self._persist_query(task["id"], planned_query, "duplicate_suppressed", ordinal)
         findings = self._research(query_plan, cap=task_limits["max_candidates"], deadline=deadline)
         claims = [item for item in findings if item["entity_type"] == "claim"]
         evidence = [item for item in findings if item["entity_type"] == "evidence"]
@@ -2102,6 +2226,11 @@ class ResearchQuestionExecutionService:
             task_status = "completed_no_findings"
         status = "succeeded" if findings or discovery_count or external else "partial"
         note = f"pursuit linked {len(claims)} claims and {len(evidence)} evidence spans"
+        contrary_strategy = {"status": "not_applicable"}
+        if str(_decode(task.get("plan_json")).get("gap_type") or "") == "contradiction_review":
+            contrary_strategy = self._safe_contrary_strategy(question_id)
+        if duplicate_suppressed:
+            note = f"{note}; suppressed {len(duplicate_suppressed)} duplicate quer{'y' if len(duplicate_suppressed) == 1 else 'ies'}"
         return {
             "research_question_id": question_id,
             "attempt_id": attempt["id"],
@@ -2112,6 +2241,8 @@ class ResearchQuestionExecutionService:
             "evidence_count": len(evidence),
             "task_status": task_status,
             "search_query_count": len(query_plan),
+            "duplicate_suppressed_queries": duplicate_suppressed,
+            "contrary_strategy": contrary_strategy,
             "source_candidate_count": discovery_count + len(external),
             "documents_acquired": acquired_documents,
             "acquisition_results": acquisition_results[:task_limits["max_documents"]],
@@ -2372,6 +2503,7 @@ def research_job_rerun_factory(db_path: str | Path, job: Mapping[str, Any]) -> M
         estimated_cost_usd=budget.get("usd", 0.0),
         query=payload.get("query"),
         allow_active_replay=True,
+        retry_reason="explicit_rerun",
     )
 
 
