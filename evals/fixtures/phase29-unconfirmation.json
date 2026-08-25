@@ -1,0 +1,23 @@
+{
+  "schema_version": 1,
+  "fixture_id": "semantic-phase29-unconfirmation",
+  "case_id": "phase29-unconfirmation",
+  "channel": "semantic_seed",
+  "captured_at": "2026-08-25T00:00:00Z",
+  "query": {
+    "mode": "semantic"
+  },
+  "documents": [
+    {
+      "candidate_id": "record",
+      "canonical_url": "https://temporal.test/retraction",
+      "title": "Retraction preserves prior support",
+      "source": "official",
+      "publisher": "Temporal",
+      "retrieved_at": "2026-08-01T00:00:00Z",
+      "content_type": "excerpt",
+      "excerpt": "The proposal was approved."
+    }
+  ],
+  "content_hash": "32dc2e75b5538dde7348fb7149b2bb4559a4b3be37ec0e471844d8ec169003fc"
+}

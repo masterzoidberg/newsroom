@@ -1,0 +1,23 @@
+{
+  "schema_version": 1,
+  "fixture_id": "semantic-phase29-story-correction-as-of",
+  "case_id": "phase29-story-correction-as-of",
+  "channel": "semantic_seed",
+  "captured_at": "2026-08-25T00:00:00Z",
+  "query": {
+    "mode": "semantic"
+  },
+  "documents": [
+    {
+      "candidate_id": "record",
+      "canonical_url": "https://temporal.test/story",
+      "title": "Story correction preserves the earlier Story view",
+      "source": "official",
+      "publisher": "Temporal",
+      "retrieved_at": "2026-08-01T00:00:00Z",
+      "content_type": "excerpt",
+      "excerpt": "The proposal was approved."
+    }
+  ],
+  "content_hash": "048094b27938f410d9dc97cad70d2405f4d32cffd1c44857fa22ad9ff154a74d"
+}

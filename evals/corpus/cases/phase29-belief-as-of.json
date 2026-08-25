@@ -1,0 +1,80 @@
+{
+  "schema_version": 1,
+  "case_id": "phase29-belief-as-of",
+  "title": "Belief differs across knowledge time",
+  "description": "Executable Phase 29 temporal proof case. The observed value must come from the Newsroom temporal, Story, Report, or Ask execution path.",
+  "case_type": "changing_numeric_claim",
+  "monitored_targets": [
+    {
+      "kind": "source",
+      "ref": "phase29-temporal"
+    }
+  ],
+  "observation_window": {
+    "start": "2026-08-01T00:00:00Z",
+    "end": "2026-08-10T00:00:00Z"
+  },
+  "provenance": {
+    "source": "synthetic",
+    "note": "Phase 29 executable temporal semantic case."
+  },
+  "reviewer_notes": "The runner must not copy semantic expectations into observed results.",
+  "candidates": [
+    {
+      "candidate_id": "primary",
+      "canonical_url": "https://temporal.test/belief",
+      "title": "Belief differs across knowledge time",
+      "source": "official",
+      "publisher": "Temporal",
+      "content_hash": "1bdafa7f71dab1364a3a26501d77ce41d60ae78c24ca2ba84a8af44afbf80b34",
+      "content_type": "excerpt",
+      "excerpt": "The proposal was approved."
+    }
+  ],
+  "gold_groups": [
+    {
+      "event_id": "evt-phase29",
+      "candidate_ids": [
+        "primary"
+      ],
+      "rationale": "Synthetic temporal fixture."
+    }
+  ],
+  "gold_claims": [
+    {
+      "claim_id": "cl-phase29",
+      "event_id": "evt-phase29",
+      "proposition": "The proposal was approved.",
+      "importance": "major",
+      "expected_state": "supported"
+    }
+  ],
+  "gold_evidence": [
+    {
+      "evidence_id": "ev-1",
+      "claim_id": "cl-phase29",
+      "candidate_id": "primary",
+      "excerpt": "The proposal was approved.",
+      "relationship": "supports"
+    }
+  ],
+  "expected_primary_sources": [
+    "primary"
+  ],
+  "noise_candidates": [],
+  "contradictions": [],
+  "material_changes": [
+    {
+      "event_id": "evt-phase29",
+      "claim_id": "cl-phase29",
+      "description": "Temporal state changed while earlier support remained reconstructable."
+    }
+  ],
+  "semantic_assertions": [
+    {
+      "id": "belief_at_t1_t2",
+      "metric": "phase29.belief_at_t1_t2",
+      "expected": "supported_then_disputed"
+    }
+  ]
+}

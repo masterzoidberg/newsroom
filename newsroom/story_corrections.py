@@ -57,6 +57,7 @@ class StoryCorrectionService:
         caused_by_id: str | None = None,
         metadata: Mapping[str, Any] | None = None,
         correction_id: str | None = None,
+        occurred_at: str | None = None,
     ) -> str:
         if operation_type not in {"reassign", "unassign", "merge", "split", "extract", "duplicate_dismissal"}:
             raise DomainValidation("unsupported Story correction operation")
@@ -71,7 +72,7 @@ class StoryCorrectionService:
             VALUES (?, ?, 'human', ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (identifier, operation_type, actor, reason_code, reason[:4000], cause_class,
-             caused_by_type, caused_by_id, utc_now(), _json(metadata or {})),
+             caused_by_type, caused_by_id, occurred_at or precise_utc_now(), _json(metadata or {})),
         )
         return identifier
 
@@ -108,6 +109,7 @@ class StoryCorrectionService:
         reason: str,
         expected_from_story_id: str | None = None,
         require_expected: bool = False,
+        occurred_at: str | None = None,
     ) -> tuple[str | None, str | None]:
         if origin not in ORIGINS:
             raise DomainValidation("unsupported Story membership origin")
@@ -130,7 +132,7 @@ class StoryCorrectionService:
             conn.execute("UPDATE claims SET story_id = ? WHERE id = ?", (story_id, claim_id))
         finally:
             conn.execute("DELETE FROM story_transition_authorizations WHERE id = ?", (authorization,))
-        occurred = precise_utc_now()
+        occurred = occurred_at or precise_utc_now()
         conn.execute(
             """
             INSERT INTO claim_story_assignment_history
@@ -153,6 +155,7 @@ class StoryCorrectionService:
         expected_from_story_id: str | None = None,
         correction_id: str | None = None,
         cause_class: str = "human_correction",
+        occurred_at: str | None = None,
     ) -> dict[str, Any]:
         if not str(story_id).strip():
             raise DomainValidation("story_id is required")
@@ -168,12 +171,14 @@ class StoryCorrectionService:
                     conn, "reassign", actor=actor, reason=reason,
                     reason_code="reassign", cause_class=cause_class,
                     correction_id=correction_id,
+                    occurred_at=occurred_at,
                 )
                 previous, _ = self._transition_claim_tx(
                     conn, claim_id, story_id, correction_id=correction,
                     origin="human", reason_code="reassign", reason=reason,
                     expected_from_story_id=expected_from_story_id,
                     require_expected=expected_from_story_id is not None,
+                    occurred_at=occurred_at,
                 )
                 job_id = self._enqueue_reconciliation_tx(conn, correction, [previous, story_id])
                 result = dict(conn.execute("SELECT * FROM claims WHERE id = ?", (claim_id,)).fetchone())
@@ -438,6 +443,7 @@ class StoryCorrectionService:
         actor: str | None = None,
         reason: str = "",
         child_metadata: Iterable[Mapping[str, Any]] | None = None,
+        occurred_at: str | None = None,
     ) -> dict[str, Any]:
         normalized_groups = [list(dict.fromkeys(str(item) for item in group)) for group in groups]
         if len(normalized_groups) < 2 or any(not group for group in normalized_groups):
@@ -450,7 +456,9 @@ class StoryCorrectionService:
                 selected = [item for group in normalized_groups for item in group]
                 if len(selected) != len(set(selected)) or set(selected) != current:
                     raise DomainConflict("split groups must cover each current Claim exactly once")
-                correction = self._create_correction_tx(conn, "split", actor=actor, reason=reason, reason_code="split")
+                correction = self._create_correction_tx(
+                    conn, "split", actor=actor, reason=reason, reason_code="split", occurred_at=occurred_at
+                )
                 metadata = list(child_metadata or [])
                 children: list[str] = []
                 for index, group in enumerate(normalized_groups):
@@ -458,13 +466,14 @@ class StoryCorrectionService:
                     children.append(child)
                     conn.execute(
                         "INSERT INTO story_lineage(id, source_story_id, target_story_id, relationship, correction_id, created_at) VALUES (?, ?, ?, 'split_into', ?, ?)",
-                        (new_id("sl"), source_story_id, child, correction, utc_now()),
+                        (new_id("sl"), source_story_id, child, correction, occurred_at or precise_utc_now()),
                     )
                     for claim_id in group:
                         self._transition_claim_tx(
                             conn, claim_id, child, correction_id=correction,
                             origin="human", reason_code="split", reason=reason,
                             expected_from_story_id=source_story_id, require_expected=True,
+                            occurred_at=occurred_at,
                         )
                 conn.execute("UPDATE stories SET lifecycle = 'archived', updated_at = ? WHERE id = ?", (utc_now(), source_story_id))
                 self._mark_split_watch_review_tx(conn, source_story_id, children)

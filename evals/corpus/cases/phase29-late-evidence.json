@@ -1,0 +1,80 @@
+{
+  "schema_version": 1,
+  "case_id": "phase29-late-evidence",
+  "title": "Late evidence changes current but not historical belief",
+  "description": "Executable Phase 29 temporal proof case. The observed value must come from the Newsroom temporal, Story, Report, or Ask execution path.",
+  "case_type": "official_correction",
+  "monitored_targets": [
+    {
+      "kind": "source",
+      "ref": "phase29-temporal"
+    }
+  ],
+  "observation_window": {
+    "start": "2026-08-01T00:00:00Z",
+    "end": "2026-08-10T00:00:00Z"
+  },
+  "provenance": {
+    "source": "synthetic",
+    "note": "Phase 29 executable temporal semantic case."
+  },
+  "reviewer_notes": "The runner must not copy semantic expectations into observed results.",
+  "candidates": [
+    {
+      "candidate_id": "record",
+      "canonical_url": "https://temporal.test/late",
+      "title": "Late evidence changes current but not historical belief",
+      "source": "official",
+      "publisher": "Temporal",
+      "content_hash": "363f0ec8a7365037c9e696a89123a3aae7a6efae012ed8c4fd1a2120e554c004",
+      "content_type": "excerpt",
+      "excerpt": "The proposal was approved."
+    }
+  ],
+  "gold_groups": [
+    {
+      "event_id": "evt-phase29",
+      "candidate_ids": [
+        "record"
+      ],
+      "rationale": "Synthetic temporal fixture."
+    }
+  ],
+  "gold_claims": [
+    {
+      "claim_id": "cl-phase29",
+      "event_id": "evt-phase29",
+      "proposition": "The proposal was approved.",
+      "importance": "major",
+      "expected_state": "supported"
+    }
+  ],
+  "gold_evidence": [
+    {
+      "evidence_id": "ev-1",
+      "claim_id": "cl-phase29",
+      "candidate_id": "record",
+      "excerpt": "The proposal was approved.",
+      "relationship": "supports"
+    }
+  ],
+  "expected_primary_sources": [
+    "record"
+  ],
+  "noise_candidates": [],
+  "contradictions": [],
+  "material_changes": [
+    {
+      "event_id": "evt-phase29",
+      "claim_id": "cl-phase29",
+      "description": "Temporal state changed while earlier support remained reconstructable."
+    }
+  ],
+  "semantic_assertions": [
+    {
+      "id": "late_evidence_state",
+      "metric": "phase29.late_evidence_state",
+      "expected": "historical_supported_current_disputed"
+    }
+  ]
+}

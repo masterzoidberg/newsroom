@@ -1,0 +1,23 @@
+{
+  "schema_version": 1,
+  "fixture_id": "semantic-phase29-belief-as-of",
+  "case_id": "phase29-belief-as-of",
+  "channel": "semantic_seed",
+  "captured_at": "2026-08-25T00:00:00Z",
+  "query": {
+    "mode": "semantic"
+  },
+  "documents": [
+    {
+      "candidate_id": "primary",
+      "canonical_url": "https://temporal.test/belief",
+      "title": "Belief differs across knowledge time",
+      "source": "official",
+      "publisher": "Temporal",
+      "retrieved_at": "2026-08-01T00:00:00Z",
+      "content_type": "excerpt",
+      "excerpt": "The proposal was approved."
+    }
+  ],
+  "content_hash": "dc8847daddc938f3bdbaf960797b310c8a4587a75e274c0b0da02ce3f64aaa57"
+}

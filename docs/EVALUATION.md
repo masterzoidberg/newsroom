@@ -73,12 +73,12 @@ reference known candidates.
 
 ## 3. Metric definitions
 
-The current corpus contains 38 bounded cases: 30 established cases plus eight
-Phase 28.875 regressions covering late dependency discovery, conservative
-absence language, Ask evidence-sufficiency refusal, late Story correction and
-split handling, dependency-group support, correction-versus-contradiction
-semantics, and silent DocumentVersion edits. These cases use the same
-canonical evidence ledger; they do not create a second truth path.
+The current corpus contains 46 bounded cases: 30 established cases, eight
+Phase 28 correction-chain regressions, and eight Phase 29 temporal cases covering belief at
+two knowledge-time boundaries, Historical Ask, late evidence, un-confirmation,
+Report causes, Story correction/split as-of views, and silent DocumentVersion
+edits. These cases use the same canonical evidence ledger; they do not create a
+second truth path.
 
 Simple/Advanced navigation density, Attention acknowledgement, hypothesis
 provenance, migration history, and other product invariants are covered by
@@ -86,11 +86,13 @@ engineering and integration tests, not misrepresented as corpus cases.
 
 Coverage, Blind Spots, persisted evidence families, and fragility scores are
 not runtime evaluation targets. Knowledge-time and historical-time Ask
-semantics remain deferred until the Phase 29A benchmark contract is frozen.
+semantics are executable Phase 29 temporal cases; the final product-value
+judgment remains pending dogfood and the frozen Full-vs-Lite run.
 
 All metrics are pure functions of a gold `EvaluationCase` and a `Prediction`.
 Predictions are provider-neutral structured outputs (see
-`newsroom/evals/prediction.py`). The eight closure cases are executed by
+`newsroom/evals/prediction.py`). The Phase 28 correction-chain closure cases and the Phase
+29 temporal cases are executed by
 `SemanticCaseRunner` against fresh migrated SQLite databases through the real
 Ask, SourceRobustness, StoryCorrection, Evidence, and DocumentVersion
 services; their observed values are then scored. The normal `baseline` CLI

@@ -1,0 +1,80 @@
+{
+  "schema_version": 1,
+  "case_id": "phase29-report-cause",
+  "title": "Report revision carries exact canonical causes",
+  "description": "Executable Phase 29 temporal proof case. The observed value must come from the Newsroom temporal, Story, Report, or Ask execution path.",
+  "case_type": "material_update",
+  "monitored_targets": [
+    {
+      "kind": "source",
+      "ref": "phase29-temporal"
+    }
+  ],
+  "observation_window": {
+    "start": "2026-08-01T00:00:00Z",
+    "end": "2026-08-10T00:00:00Z"
+  },
+  "provenance": {
+    "source": "synthetic",
+    "note": "Phase 29 executable temporal semantic case."
+  },
+  "reviewer_notes": "The runner must not copy semantic expectations into observed results.",
+  "candidates": [
+    {
+      "candidate_id": "record",
+      "canonical_url": "https://temporal.test/report",
+      "title": "Report revision carries exact canonical causes",
+      "source": "official",
+      "publisher": "Temporal",
+      "content_hash": "e143d3c9782d6bbdda121fb9c56c88b976ab6b315ec469d0ee27decc14fe8030",
+      "content_type": "excerpt",
+      "excerpt": "The proposal was approved."
+    }
+  ],
+  "gold_groups": [
+    {
+      "event_id": "evt-phase29",
+      "candidate_ids": [
+        "record"
+      ],
+      "rationale": "Synthetic temporal fixture."
+    }
+  ],
+  "gold_claims": [
+    {
+      "claim_id": "cl-phase29",
+      "event_id": "evt-phase29",
+      "proposition": "The proposal was approved.",
+      "importance": "major",
+      "expected_state": "supported"
+    }
+  ],
+  "gold_evidence": [
+    {
+      "evidence_id": "ev-1",
+      "claim_id": "cl-phase29",
+      "candidate_id": "record",
+      "excerpt": "The proposal was approved.",
+      "relationship": "supports"
+    }
+  ],
+  "expected_primary_sources": [
+    "record"
+  ],
+  "noise_candidates": [],
+  "contradictions": [],
+  "material_changes": [
+    {
+      "event_id": "evt-phase29",
+      "claim_id": "cl-phase29",
+      "description": "Temporal state changed while earlier support remained reconstructable."
+    }
+  ],
+  "semantic_assertions": [
+    {
+      "id": "report_revision_cause",
+      "metric": "phase29.report_revision_cause",
+      "expected": "revision_with_exact_cause"
+    }
+  ]
+}

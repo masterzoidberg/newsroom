@@ -1,0 +1,33 @@
+{
+  "schema_version": 1,
+  "fixture_id": "semantic-phase29-silent-edit-as-of",
+  "case_id": "phase29-silent-edit-as-of",
+  "channel": "semantic_seed",
+  "captured_at": "2026-08-25T00:00:00Z",
+  "query": {
+    "mode": "semantic"
+  },
+  "documents": [
+    {
+      "candidate_id": "before",
+      "canonical_url": "https://temporal.test/edit",
+      "title": "Edited page",
+      "source": "official",
+      "publisher": "Temporal",
+      "retrieved_at": "2026-08-01T00:00:00Z",
+      "content_type": "excerpt",
+      "excerpt": "The threshold is 10."
+    },
+    {
+      "candidate_id": "after",
+      "canonical_url": "https://temporal.test/edit",
+      "title": "Edited page",
+      "source": "official",
+      "publisher": "Temporal",
+      "retrieved_at": "2026-08-10T00:00:00Z",
+      "content_type": "excerpt",
+      "excerpt": "The threshold is 12."
+    }
+  ],
+  "content_hash": "a4d1c5108ad1a46399eaa6c7e3b6cc3c459ccacebb8dfcc2176a481a48b8bd34"
+}

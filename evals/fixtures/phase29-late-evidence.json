@@ -1,0 +1,23 @@
+{
+  "schema_version": 1,
+  "fixture_id": "semantic-phase29-late-evidence",
+  "case_id": "phase29-late-evidence",
+  "channel": "semantic_seed",
+  "captured_at": "2026-08-25T00:00:00Z",
+  "query": {
+    "mode": "semantic"
+  },
+  "documents": [
+    {
+      "candidate_id": "record",
+      "canonical_url": "https://temporal.test/late",
+      "title": "Late evidence changes current but not historical belief",
+      "source": "official",
+      "publisher": "Temporal",
+      "retrieved_at": "2026-08-01T00:00:00Z",
+      "content_type": "excerpt",
+      "excerpt": "The proposal was approved."
+    }
+  ],
+  "content_hash": "df4fef62bfcf5db39d6c5f800ac2f3e9c694a0de439a8591739b84dfeece0e77"
+}

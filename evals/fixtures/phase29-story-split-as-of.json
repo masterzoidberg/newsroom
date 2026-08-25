@@ -1,0 +1,23 @@
+{
+  "schema_version": 1,
+  "fixture_id": "semantic-phase29-story-split-as-of",
+  "case_id": "phase29-story-split-as-of",
+  "channel": "semantic_seed",
+  "captured_at": "2026-08-25T00:00:00Z",
+  "query": {
+    "mode": "semantic"
+  },
+  "documents": [
+    {
+      "candidate_id": "record",
+      "canonical_url": "https://temporal.test/split",
+      "title": "Story split preserves earlier identity context",
+      "source": "official",
+      "publisher": "Temporal",
+      "retrieved_at": "2026-08-01T00:00:00Z",
+      "content_type": "excerpt",
+      "excerpt": "The proposal was approved."
+    }
+  ],
+  "content_hash": "6c79d6ea8a57cb7b78c9703d3bec5b4f2b2f629c6415542c92601cea27d77e96"
+}

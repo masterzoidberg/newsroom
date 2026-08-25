@@ -5,6 +5,7 @@ import json
 
 from newsroom.evals.cli import main
 from newsroom.evals.corpus import evals_dir
+from newsroom.evals.semantic import SEMANTIC_CASE_IDS
 
 
 def test_cli_validate(capsys):
@@ -40,7 +41,8 @@ def test_cli_baseline_json(capsys):
     out = capsys.readouterr().out
     data = json.loads(out)
     assert data["system"] == "hermes-v1"
-    assert len(data["results"]) == 12
+    assert len(data["results"]) == 4 + len(SEMANTIC_CASE_IDS)
+    assert sum(item["semantic"]["assertion_count"] for item in data["results"]) == len(SEMANTIC_CASE_IDS)
 
 
 def test_cli_score(capsys, tmp_path):

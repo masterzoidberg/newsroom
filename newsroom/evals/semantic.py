@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import tempfile
 from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable
 
@@ -14,6 +15,8 @@ from ..source_robustness import SourceRobustnessService
 from ..story_corrections import StoryCorrectionService
 from ..story_evolution import StoryEvolutionService
 from ..research_questions import ResearchQuestionService
+from ..reports import LivingReportService
+from ..temporal import TemporalReadService
 from .corpus import fixtures_dir, load_all_cases, load_case
 from .metrics import ScoreResult, score
 from .prediction import validate_prediction
@@ -30,6 +33,14 @@ SEMANTIC_CASE_IDS = (
     "late-story-split",
     "retracted-evidence",
     "silent-document-edit-version",
+    "phase29-belief-as-of",
+    "phase29-historical-ask",
+    "phase29-late-evidence",
+    "phase29-unconfirmation",
+    "phase29-report-cause",
+    "phase29-story-correction-as-of",
+    "phase29-story-split-as-of",
+    "phase29-silent-edit-as-of",
 )
 
 
@@ -114,19 +125,21 @@ class _SemanticWorld:
                 by_url[document.normalized_url] = identity
             _source_id, document_id = identity
             self.documents[document.candidate_id] = document_id
+            knowledge_time = document.retrieved_at or f"2026-08-25T00:00:0{index}Z"
             version = self.evidence.create_document_version(
                 document_id,
                 {
                     "content_hash": candidate.content_hash or document.content_hash,
                     "content_kind": "excerpt",
-                    "retrieved_at": document.retrieved_at or f"2026-08-25T00:00:0{index}Z",
+                    "retrieved_at": knowledge_time,
+                    "created_at": knowledge_time,
                     "normalized_json": {"text": document.excerpt or ""},
                 },
             )
             self.versions[document.candidate_id] = version["id"]
             span = self.evidence.create_evidence_span(
                 version["id"],
-                {"excerpt": document.excerpt or document.title},
+                {"excerpt": document.excerpt or document.title, "created_at": knowledge_time},
             )
             self.spans[document.candidate_id] = span["id"]
 
@@ -145,6 +158,138 @@ class _SemanticWorld:
         self.evidence.set_claim_state(claim_id, "supported", "semantic fixture support")
         self.evidence.accept_claim(claim_id)
         return self.evidence.get_claim(claim_id)
+
+
+def _semantic_time(value: str | None, *, seconds: int = 0) -> str:
+    parsed = datetime.fromisoformat((value or "2026-08-25T00:00:00Z").replace("Z", "+00:00"))
+    parsed = parsed.astimezone(timezone.utc) + timedelta(seconds=seconds)
+    return parsed.isoformat(timespec="seconds").replace("+00:00", "Z")
+
+
+def _temporal_fixture_times(world: _SemanticWorld) -> tuple[str, str, str, str]:
+    start = world.case.observation_window.start or "2026-08-01T00:00:00Z"
+    end = world.case.observation_window.end or "2026-08-10T00:00:00Z"
+    return _semantic_time(start, seconds=-1), start, end, _semantic_time(end, seconds=1)
+
+
+def _temporal_claim(world: _SemanticWorld, *, retract: bool = True) -> tuple[dict[str, Any], str, str]:
+    before, first, second, after = _temporal_fixture_times(world)
+    story = world.core.create_story({"headline": world.case.title})
+    candidate = world.case.candidates[0].candidate_id
+    claim = world.evidence.create_claim(
+        story["id"],
+        {"proposition": world.case.gold_claims[0].proposition, "created_at": first},
+    )
+    world.evidence.link_claim_evidence(
+        claim["id"],
+        {"evidence_span_id": world.spans[candidate], "relationship": "supports", "created_at": first},
+    )
+    world.evidence.set_claim_state(claim["id"], "supported", "semantic initial support", occurred_at=first)
+    world.evidence.accept_claim(claim["id"], accepted_at=first)
+    if retract:
+        world.evidence.set_claim_state(claim["id"], "disputed", "semantic late correction", occurred_at=second)
+    return claim, before, after
+
+
+def _belief_as_of_observation(world: _SemanticWorld) -> _Observation:
+    claim, before, after = _temporal_claim(world)
+    reads = TemporalReadService(world.db_path)
+    first = world.case.observation_window.start or "2026-08-01T00:00:00Z"
+    earlier = reads.claims_as_of(first, claim_ids=[claim["id"]])
+    later = reads.claims_as_of(after, claim_ids=[claim["id"]])
+    value = "supported_then_disputed" if earlier and earlier[0]["state"] == "supported" and later and later[0]["state"] == "disputed" else "temporal_read_failed"
+    return _Observation("Temporal Claims", "newsroom.temporal.TemporalReadService.claims_as_of", value)
+
+
+def _historical_ask_observation(world: _SemanticWorld) -> _Observation:
+    claim, before, after = _temporal_claim(world, retract=False)
+    prompt = world.case.gold_claims[0].proposition
+    ask = AskService(world.db_path)
+    conversation = ask.create_conversation()
+    refused = ask.ask(conversation["id"], prompt, as_of=before)
+    answered = ask.ask(conversation["id"], prompt, as_of=after)
+    value = "refused_before_answered_after" if refused.get("status") == "refused" and answered.get("status") != "refused" and claim["id"] else "historical_ask_failed"
+    return _Observation("Historical Ask", "newsroom.ask.AskService.ask", value)
+
+
+def _late_evidence_observation(world: _SemanticWorld) -> _Observation:
+    claim, before, after = _temporal_claim(world, retract=False)
+    candidate = world.case.candidates[0].candidate_id
+    first = world.case.observation_window.start or "2026-08-01T00:00:00Z"
+    second = world.case.observation_window.end or "2026-08-10T00:00:00Z"
+    document_id = world.documents[candidate]
+    version = world.evidence.create_document_version(
+        document_id,
+        {"content_hash": "c" * 64, "content_kind": "excerpt", "retrieved_at": second, "created_at": second},
+    )
+    span = world.evidence.create_evidence_span(version["id"], {"excerpt": "The later correction disputes the proposition.", "created_at": second})
+    world.evidence.link_claim_evidence(claim["id"], {"evidence_span_id": span["id"], "relationship": "contradicts", "created_at": second})
+    world.evidence.set_claim_state(claim["id"], "disputed", "semantic late evidence", occurred_at=second)
+    reads = TemporalReadService(world.db_path)
+    earlier = reads.claims_as_of(first, claim_ids=[claim["id"]])
+    later = reads.claims_as_of(after, claim_ids=[claim["id"]])
+    value = "historical_supported_current_disputed" if earlier and earlier[0]["state"] == "supported" and later and later[0]["state"] == "disputed" else "late_evidence_failed"
+    return _Observation("Temporal Evidence", "newsroom.temporal.TemporalReadService.claims_as_of", value)
+
+
+def _unconfirmation_observation(world: _SemanticWorld) -> _Observation:
+    claim, before, after = _temporal_claim(world)
+    reads = TemporalReadService(world.db_path)
+    first = world.case.observation_window.start or "2026-08-01T00:00:00Z"
+    historical = reads.claims_as_of(first, claim_ids=[claim["id"]])
+    current = reads.claims_as_of(after, claim_ids=[claim["id"]])
+    value = "historical_support_preserved_current_unconfirmed" if historical and current and historical[0]["state"] == "supported" and current[0]["state"] == "disputed" else "unconfirmation_failed"
+    return _Observation("Claim state history", "newsroom.evidence.EvidenceService.set_claim_state", value)
+
+
+def _report_cause_observation(world: _SemanticWorld) -> _Observation:
+    claim, _before, _after = _temporal_claim(world, retract=False)
+    report = LivingReportService(world.db_path).create({"name": "Semantic report", "target_type": "story", "target_id": claim["story_id"]})
+    generated = LivingReportService(world.db_path).generate(report["id"], generated_at=world.case.observation_window.start)
+    revision = generated.get("current_revision") or {}
+    value = "revision_with_exact_cause" if revision.get("change_causes") and all(item.get("cause_id") for item in revision["change_causes"]) else "revision_cause_missing"
+    return _Observation("Report history", "newsroom.reports.LivingReportService.generate", value)
+
+
+def _story_correction_as_of_observation(world: _SemanticWorld) -> _Observation:
+    claim, before, after = _temporal_claim(world, retract=False)
+    source = {"id": claim["story_id"]}
+    target = world.core.create_story({"headline": "Corrected Story"})
+    world.evidence.reassign_claim(claim["id"], target["id"], reason="semantic as-of correction", occurred_at=world.case.observation_window.end)
+    reads = TemporalReadService(world.db_path)
+    first = world.case.observation_window.start or "2026-08-01T00:00:00Z"
+    earlier = reads.story_as_of(source["id"], first)
+    later = reads.story_as_of(target["id"], after)
+    value = "old_story_then_new_story" if earlier["claims"] and later["claims"] and not earlier["corrections"] and later["corrections"] else "story_as_of_failed"
+    return _Observation("Story history", "newsroom.temporal.TemporalReadService.story_as_of", value)
+
+
+def _story_split_as_of_observation(world: _SemanticWorld) -> _Observation:
+    before, first, second, after = _temporal_fixture_times(world)
+    source = world.core.create_story({"headline": "Split source"})
+    claims = [
+        world.evidence.create_claim(source["id"], {"proposition": item.proposition, "created_at": first})
+        for item in world.case.gold_claims[:2]
+    ]
+    for claim in claims:
+        candidate = world.case.candidates[0].candidate_id
+        world.evidence.link_claim_evidence(claim["id"], {"evidence_span_id": world.spans[candidate], "relationship": "supports", "created_at": first})
+        world.evidence.set_claim_state(claim["id"], "supported", "split support", occurred_at=first)
+        world.evidence.accept_claim(claim["id"], accepted_at=first)
+    result = StoryCorrectionService(world.db_path).split_story(source["id"], [[claims[0]["id"]], [claims[1]["id"]]], reason="semantic split", occurred_at=second)
+    historical = TemporalReadService(world.db_path).story_as_of(source["id"], first)
+    later = TemporalReadService(world.db_path).story_as_of(source["id"], after)
+    value = "earlier_identity_preserved_after_split" if len(historical["claims"]) == 2 and len(later["lineage"]) == 2 and len(result["children"]) == 2 else "story_split_as_of_failed"
+    return _Observation("Story split history", "newsroom.story_corrections.StoryCorrectionService.split_story", value)
+
+
+def _silent_edit_as_of_observation(world: _SemanticWorld) -> _Observation:
+    _before, first, _second, after = _temporal_fixture_times(world)
+    reads = TemporalReadService(world.db_path)
+    earlier = reads.evidence_as_of(_semantic_time(first, seconds=1))
+    later = reads.evidence_as_of(after)
+    value = "version_a_then_version_b" if len(earlier) == 1 and len(later) == 2 else "silent_edit_as_of_failed"
+    return _Observation("DocumentVersion provenance", "newsroom.temporal.TemporalReadService.evidence_as_of", value)
 
 
 def _fixture_for(case_id: str) -> ReplayResult:
@@ -293,6 +438,14 @@ _EXECUTORS: dict[str, Callable[[_SemanticWorld], _Observation]] = {
     "late-story-split": _split_observation,
     "retracted-evidence": _retracted_observation,
     "silent-document-edit-version": _silent_edit_observation,
+    "phase29-belief-as-of": _belief_as_of_observation,
+    "phase29-historical-ask": _historical_ask_observation,
+    "phase29-late-evidence": _late_evidence_observation,
+    "phase29-unconfirmation": _unconfirmation_observation,
+    "phase29-report-cause": _report_cause_observation,
+    "phase29-story-correction-as-of": _story_correction_as_of_observation,
+    "phase29-story-split-as-of": _story_split_as_of_observation,
+    "phase29-silent-edit-as-of": _silent_edit_as_of_observation,
 }
 
 

@@ -118,7 +118,7 @@ class EvidenceService:
                         "normalized_json": encoded_json,
                         "etag": data.get("etag"),
                         "last_modified": data.get("last_modified"),
-                        "created_at": now,
+                        "created_at": data.get("created_at") or now,
                     },
                 )
         finally:
@@ -213,7 +213,7 @@ class EvidenceService:
                             "locator_type": locator_type,
                             "locator_value": locator_value,
                             "span_hash": span_hash,
-                            "created_at": utc_now(),
+                            "created_at": data.get("created_at") or utc_now(),
                         },
                     )
                 except DomainConflict:
@@ -523,7 +523,7 @@ class EvidenceService:
             if parent["story_id"] != story_id:
                 raise DomainValidation("superseded claim must belong to the same story")
         identifier = new_id("claim")
-        now = precise_utc_now()
+        now = data.get("created_at") or precise_utc_now()
         _insert(
             conn,
             "claims",
@@ -564,13 +564,21 @@ class EvidenceService:
             conn.close()
         return self.get_claim(identifier)
 
-    def _set_claim_state_tx(self, conn, claim_id: str, state: str, reason: str) -> None:
+    def _set_claim_state_tx(
+        self,
+        conn,
+        claim_id: str,
+        state: str,
+        reason: str,
+        *,
+        occurred_at: str | None = None,
+    ) -> None:
         if state not in CLAIM_STATES:
             raise DomainValidation("invalid claim state")
         row = _require(conn, "claims", claim_id, "claim")
         if row["state"] == state:
             return
-        now = utc_now()
+        now = occurred_at or precise_utc_now()
         conn.execute("UPDATE claims SET state = ? WHERE id = ?", (state, claim_id))
         _insert(
             conn,
@@ -585,11 +593,18 @@ class EvidenceService:
             },
         )
 
-    def set_claim_state(self, claim_id: str, state: str, reason: str = "") -> dict[str, Any]:
+    def set_claim_state(
+        self,
+        claim_id: str,
+        state: str,
+        reason: str = "",
+        *,
+        occurred_at: str | None = None,
+    ) -> dict[str, Any]:
         conn = storage.connect(self.db_path)
         try:
             with storage.write_tx(conn):
-                self._set_claim_state_tx(conn, claim_id, state, reason.strip())
+                self._set_claim_state_tx(conn, claim_id, state, reason.strip(), occurred_at=occurred_at)
         finally:
             conn.close()
         from .research_questions import ResearchQuestionService
@@ -597,7 +612,7 @@ class EvidenceService:
         ResearchQuestionService(self.db_path).reevaluate_for_claim(claim_id)
         return self.get_claim(claim_id)
 
-    def _accept_claim_tx(self, conn, claim_id: str) -> None:
+    def _accept_claim_tx(self, conn, claim_id: str, *, accepted_at: str | None = None) -> None:
         row = _require(conn, "claims", claim_id, "claim")
         if row["state"] not in ACCEPTED_STATES:
             raise DomainConflict("claim must be supported or partially_supported before acceptance")
@@ -608,13 +623,13 @@ class EvidenceService:
         if supported is None:
             raise DomainConflict("claim requires supporting evidence before acceptance")
         if row["accepted_at"] is None:
-            conn.execute("UPDATE claims SET accepted_at = ? WHERE id = ?", (utc_now(), claim_id))
+            conn.execute("UPDATE claims SET accepted_at = ? WHERE id = ?", (accepted_at or utc_now(), claim_id))
 
-    def accept_claim(self, claim_id: str) -> dict[str, Any]:
+    def accept_claim(self, claim_id: str, *, accepted_at: str | None = None) -> dict[str, Any]:
         conn = storage.connect(self.db_path)
         try:
             with storage.write_tx(conn):
-                self._accept_claim_tx(conn, claim_id)
+                self._accept_claim_tx(conn, claim_id, accepted_at=accepted_at)
         finally:
             conn.close()
         return self.get_claim(claim_id)
@@ -637,7 +652,7 @@ class EvidenceService:
                         "claim_id": claim_id,
                         "evidence_span_id": span_id,
                         "relationship": relationship,
-                        "created_at": utc_now(),
+                        "created_at": data.get("created_at") or utc_now(),
                     },
                 )
         finally:

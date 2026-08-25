@@ -1,0 +1,23 @@
+{
+  "schema_version": 1,
+  "fixture_id": "semantic-phase29-historical-ask",
+  "case_id": "phase29-historical-ask",
+  "channel": "semantic_seed",
+  "captured_at": "2026-08-25T00:00:00Z",
+  "query": {
+    "mode": "semantic"
+  },
+  "documents": [
+    {
+      "candidate_id": "record",
+      "canonical_url": "https://temporal.test/ask",
+      "title": "Historical Ask uses a knowledge-time boundary",
+      "source": "official",
+      "publisher": "Temporal",
+      "retrieved_at": "2026-08-01T00:00:00Z",
+      "content_type": "excerpt",
+      "excerpt": "The proposal was approved."
+    }
+  ],
+  "content_hash": "9e2993df0f7f6f9bd52b15d7243846622d27d4ddba1c3b868d20710c147ff879"
+}

@@ -13,7 +13,7 @@ from newsroom.evals.benchmark import (
     PairedBenchmarkError,
 )
 from newsroom.evals.lite import LiteBenchmarkError, LiteHarness, bind_contract, load_contract
-from newsroom.evals.semantic import SemanticCaseRunner, run_normal_evaluation
+from newsroom.evals.semantic import SEMANTIC_CASE_IDS, SemanticCaseRunner, run_normal_evaluation
 from newsroom.evidence import EvidenceService
 from newsroom.migrations import apply_migrations
 from newsroom.research_questions import ResearchQuestionExecutionService, ResearchQuestionService
@@ -106,8 +106,8 @@ def test_normal_evaluation_includes_semantic_assertions():
     results = run_normal_evaluation()
 
     semantic_results = [result for result in results if result.system == "newsroom-semantic"]
-    assert len(semantic_results) == len(SEMANTIC_CASES)
-    assert sum(result.semantic.assertion_count for result in semantic_results) == 8
+    assert len(semantic_results) == len(SEMANTIC_CASE_IDS)
+    assert sum(result.semantic.assertion_count for result in semantic_results) == len(SEMANTIC_CASE_IDS)
 
 
 def test_contrary_strategy_reports_availability_not_execution(tmp_db):

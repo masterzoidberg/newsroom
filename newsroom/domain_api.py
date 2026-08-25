@@ -877,6 +877,7 @@ class AskTurnCreate(StrictModel):
     context_budget: int = Field(default=4_000, ge=100, le=12_000)
     provider_mode: str = Field(default="local", pattern="^(local|hosted)$")
     cost_cap_usd: float = Field(default=0.0, ge=0.0, le=1_000_000)
+    as_of: Optional[str] = Field(default=None, max_length=80)
 
 
 class AskDirectCreate(AskTurnCreate):
@@ -1041,6 +1042,7 @@ def create_domain_router(
             context_budget=payload.context_budget,
             provider_mode=payload.provider_mode,
             cost_cap_usd=payload.cost_cap_usd,
+            as_of=payload.as_of,
         )
 
     @router.post("/ask", status_code=201)
@@ -1053,6 +1055,7 @@ def create_domain_router(
             context_budget=payload.context_budget,
             provider_mode=payload.provider_mode,
             cost_cap_usd=payload.cost_cap_usd,
+            as_of=payload.as_of,
         )
         result["conversation_id"] = conversation["id"]
         return result

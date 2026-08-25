@@ -1,0 +1,98 @@
+{
+  "schema_version": 1,
+  "case_id": "phase29-silent-edit-as-of",
+  "title": "Silent edits cite the version known at each time",
+  "description": "Executable Phase 29 temporal proof case. The observed value must come from the Newsroom temporal, Story, Report, or Ask execution path.",
+  "case_type": "mutating_document",
+  "monitored_targets": [
+    {
+      "kind": "source",
+      "ref": "phase29-temporal"
+    }
+  ],
+  "observation_window": {
+    "start": "2026-08-01T00:00:00Z",
+    "end": "2026-08-10T00:00:00Z"
+  },
+  "provenance": {
+    "source": "synthetic",
+    "note": "Phase 29 executable temporal semantic case."
+  },
+  "reviewer_notes": "The runner must not copy semantic expectations into observed results.",
+  "candidates": [
+    {
+      "candidate_id": "before",
+      "canonical_url": "https://temporal.test/edit",
+      "title": "Edited page",
+      "source": "official",
+      "publisher": "Temporal",
+      "content_hash": "46ee70cf0d03ea40c3807adc96c6092faa50c536295119babc8c2b1026f889b5",
+      "content_type": "excerpt",
+      "excerpt": "The threshold is 10."
+    },
+    {
+      "candidate_id": "after",
+      "canonical_url": "https://temporal.test/edit",
+      "title": "Edited page",
+      "source": "official",
+      "publisher": "Temporal",
+      "content_hash": "0e928365cd7f98d079a03ce78f7b8d0533936b109d17bb9e477ed5a2f0ad5cfa",
+      "content_type": "excerpt",
+      "excerpt": "The threshold is 12."
+    }
+  ],
+  "gold_groups": [
+    {
+      "event_id": "evt-phase29",
+      "candidate_ids": [
+        "before",
+        "after"
+      ],
+      "rationale": "Synthetic temporal fixture."
+    }
+  ],
+  "gold_claims": [
+    {
+      "claim_id": "cl-phase29",
+      "event_id": "evt-phase29",
+      "proposition": "The threshold is 10.",
+      "importance": "major",
+      "expected_state": "supported"
+    }
+  ],
+  "gold_evidence": [
+    {
+      "evidence_id": "ev-1",
+      "claim_id": "cl-phase29",
+      "candidate_id": "before",
+      "excerpt": "The threshold is 10.",
+      "relationship": "supports"
+    },
+    {
+      "evidence_id": "ev-2",
+      "claim_id": "cl-phase29",
+      "candidate_id": "after",
+      "excerpt": "The threshold is 12.",
+      "relationship": "supports"
+    }
+  ],
+  "expected_primary_sources": [
+    "before"
+  ],
+  "noise_candidates": [],
+  "contradictions": [],
+  "material_changes": [
+    {
+      "event_id": "evt-phase29",
+      "claim_id": "cl-phase29",
+      "description": "Temporal state changed while earlier support remained reconstructable."
+    }
+  ],
+  "semantic_assertions": [
+    {
+      "id": "silent_edit_as_of",
+      "metric": "phase29.silent_edit_as_of",
+      "expected": "version_a_then_version_b"
+    }
+  ]
+}

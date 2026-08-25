@@ -4,12 +4,14 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable, Mapping, Sequence
 
 from . import storage
 from .domain import DomainConflict, DomainNotFound, DomainValidation, new_id, utc_now
 from .workbench import KnowledgeRetrievalService
+from .temporal import TemporalReadService, normalize_as_of
 
 
 SCOPE_TYPES = frozenset(
@@ -124,6 +126,7 @@ class AskService:
         self.max_citations = max_citations
         self.hosted_enabled = hosted_enabled
         self.search = KnowledgeRetrievalService(db_path)
+        self.temporal = TemporalReadService(db_path)
 
     def create_conversation(self, *, scope_type: str = "global", scope_id: str | None = None) -> dict[str, Any]:
         scope_type = self._normalize_scope_type(scope_type)
@@ -213,8 +216,10 @@ class AskService:
         provider_mode: str = "local",
         cost_cap_usd: float = 0.0,
         cancel_check: Callable[[], bool] | None = None,
+        as_of: str | datetime | None = None,
     ) -> dict[str, Any]:
         prompt = self._validate_prompt(prompt)
+        boundary = normalize_as_of(as_of) if as_of is not None else None
         if context_budget < 100 or context_budget > self.max_context_units:
             raise DomainValidation(f"context_budget must be between 100 and {self.max_context_units}")
         if provider_mode not in {"local", "hosted"}:
@@ -237,7 +242,15 @@ class AskService:
                 fallback_route = "local_deterministic_fallback"
 
         try:
-            retrieved = self._retrieve(prompt, conversation["scope_type"], conversation["scope_id"], context_budget, cancel_check, run_id)
+            retrieved = self._retrieve(
+                prompt,
+                conversation["scope_type"],
+                conversation["scope_id"],
+                context_budget,
+                cancel_check,
+                run_id,
+                as_of=boundary,
+            )
             if retrieved.get("cancelled"):
                 return self._finish(run_id, self._cancelled_result(run_id, conversation_id, turn_number))
             result = self._compose(run_id, conversation_id, turn_number, prompt, retrieved, context_budget)
@@ -331,10 +344,12 @@ class AskService:
         context_budget: int,
         cancel_check: Callable[[], bool] | None,
         run_id: str,
+        *,
+        as_of: str | None = None,
     ) -> dict[str, Any]:
         terms = _tokens(prompt)
         if not terms:
-            return {"items": [], "claims": {}, "evidence": {}, "notes": [], "reports": [], "questions": [], "gaps": [], "tasks": [], "terms": [], "packet_ids": [], "grounding_evidence_count": 0}
+            return {"items": [], "claims": {}, "evidence": {}, "notes": [], "reports": [], "questions": [], "gaps": [], "tasks": [], "terms": [], "packet_ids": [], "grounding_evidence_count": 0, "as_of": as_of}
         if self._cancelled(run_id, cancel_check):
             return {"cancelled": True}
         try:
@@ -357,6 +372,14 @@ class AskService:
                 self._expand_item(conn, item, claim_ids, evidence_ids, note_ids, question_ids, task_ids)
             claims = self._load_claims(conn, sorted(claim_ids))
             evidence = self._load_evidence(conn, sorted(evidence_ids | {ev["id"] for claim in claims.values() for ev in claim["evidence"]}))
+            if as_of is not None:
+                historical_claims = self.temporal.claims_as_of(as_of, claim_ids=claims.keys())
+                claims = {claim["id"]: claim for claim in historical_claims}
+                evidence = {
+                    evidence_item["id"]: {**evidence_item, "score": 0.0}
+                    for claim in historical_claims
+                    for evidence_item in claim["evidence"]
+                }
             notes = self._load_notes(conn, sorted(note_ids))
             notes.extend(self._load_question_notes(conn, sorted(question_ids)))
             questions = self._load_questions(conn, sorted(question_ids))
@@ -389,6 +412,15 @@ class AskService:
                 correction_rows = [dict(row) for row in conn.execute(
                     "SELECT * FROM story_corrections ORDER BY occurred_at DESC, id DESC LIMIT 50"
                 )]
+            if as_of is not None:
+                correction_boundary = _parse_time(as_of)
+                correction_rows = [
+                    row
+                    for row in correction_rows
+                    if (occurred := _parse_time(row.get("occurred_at"))) is not None
+                    and correction_boundary is not None
+                    and occurred <= correction_boundary
+                ]
             context_units = 0
             selected_evidence: dict[str, dict[str, Any]] = {}
             for evidence_id, item in sorted(evidence.items(), key=lambda pair: (float(pair[1].get("score", 0)), pair[0])):
@@ -448,6 +480,7 @@ class AskService:
                     if evidence["id"] in selected_evidence
                 ),
                 "retrieval_ranking": shared.get("ranking", "exact_match_then_bm25_then_entity_type_then_entity_id"),
+                "as_of": as_of,
             }
         finally:
             conn.close()
@@ -875,6 +908,13 @@ class AskService:
         if retrieved.get("context_truncated") and statements:
             add_statement("The context budget excluded lower-ranked records; this answer is limited to the retrieved evidence.", "uncertainty", [citation["id"] for citation in citation_map.values()][:1])
 
+        if retrieved.get("as_of") and citation_map:
+            add_statement(
+                f"As of {retrieved['as_of']}, this answer is limited to knowledge available by that time; later evidence and corrections are excluded.",
+                "context",
+                [next(iter(citation_map.values()))["id"]],
+            )
+
         citations = list(citation_map.values())
         conn = storage.connect(self.db_path)
         try:
@@ -920,6 +960,7 @@ class AskService:
             ][:20],
             "grounding_evidence_count": int(retrieved.get("grounding_evidence_count", 0)),
             "retrieval_ranking": retrieved.get("retrieval_ranking"),
+            "as_of": retrieved.get("as_of"),
         }
 
     def _refused_result(self, run_id: str, conversation_id: str, turn_number: int, code: str, message: str, *, retrieval: dict[str, Any] | None = None, citations: list[dict[str, Any]] | None = None) -> dict[str, Any]:

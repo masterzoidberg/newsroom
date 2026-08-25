@@ -1,0 +1,87 @@
+{
+  "schema_version": 1,
+  "case_id": "phase29-story-split-as-of",
+  "title": "Story split preserves earlier identity context",
+  "description": "Executable Phase 29 temporal proof case. The observed value must come from the Newsroom temporal, Story, Report, or Ask execution path.",
+  "case_type": "similar_distinct_events",
+  "monitored_targets": [
+    {
+      "kind": "source",
+      "ref": "phase29-temporal"
+    }
+  ],
+  "observation_window": {
+    "start": "2026-08-01T00:00:00Z",
+    "end": "2026-08-10T00:00:00Z"
+  },
+  "provenance": {
+    "source": "synthetic",
+    "note": "Phase 29 executable temporal semantic case."
+  },
+  "reviewer_notes": "The runner must not copy semantic expectations into observed results.",
+  "candidates": [
+    {
+      "candidate_id": "record",
+      "canonical_url": "https://temporal.test/split",
+      "title": "Story split preserves earlier identity context",
+      "source": "official",
+      "publisher": "Temporal",
+      "content_hash": "e7eab31097c90836a1c2000740d5cfaf760c1e5af0dc92c8c4b1ae9bb0efb6d8",
+      "content_type": "excerpt",
+      "excerpt": "The proposal was approved."
+    }
+  ],
+  "gold_groups": [
+    {
+      "event_id": "evt-phase29",
+      "candidate_ids": [
+        "record"
+      ],
+      "rationale": "Synthetic temporal fixture."
+    }
+  ],
+  "gold_claims": [
+    {
+      "claim_id": "cl-first",
+      "event_id": "evt-phase29",
+      "proposition": "The proposal was approved.",
+      "importance": "major",
+      "expected_state": "supported"
+    },
+    {
+      "claim_id": "cl-second",
+      "event_id": "evt-phase29",
+      "proposition": "The proposal was approved.",
+      "importance": "major",
+      "expected_state": "supported"
+    }
+  ],
+  "gold_evidence": [
+    {
+      "evidence_id": "ev-1",
+      "claim_id": "cl-first",
+      "candidate_id": "record",
+      "excerpt": "The proposal was approved.",
+      "relationship": "supports"
+    }
+  ],
+  "expected_primary_sources": [
+    "record"
+  ],
+  "noise_candidates": [],
+  "contradictions": [],
+  "material_changes": [
+    {
+      "event_id": "evt-phase29",
+      "claim_id": "cl-first",
+      "description": "Temporal state changed while earlier support remained reconstructable."
+    }
+  ],
+  "semantic_assertions": [
+    {
+      "id": "story_split_as_of",
+      "metric": "phase29.story_split_as_of",
+      "expected": "earlier_identity_preserved_after_split"
+    }
+  ]
+}
