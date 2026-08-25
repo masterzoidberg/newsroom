@@ -31,6 +31,42 @@ SEMANTIC_CASES = (
 )
 
 
+MATCHING_EFFECTIVE_CONFIG = {
+    "effective_provider": "openai",
+    "effective_model": "gpt-4o-mini",
+    "provider_route": "test_double",
+    "fallback_used": False,
+    "effective_temperature": 0.0,
+    "deterministic": True,
+    "effective_prompt_version": "lite-document-synthesis-v1",
+    "effective_context_budget_tokens": 6000,
+    "effective_retrieval_limit": 8,
+    "effective_citation_limit": 8,
+}
+
+LOCAL_FALLBACK_EFFECTIVE_CONFIG = {
+    **MATCHING_EFFECTIVE_CONFIG,
+    "effective_provider": "local",
+    "effective_model": None,
+    "provider_route": "local_deterministic",
+    "fallback_used": True,
+}
+
+
+def _paired_test_doubles(tmp_db, *, full_effective_config, lite_effective_config):
+    apply_migrations(tmp_db)
+    contract = bind_contract(load_contract(), tmp_db)
+    full = FullBenchmarkRunner(tmp_db, contract=contract)
+    lite = LiteHarness(tmp_db, contract=contract)
+    return PairedBenchmarkOrchestrator(full, lite).run_with_test_doubles(
+        ["q01"],
+        full_synthesize=lambda question: {"answer": "full test answer"},
+        lite_synthesize=lambda question, documents: {"text": "lite test answer"},
+        full_effective_config=full_effective_config,
+        lite_effective_config=lite_effective_config,
+    )
+
+
 def test_semantic_cases_execute_real_newsroom_paths():
     results = [SemanticCaseRunner().run(case_id) for case_id in SEMANTIC_CASES]
 
@@ -145,13 +181,98 @@ def test_production_lite_rejects_callable_but_test_seam_accepts(tmp_db):
             "text": "deterministic fake",
             "cited_document_ids": [documents[0].document_id] if documents else [],
         },
+        effective_config=MATCHING_EFFECTIVE_CONFIG,
     )
     assert result["test_double"] is True
+
+
+def test_full_local_execution_is_rejected_for_openai_contract(tmp_db):
+    apply_migrations(tmp_db)
+    runner = FullBenchmarkRunner(tmp_db, contract=bind_contract(load_contract(), tmp_db))
+
+    result = runner.run("q01")
+
+    verification = result["contract_verification"]
+    assert verification["valid"] is False
+    assert verification["status"] == "benchmark_contract_not_satisfied"
+    assert {"provider", "model"} <= set(verification["mismatch_fields"])
+    assert result["effective_config"]["provider_route"] == "local_deterministic"
+    assert result["effective_config"]["effective_provider"] == "local"
+    assert result["effective_config"]["effective_model"] is None
+
+
+def test_lite_records_router_effective_route_instead_of_echoing_contract(tmp_db):
+    apply_migrations(tmp_db)
+    core = CoreService(tmp_db)
+    source = core.create_source({"name": "Benchmark source", "slug": "benchmark-source"})
+    core.create_document(
+        {
+            "source_id": source["id"],
+            "canonical_url": "https://benchmark.test/q01",
+            "title": "What product launch is described, and what date and quantity are explicitly reported?",
+        }
+    )
+    router = AIRouter(
+        local=CapabilityBundle(synthesis=DeterministicSynthesisProvider()),
+        policy=RoutePolicy(local_enabled=True, paid_enabled=False),
+    )
+    harness = LiteHarness(
+        tmp_db,
+        contract=bind_contract(load_contract(), tmp_db),
+        router=router,
+    )
+
+    result = harness.run("q01")
+
+    assert result["effective_config"]["provider_route"] == "local"
+    assert result["effective_config"]["effective_provider"] == "local"
+    assert result["effective_config"]["effective_model"] is None
+    assert result["contract_verification"]["valid"] is False
+    assert {"provider", "model"} <= set(result["contract_verification"]["mismatch_fields"])
+
+
+def test_paired_matching_effective_conditions_are_accepted(tmp_db):
+    result = _paired_test_doubles(
+        tmp_db,
+        full_effective_config=MATCHING_EFFECTIVE_CONFIG,
+        lite_effective_config=MATCHING_EFFECTIVE_CONFIG,
+    )
+
+    assert result[0]["full"]["contract_verification"]["valid"] is True
+    assert result[0]["lite"]["contract_verification"]["valid"] is True
+
+
+@pytest.mark.parametrize(
+    ("full_effective_config", "lite_effective_config"),
+    (
+        (MATCHING_EFFECTIVE_CONFIG, LOCAL_FALLBACK_EFFECTIVE_CONFIG),
+        (LOCAL_FALLBACK_EFFECTIVE_CONFIG, MATCHING_EFFECTIVE_CONFIG),
+        (LOCAL_FALLBACK_EFFECTIVE_CONFIG, LOCAL_FALLBACK_EFFECTIVE_CONFIG),
+        (
+            {**MATCHING_EFFECTIVE_CONFIG, "effective_model": "model-B"},
+            MATCHING_EFFECTIVE_CONFIG,
+        ),
+    ),
+)
+def test_paired_effective_condition_mismatch_is_rejected(
+    tmp_db,
+    full_effective_config,
+    lite_effective_config,
+):
+    with pytest.raises(PairedBenchmarkError, match="contract"):
+        _paired_test_doubles(
+            tmp_db,
+            full_effective_config=full_effective_config,
+            lite_effective_config=lite_effective_config,
+        )
 
 
 def test_full_runner_uses_actual_ask_adapter(tmp_db):
     apply_migrations(tmp_db)
     runner = FullBenchmarkRunner(tmp_db, contract=bind_contract(load_contract(), tmp_db))
+
+    with pytest.raises(TypeError):
+        runner.run("q01", lambda question: {"answer": "bypass"})
 
     result = runner.run("q01")
 

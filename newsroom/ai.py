@@ -848,6 +848,8 @@ class AIRouter:
         self._paid_cost = 0.0
         self._work_paid_calls: dict[str, int] = {}
         self._work_paid_cost: dict[str, float] = {}
+        self._active_execution_events: list[TelemetryEvent] | None = None
+        self.last_execution_events: tuple[TelemetryEvent, ...] = ()
 
     def embedding(self, text: str, *, work_id: str | None = None) -> EmbeddingOutput:
         return self._execute("embedding", lambda provider: provider.embed(text), work_id=work_id)
@@ -877,27 +879,34 @@ class AIRouter:
         return self._execute("research_plan", lambda provider: provider.plan(request), work_id=work_id)
 
     def _execute(self, capability: str, call: Callable[[Any], Any], *, work_id: str | None) -> Any:
-        local_provider = getattr(self.local, capability)
-        local_failure: AIError | None = None
-        if self.policy.local_enabled and local_provider is not None:
-            try:
-                result = self._call_provider(capability, local_provider, call, "local", work_id, None)
-                if self._is_low_confidence(result):
-                    paid_result = self._try_paid(capability, call, work_id, "low_confidence")
-                    if paid_result is not None:
-                        return paid_result
-                return result
-            except AIError as exc:
-                local_failure = exc
-        else:
-            local_failure = AIDisabled("local route is disabled or unavailable")
+        events: list[TelemetryEvent] = []
+        previous_events = self._active_execution_events
+        self._active_execution_events = events
+        try:
+            local_provider = getattr(self.local, capability)
+            local_failure: AIError | None = None
+            if self.policy.local_enabled and local_provider is not None:
+                try:
+                    result = self._call_provider(capability, local_provider, call, "local", work_id, None)
+                    if self._is_low_confidence(result):
+                        paid_result = self._try_paid(capability, call, work_id, "low_confidence")
+                        if paid_result is not None:
+                            return paid_result
+                    return result
+                except AIError as exc:
+                    local_failure = exc
+            else:
+                local_failure = AIDisabled("local route is disabled or unavailable")
 
-        paid_result = self._try_paid(capability, call, work_id, "local_failure")
-        if paid_result is not None:
-            return paid_result
-        if local_failure is not None:
-            raise local_failure
-        raise AIDisabled(f"no provider is configured for {capability}")
+            paid_result = self._try_paid(capability, call, work_id, "local_failure")
+            if paid_result is not None:
+                return paid_result
+            if local_failure is not None:
+                raise local_failure
+            raise AIDisabled(f"no provider is configured for {capability}")
+        finally:
+            self.last_execution_events = tuple(events)
+            self._active_execution_events = previous_events
 
     def _try_paid(self, capability: str, call: Callable[[Any], Any], work_id: str | None, reason: str) -> Any | None:
         provider = getattr(self.paid, capability)
@@ -954,6 +963,7 @@ class AIRouter:
             executor.shutdown(wait=False, cancel_futures=True)
         confidence = getattr(result, "confidence", None)
         signal = getattr(result, "signal", None)
+        provider_name = getattr(provider, "provider_name", None) or type(provider).__name__
         provider_model = getattr(provider, "model_name", None) or type(provider).__name__
         usage = getattr(provider, "last_usage", None)
         token_units = None
@@ -966,12 +976,11 @@ class AIRouter:
             estimated_cost = float(actual_cost)
         else:
             estimated_cost = self.policy.paid_request_cost_usd if route == "paid" else 0.0
-        _record_telemetry(
-            self.telemetry,
+        self._emit_telemetry(
             TelemetryEvent(
                 capability=capability,
                 route=route,
-                provider=type(provider).__name__,
+                provider=provider_name,
                 model=provider_model,
                 outcome="low_confidence" if confidence is not None and confidence < self.policy.min_confidence else "succeeded",
                 work_id=work_id,
@@ -995,13 +1004,12 @@ class AIRouter:
         error_code: str,
         started: float,
     ) -> None:
-        _record_telemetry(
-            self.telemetry,
+        self._emit_telemetry(
             TelemetryEvent(
                 capability=capability,
                 route=route,
-                provider=type(provider).__name__,
-                model=type(provider).__name__,
+                provider=getattr(provider, "provider_name", None) or type(provider).__name__,
+                model=getattr(provider, "model_name", None) or type(provider).__name__,
                 outcome="failed",
                 work_id=work_id,
                 latency_ms=max(0, int((time.monotonic() - started) * 1000)),
@@ -1012,8 +1020,7 @@ class AIRouter:
         )
 
     def _record_blocked(self, capability: str, work_id: str | None, reason: str, error_code: str) -> None:
-        _record_telemetry(
-            self.telemetry,
+        self._emit_telemetry(
             TelemetryEvent(
                 capability=capability,
                 route="paid",
@@ -1025,6 +1032,11 @@ class AIRouter:
                 error_code=error_code,
             ),
         )
+
+    def _emit_telemetry(self, event: TelemetryEvent) -> None:
+        _record_telemetry(self.telemetry, event)
+        if self._active_execution_events is not None:
+            self._active_execution_events.append(event)
 
     def _is_low_confidence(self, result: Any) -> bool:
         confidence = getattr(result, "confidence", None)

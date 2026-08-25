@@ -18,6 +18,7 @@ from typing import Any, Callable, Mapping, Sequence
 from .. import storage
 from ..ai import AIRouter, CapabilityBundle, ClaimDraft, RoutePolicy
 from ..workbench import SearchService
+from .benchmark_contract import add_effective_settings, router_effective_config, verify_execution
 
 
 class LiteBenchmarkError(ValueError):
@@ -187,6 +188,7 @@ def _model_config(contract: Mapping[str, Any]) -> dict[str, Any]:
         "provider": contract["provider"],
         "model": contract["model"],
         "temperature": contract["temperature"],
+        "deterministic": contract["deterministic"],
         "prompt_version": contract["prompt_version"],
         "context_budget_tokens": contract["context_budget_tokens"],
         "retrieval_limit": contract["retrieval_limit"],
@@ -287,8 +289,15 @@ class LiteHarness:
             self.router = router
         question = self.questions[question_id]["question"]
         documents = self.retrieve(question)
-        answer = self._router_synthesis(question, documents, question_id=question_id)
-        return self._envelope(question_id, question, documents, answer, test_double=False)
+        answer, effective_config = self._router_synthesis(question, documents, question_id=question_id)
+        return self._envelope(
+            question_id,
+            question,
+            documents,
+            answer,
+            effective_config=effective_config,
+            test_double=False,
+        )
 
     def run_with_test_double(
         self,
@@ -296,16 +305,26 @@ class LiteHarness:
         synthesize: Callable[[str, Sequence[LiteDocument]], Mapping[str, Any]],
         *,
         model_config: Mapping[str, Any] | None = None,
+        effective_config: Mapping[str, Any],
     ) -> dict[str, Any]:
         """Run a deterministic callable only at an explicit test seam."""
         if question_id not in self.questions:
             raise LiteBenchmarkError(f"unknown Lite question: {question_id}")
         if model_config is not None and dict(model_config) != self.model_config:
             raise LiteBenchmarkError("Lite test-double config does not match the frozen provider/model contract")
+        if not isinstance(effective_config, Mapping):
+            raise LiteBenchmarkError("Lite test doubles must provide explicit effective execution metadata")
         question = self.questions[question_id]["question"]
         documents = self.retrieve(question)
         answer = dict(synthesize(question, documents))
-        return self._envelope(question_id, question, documents, answer, test_double=True)
+        return self._envelope(
+            question_id,
+            question,
+            documents,
+            answer,
+            effective_config=effective_config,
+            test_double=True,
+        )
 
     def _router_synthesis(
         self,
@@ -313,13 +332,24 @@ class LiteHarness:
         documents: Sequence[LiteDocument],
         *,
         question_id: str,
-    ) -> dict[str, Any]:
+    ) -> tuple[dict[str, Any], dict[str, Any]]:
         claims = [
             ClaimDraft(proposition=f"{document.title}: {document.excerpt[:1800]}")
             for document in documents
         ]
         if not claims:
-            return {"text": "The frozen document corpus does not provide sufficient evidence to answer this question."}
+            return (
+                {"text": "The frozen document corpus does not provide sufficient evidence to answer this question."},
+                add_effective_settings(
+                    {
+                        "effective_provider": None,
+                        "effective_model": None,
+                        "provider_route": "not_executed",
+                        "fallback_used": False,
+                    },
+                    self.model_config,
+                ),
+            )
         router = self.router
         if router is None:
             raise LiteBenchmarkError("Lite AIRouter is not configured")
@@ -327,13 +357,18 @@ class LiteHarness:
             output = router.synthesis(question, claims, work_id=f"lite:{question_id}")
         except Exception as exc:
             raise LiteBenchmarkError("Lite AIRouter synthesis failed") from exc
-        return {
-            "text": output.summary,
-            "headline": output.headline,
-            "summary": output.summary,
-            "cited_document_ids": [document.document_id for document in documents[: self.model_config["citation_limit"]]],
-            "confidence": output.confidence,
-        }
+        return (
+            {
+                "text": output.summary,
+                "headline": output.headline,
+                "summary": output.summary,
+                "cited_document_ids": [
+                    document.document_id for document in documents[: self.model_config["citation_limit"]]
+                ],
+                "confidence": output.confidence,
+            },
+            add_effective_settings(router_effective_config(router), self.model_config),
+        )
 
     def _envelope(
         self,
@@ -342,6 +377,7 @@ class LiteHarness:
         documents: Sequence[LiteDocument],
         answer: Mapping[str, Any],
         *,
+        effective_config: Mapping[str, Any],
         test_double: bool,
     ) -> dict[str, Any]:
         answer = dict(answer)
@@ -352,6 +388,7 @@ class LiteHarness:
         cited_document_ids = answer.get("cited_document_ids", [])
         if not isinstance(cited_document_ids, list):
             cited_document_ids = []
+        effective = dict(effective_config)
         return {
             "contract_id": self.contract["contract_id"],
             "question_id": question_id,
@@ -366,6 +403,9 @@ class LiteHarness:
             "corpus_cutoff": self.contract["corpus_cutoff"],
             "frozen_corpus": self.binding,
             "model_config": dict(self.model_config),
+            "requested_config": dict(self.model_config),
+            "effective_config": effective,
+            "contract_verification": verify_execution(self.model_config, effective),
             "blinding": dict(self.contract["blinding"]),
             "scoring": dict(self.contract["scoring"]),
             "scoring_version": "lite-scoring-v1",

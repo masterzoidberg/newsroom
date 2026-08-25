@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Any, Callable, Mapping, Sequence
 
 from ..ask import AskService
+from .benchmark_contract import compare_effective_conditions, verify_execution
 from .lite import (
     LiteHarness,
     LiteBenchmarkError,
@@ -16,6 +17,10 @@ from .lite import (
 
 class PairedBenchmarkError(ValueError):
     """The Full and Lite runners are not evaluating the same contract."""
+
+    def __init__(self, message: str, *, details: Mapping[str, Any] | None = None):
+        super().__init__(message)
+        self.details = dict(details or {})
 
 
 def _identity(contract: Mapping[str, Any], binding: Mapping[str, str], model_config: Mapping[str, Any]) -> dict[str, Any]:
@@ -29,6 +34,31 @@ def _identity(contract: Mapping[str, Any], binding: Mapping[str, str], model_con
         },
         "model_config": dict(model_config),
         "blinding": dict(contract["blinding"]),
+    }
+
+
+def _full_effective_config(answer: Mapping[str, Any]) -> dict[str, Any]:
+    """Translate AskService's recorded route into honest benchmark metadata."""
+    route = str(answer.get("provider_route") or "execution_unavailable")
+    if route.startswith("local"):
+        provider = "local"
+        model = None
+    else:
+        provider = None
+        model = None
+    raw_retrieval = answer.get("retrieval")
+    retrieval: Mapping[str, Any] = raw_retrieval if isinstance(raw_retrieval, Mapping) else {}
+    return {
+        "effective_provider": provider,
+        "effective_model": model,
+        "provider_route": route,
+        "fallback_used": route.endswith("_fallback"),
+        "effective_temperature": None,
+        "deterministic": None,
+        "effective_prompt_version": None,
+        "effective_context_budget_tokens": retrieval.get("context_budget_tokens"),
+        "effective_retrieval_limit": None,
+        "effective_citation_limit": None,
     }
 
 
@@ -53,12 +83,49 @@ class FullBenchmarkRunner:
             conversation["id"],
             question,
             context_budget=int(self.model_config["context_budget_tokens"]),
-            provider_mode="local",
-            cost_cap_usd=0.0,
         )
+        return self._envelope(
+            question_id,
+            question,
+            answer,
+            effective_config=_full_effective_config(answer),
+            test_double=False,
+        )
+
+    def run_with_test_double(
+        self,
+        question_id: str,
+        synthesize: Callable[[str], Mapping[str, Any]],
+        *,
+        effective_config: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        """Run a callable only through the explicit deterministic test seam."""
+        if question_id not in self.questions:
+            raise LiteBenchmarkError(f"unknown Full question: {question_id}")
+        if not isinstance(effective_config, Mapping):
+            raise LiteBenchmarkError("Full test doubles must provide explicit effective execution metadata")
+        question = self.questions[question_id]["question"]
+        answer = dict(synthesize(question))
+        return self._envelope(
+            question_id,
+            question,
+            answer,
+            effective_config=effective_config,
+            test_double=True,
+        )
+
+    def _envelope(
+        self,
+        question_id: str,
+        question: str,
+        answer: Mapping[str, Any],
+        *,
+        effective_config: Mapping[str, Any],
+        test_double: bool,
+    ) -> dict[str, Any]:
         return {
             "runner": "full",
-            "adapter": "newsroom.ask.AskService",
+            "adapter": "explicit_test_double" if test_double else "newsroom.ask.AskService",
             "contract_id": self.contract["contract_id"],
             "question_id": question_id,
             "opaque_question_id": f"q-{question_id}",
@@ -70,9 +137,12 @@ class FullBenchmarkRunner:
             "corpus_cutoff": self.contract["corpus_cutoff"],
             "frozen_corpus": self.binding,
             "model_config": dict(self.model_config),
+            "requested_config": dict(self.model_config),
+            "effective_config": dict(effective_config),
+            "contract_verification": verify_execution(self.model_config, effective_config),
             "blinding": dict(self.contract["blinding"]),
             "scoring": dict(self.contract["scoring"]),
-            "test_double": False,
+            "test_double": test_double,
         }
 
 
@@ -91,22 +161,91 @@ class PairedBenchmarkOrchestrator:
             if full_identity.get(key) != lite_identity.get(key):
                 raise PairedBenchmarkError(f"paired benchmark {key} mismatch")
 
+    def _validate_execution_pair(
+        self,
+        full_result: Mapping[str, Any],
+        lite_result: Mapping[str, Any],
+    ) -> None:
+        full_verification = full_result.get("contract_verification")
+        lite_verification = lite_result.get("contract_verification")
+        if not isinstance(full_verification, Mapping) or not full_verification.get("valid"):
+            raise PairedBenchmarkError(
+                "paired benchmark contract is not satisfied by Full execution",
+                details={"full": dict(full_result), "lite": dict(lite_result)},
+            )
+        if not isinstance(lite_verification, Mapping) or not lite_verification.get("valid"):
+            raise PairedBenchmarkError(
+                "paired benchmark contract is not satisfied by Lite execution",
+                details={"full": dict(full_result), "lite": dict(lite_result)},
+            )
+        full_effective = full_result.get("effective_config")
+        lite_effective = lite_result.get("effective_config")
+        if not isinstance(full_effective, Mapping) or not isinstance(lite_effective, Mapping):
+            raise PairedBenchmarkError("paired benchmark effective execution metadata is unavailable")
+        mismatches = compare_effective_conditions(full_effective, lite_effective)
+        if mismatches:
+            raise PairedBenchmarkError(
+                f"paired benchmark effective contract mismatch: {', '.join(mismatches)}",
+                details={
+                    "mismatch_fields": mismatches,
+                    "full_effective_config": dict(full_effective),
+                    "lite_effective_config": dict(lite_effective),
+                },
+            )
+
     def run(
         self,
         question_ids: Sequence[str] | None = None,
         *,
         lite_test_double: Callable[[str, Sequence[Any]], Mapping[str, Any]] | None = None,
+        lite_effective_config: Mapping[str, Any] | None = None,
     ) -> list[dict[str, Any]]:
         self.validate_identity(self.full.identity, self.lite.identity)
         selected = tuple(question_ids or sorted(self.full.questions))
         results: list[dict[str, Any]] = []
         for question_id in selected:
             full_result = self.full.run(question_id)
-            lite_result = (
-                self.lite.run_with_test_double(question_id, lite_test_double)
-                if lite_test_double is not None
-                else self.lite.run(question_id)
+            if lite_test_double is not None:
+                if not isinstance(lite_effective_config, Mapping):
+                    raise PairedBenchmarkError(
+                        "Lite test doubles require explicit effective execution metadata"
+                    )
+                lite_result = self.lite.run_with_test_double(
+                    question_id,
+                    lite_test_double,
+                    effective_config=lite_effective_config,
+                )
+            else:
+                lite_result = self.lite.run(question_id)
+            self._validate_execution_pair(full_result, lite_result)
+            results.append({"question_id": question_id, "full": full_result, "lite": lite_result})
+        return results
+
+    def run_with_test_doubles(
+        self,
+        question_ids: Sequence[str] | None = None,
+        *,
+        full_synthesize: Callable[[str], Mapping[str, Any]],
+        lite_synthesize: Callable[[str, Sequence[Any]], Mapping[str, Any]],
+        full_effective_config: Mapping[str, Any],
+        lite_effective_config: Mapping[str, Any],
+    ) -> list[dict[str, Any]]:
+        """Run both sides through explicit deterministic test seams."""
+        self.validate_identity(self.full.identity, self.lite.identity)
+        selected = tuple(question_ids or sorted(self.full.questions))
+        results: list[dict[str, Any]] = []
+        for question_id in selected:
+            full_result = self.full.run_with_test_double(
+                question_id,
+                full_synthesize,
+                effective_config=full_effective_config,
             )
+            lite_result = self.lite.run_with_test_double(
+                question_id,
+                lite_synthesize,
+                effective_config=lite_effective_config,
+            )
+            self._validate_execution_pair(full_result, lite_result)
             results.append({"question_id": question_id, "full": full_result, "lite": lite_result})
         return results
 
