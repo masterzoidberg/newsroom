@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import tempfile
+import sqlite3
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -126,6 +127,17 @@ class _SemanticWorld:
             _source_id, document_id = identity
             self.documents[document.candidate_id] = document_id
             knowledge_time = document.retrieved_at or f"2026-08-25T00:00:0{index}Z"
+            conn = sqlite3.connect(self.db_path)
+            conn.execute(
+                "UPDATE sources SET created_at = ?, updated_at = ? WHERE id = ?",
+                (knowledge_time, knowledge_time, identity[0]),
+            )
+            conn.execute(
+                "UPDATE documents SET created_at = ?, first_seen_at = ? WHERE id = ?",
+                (knowledge_time, knowledge_time, document_id),
+            )
+            conn.commit()
+            conn.close()
             version = self.evidence.create_document_version(
                 document_id,
                 {
@@ -172,9 +184,17 @@ def _temporal_fixture_times(world: _SemanticWorld) -> tuple[str, str, str, str]:
     return _semantic_time(start, seconds=-1), start, end, _semantic_time(end, seconds=1)
 
 
+def _backdate_story(db_path: str | Path, story_id: str, timestamp: str) -> None:
+    conn = sqlite3.connect(db_path)
+    conn.execute("UPDATE stories SET created_at = ?, updated_at = ? WHERE id = ?", (timestamp, timestamp, story_id))
+    conn.commit()
+    conn.close()
+
+
 def _temporal_claim(world: _SemanticWorld, *, retract: bool = True) -> tuple[dict[str, Any], str, str]:
     before, first, second, after = _temporal_fixture_times(world)
     story = world.core.create_story({"headline": world.case.title})
+    _backdate_story(world.db_path, story["id"], first)
     candidate = world.case.candidates[0].candidate_id
     claim = world.evidence.create_claim(
         story["id"],
@@ -255,6 +275,7 @@ def _story_correction_as_of_observation(world: _SemanticWorld) -> _Observation:
     claim, before, after = _temporal_claim(world, retract=False)
     source = {"id": claim["story_id"]}
     target = world.core.create_story({"headline": "Corrected Story"})
+    _backdate_story(world.db_path, target["id"], after)
     world.evidence.reassign_claim(claim["id"], target["id"], reason="semantic as-of correction", occurred_at=world.case.observation_window.end)
     reads = TemporalReadService(world.db_path)
     first = world.case.observation_window.start or "2026-08-01T00:00:00Z"
@@ -267,6 +288,7 @@ def _story_correction_as_of_observation(world: _SemanticWorld) -> _Observation:
 def _story_split_as_of_observation(world: _SemanticWorld) -> _Observation:
     before, first, second, after = _temporal_fixture_times(world)
     source = world.core.create_story({"headline": "Split source"})
+    _backdate_story(world.db_path, source["id"], first)
     claims = [
         world.evidence.create_claim(source["id"], {"proposition": item.proposition, "created_at": first})
         for item in world.case.gold_claims[:2]

@@ -76,30 +76,51 @@ def router_effective_config(router: Any) -> dict[str, Any]:
             "fallback_used": False,
         }
 
-    first = successful[0]
     last = successful[-1]
     effective_provider = "local" if last.route == "local" else last.provider
     effective_model = None if last.route == "local" else last.model
-    return {
+    result = {
         "effective_provider": effective_provider,
         "effective_model": effective_model,
         "provider_route": last.route,
-        "fallback_used": len({event.route for event in successful}) > 1,
+        "fallback_used": any(event.route == "local" for event in events),
     }
+    bundle = getattr(router, last.route, None)
+    provider = getattr(bundle, last.capability, None) if bundle is not None else None
+    provider_fields = {
+        "effective_temperature": "temperature",
+        "deterministic": "deterministic",
+        "effective_prompt_version": "prompt_version",
+        "effective_context_budget_tokens": "context_budget_tokens",
+        "effective_retrieval_limit": "retrieval_limit",
+        "effective_citation_limit": "citation_limit",
+    }
+    for effective_key, provider_key in provider_fields.items():
+        if provider is not None and hasattr(provider, provider_key):
+            result[effective_key] = getattr(provider, provider_key)
+    return result
 
 
 def add_effective_settings(
     effective: Mapping[str, Any],
     requested: Mapping[str, Any],
+    *,
+    observed: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Attach settings actually supplied by the benchmark adapter."""
+    """Attach settings observed from the adapter, never requested metadata."""
     result = dict(effective)
-    result.setdefault("effective_temperature", requested.get("temperature"))
-    result.setdefault("deterministic", requested.get("deterministic"))
-    result.setdefault("effective_prompt_version", requested.get("prompt_version"))
-    result.setdefault("effective_context_budget_tokens", requested.get("context_budget_tokens"))
-    result.setdefault("effective_retrieval_limit", requested.get("retrieval_limit"))
-    result.setdefault("effective_citation_limit", requested.get("citation_limit"))
+    observed = observed or {}
+    fields = (
+        "effective_temperature",
+        "deterministic",
+        "effective_prompt_version",
+        "effective_context_budget_tokens",
+        "effective_retrieval_limit",
+        "effective_citation_limit",
+    )
+    for field in fields:
+        if field not in result:
+            result[field] = observed.get(field)
     return result
 
 

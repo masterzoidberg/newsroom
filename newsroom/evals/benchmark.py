@@ -5,7 +5,8 @@ from pathlib import Path
 from typing import Any, Callable, Mapping, Sequence
 
 from ..ask import AskService
-from .benchmark_contract import compare_effective_conditions, verify_execution
+from .benchmark_contract import add_effective_settings, compare_effective_conditions, router_effective_config, verify_execution
+from .benchmark_provider import contract_router
 from .lite import (
     LiteHarness,
     LiteBenchmarkError,
@@ -30,49 +31,40 @@ def _identity(contract: Mapping[str, Any], binding: Mapping[str, str], model_con
         "corpus_manifest": binding["manifest_hash"],
         "question_contract": {
             "contract_id": contract["contract_id"],
-            "question_ids": tuple(sorted(str(item["id"]) for item in questions)),
+            "question_ids": tuple(str(item["id"]) for item in questions),
         },
         "model_config": dict(model_config),
         "blinding": dict(contract["blinding"]),
     }
 
 
-def _full_effective_config(answer: Mapping[str, Any]) -> dict[str, Any]:
+def _full_effective_config(answer: Mapping[str, Any], router: Any) -> dict[str, Any]:
     """Translate AskService's recorded route into honest benchmark metadata."""
-    route = str(answer.get("provider_route") or "execution_unavailable")
-    if route.startswith("local"):
-        provider = "local"
-        model = None
-    else:
-        provider = None
-        model = None
     raw_retrieval = answer.get("retrieval")
     retrieval: Mapping[str, Any] = raw_retrieval if isinstance(raw_retrieval, Mapping) else {}
-    return {
-        "effective_provider": provider,
-        "effective_model": model,
-        "provider_route": route,
-        "fallback_used": route.endswith("_fallback"),
-        "effective_temperature": None,
-        "deterministic": None,
-        "effective_prompt_version": None,
-        "effective_context_budget_tokens": retrieval.get("context_budget_tokens"),
-        "effective_retrieval_limit": None,
-        "effective_citation_limit": None,
-    }
+    return add_effective_settings(
+        router_effective_config(router),
+        {},
+        observed={
+            "effective_context_budget_tokens": retrieval.get("context_budget"),
+            "effective_retrieval_limit": retrieval.get("retrieval_limit"),
+            "effective_citation_limit": retrieval.get("citation_limit"),
+        },
+    )
 
 
 class FullBenchmarkRunner:
     """Run the frozen question set through the real Ask Newsroom service."""
 
-    def __init__(self, db_path: str | Path, *, contract: Mapping[str, Any] | None = None):
+    def __init__(self, db_path: str | Path, *, contract: Mapping[str, Any] | None = None, router: Any | None = None):
         self.db_path = Path(db_path).resolve()
         self.contract = contract or load_contract()
         self.binding = _require_frozen_binding(self.db_path, self.contract)
         self.questions = {item["id"]: item for item in self.contract["questions"]}
         self.model_config = _model_config(self.contract)
         self.identity = _identity(self.contract, self.binding, self.model_config)
-        self.ask = AskService(self.db_path)
+        self.router = router or contract_router(self.contract)
+        self.ask = AskService(self.db_path, max_citations=int(self.model_config["citation_limit"]))
 
     def run(self, question_id: str) -> dict[str, Any]:
         if question_id not in self.questions:
@@ -83,14 +75,26 @@ class FullBenchmarkRunner:
             conversation["id"],
             question,
             context_budget=int(self.model_config["context_budget_tokens"]),
+            provider_mode="hosted",
+            cost_cap_usd=0.05,
+            retrieval_limit=int(self.model_config["retrieval_limit"]),
+            synthesis_router=self.router,
+            synthesis_work_id=f"full:{question_id}",
         )
-        return self._envelope(
+        result = self._envelope(
             question_id,
             question,
             answer,
-            effective_config=_full_effective_config(answer),
+            effective_config=_full_effective_config(answer, self.router),
             test_double=False,
         )
+        verification = result["contract_verification"]
+        if not verification["valid"]:
+            raise LiteBenchmarkError(
+                "Full benchmark production execution did not satisfy the frozen contract: "
+                + ", ".join(verification["mismatch_fields"])
+            )
+        return result
 
     def run_with_test_double(
         self,
@@ -201,7 +205,7 @@ class PairedBenchmarkOrchestrator:
         lite_effective_config: Mapping[str, Any] | None = None,
     ) -> list[dict[str, Any]]:
         self.validate_identity(self.full.identity, self.lite.identity)
-        selected = tuple(question_ids or sorted(self.full.questions))
+        selected = tuple(question_ids or (item["id"] for item in self.full.contract["questions"]))
         results: list[dict[str, Any]] = []
         for question_id in selected:
             full_result = self.full.run(question_id)
@@ -232,7 +236,7 @@ class PairedBenchmarkOrchestrator:
     ) -> list[dict[str, Any]]:
         """Run both sides through explicit deterministic test seams."""
         self.validate_identity(self.full.identity, self.lite.identity)
-        selected = tuple(question_ids or sorted(self.full.questions))
+        selected = tuple(question_ids or (item["id"] for item in self.full.contract["questions"]))
         results: list[dict[str, Any]] = []
         for question_id in selected:
             full_result = self.full.run_with_test_double(

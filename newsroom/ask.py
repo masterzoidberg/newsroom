@@ -95,13 +95,24 @@ def _parse_time(value: str | None):
     return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
 
 
-def _is_stale(value: str | None, *, stale_after_days: int = STALE_AFTER_DAYS) -> bool:
+def _is_stale(
+    value: str | None,
+    *,
+    stale_after_days: int = STALE_AFTER_DAYS,
+    reference_time: str | datetime | None = None,
+) -> bool:
     from datetime import datetime, timedelta, timezone
 
     parsed = _parse_time(value)
     if parsed is None:
         return True
-    return datetime.now(timezone.utc) - parsed > timedelta(days=stale_after_days)
+    if reference_time is None:
+        reference = datetime.now(timezone.utc)
+    else:
+        reference = _parse_time(str(reference_time))
+        if reference is None:
+            return True
+    return reference - parsed > timedelta(days=stale_after_days)
 
 
 class AskService:
@@ -217,11 +228,16 @@ class AskService:
         cost_cap_usd: float = 0.0,
         cancel_check: Callable[[], bool] | None = None,
         as_of: str | datetime | None = None,
+        retrieval_limit: int | None = None,
+        synthesis_router: Any | None = None,
+        synthesis_work_id: str | None = None,
     ) -> dict[str, Any]:
         prompt = self._validate_prompt(prompt)
         boundary = normalize_as_of(as_of) if as_of is not None else None
         if context_budget < 100 or context_budget > self.max_context_units:
             raise DomainValidation(f"context_budget must be between 100 and {self.max_context_units}")
+        if retrieval_limit is not None and (isinstance(retrieval_limit, bool) or not 1 <= retrieval_limit <= 100):
+            raise DomainValidation("retrieval_limit must be between 1 and 100")
         if provider_mode not in {"local", "hosted"}:
             raise DomainValidation("provider_mode must be local or hosted")
         if cost_cap_usd < 0:
@@ -237,7 +253,7 @@ class AskService:
         if provider_mode == "hosted":
             if cost_cap_usd <= 0:
                 return self._finish(run_id, self._refused_result(run_id, conversation_id, turn_number, "provider_cost_cap", "Hosted escalation is disabled because this request has no positive cost cap."), provider_route="hosted_blocked")
-            if not self.hosted_enabled:
+            if synthesis_router is None and not self.hosted_enabled:
                 provider_mode = "local"
                 fallback_route = "local_deterministic_fallback"
 
@@ -250,10 +266,20 @@ class AskService:
                 cancel_check,
                 run_id,
                 as_of=boundary,
+                retrieval_limit=retrieval_limit,
             )
             if retrieved.get("cancelled"):
                 return self._finish(run_id, self._cancelled_result(run_id, conversation_id, turn_number))
-            result = self._compose(run_id, conversation_id, turn_number, prompt, retrieved, context_budget)
+            result = self._compose(
+                run_id,
+                conversation_id,
+                turn_number,
+                prompt,
+                retrieved,
+                context_budget,
+                synthesis_router=synthesis_router,
+                synthesis_work_id=synthesis_work_id,
+            )
             return self._finish(run_id, result, provider_route=fallback_route or result.get("provider_route"))
         except DomainValidation:
             raise
@@ -346,14 +372,15 @@ class AskService:
         run_id: str,
         *,
         as_of: str | None = None,
+        retrieval_limit: int | None = None,
     ) -> dict[str, Any]:
         terms = _tokens(prompt)
         if not terms:
-            return {"items": [], "claims": {}, "evidence": {}, "notes": [], "reports": [], "questions": [], "gaps": [], "tasks": [], "terms": [], "packet_ids": [], "grounding_evidence_count": 0, "as_of": as_of}
+            return {"items": [], "claims": {}, "evidence": {}, "notes": [], "reports": [], "questions": [], "gaps": [], "tasks": [], "terms": [], "packet_ids": [], "grounding_evidence_count": 0, "as_of": as_of, "retrieval_limit": retrieval_limit or 100}
         if self._cancelled(run_id, cancel_check):
             return {"cancelled": True}
         try:
-            shared = self.search.retrieve_typed(prompt, max_results=100)
+            shared = self.search.retrieve_typed(prompt, max_results=retrieval_limit or 100)
         except DomainValidation:
             shared = {"items": [], "candidate_count": 0, "terms": terms}
         items = {(item["entity_type"], item["entity_id"]): item for item in shared.get("items", [])}
@@ -361,15 +388,25 @@ class AskService:
         conn = storage.connect(self.db_path)
         try:
             scope = self._scope_sets(conn, scope_type, scope_id)
+            if as_of is not None:
+                shared_items = self.temporal.filter_items_as_of(shared.get("items", []), as_of, terms=terms, conn=conn)
+            else:
+                shared_items = shared.get("items", [])
+            items = {(item["entity_type"], item["entity_id"]): item for item in shared_items}
             items = {key: item for key, item in items.items() if self._item_in_scope(item, scope)}
             self._add_report_items(conn, items, terms, scope)
+            if as_of is not None:
+                items = {
+                    (item["entity_type"], item["entity_id"]): item
+                    for item in self.temporal.filter_items_as_of(items.values(), as_of, terms=terms, conn=conn)
+                }
             claim_ids: set[str] = set()
             evidence_ids: set[str] = set()
             note_ids: set[str] = set()
             question_ids: set[str] = set()
             task_ids: set[str] = set()
             for item in items.values():
-                self._expand_item(conn, item, claim_ids, evidence_ids, note_ids, question_ids, task_ids)
+                self._expand_item(conn, item, claim_ids, evidence_ids, note_ids, question_ids, task_ids, as_of=as_of)
             claims = self._load_claims(conn, sorted(claim_ids))
             evidence = self._load_evidence(conn, sorted(evidence_ids | {ev["id"] for claim in claims.values() for ev in claim["evidence"]}))
             if as_of is not None:
@@ -381,11 +418,62 @@ class AskService:
                     for evidence_item in claim["evidence"]
                 }
             notes = self._load_notes(conn, sorted(note_ids))
-            notes.extend(self._load_question_notes(conn, sorted(question_ids)))
-            questions = self._load_questions(conn, sorted(question_ids))
+            if as_of is not None:
+                boundary_time = _parse_time(as_of)
+                notes = [
+                    note
+                    for note in notes
+                    if boundary_time is not None
+                    and _parse_time(note.get("created_at")) is not None
+                    and _parse_time(note.get("created_at")) <= boundary_time
+                    and self.temporal.eligible_as_of("note", note["id"], as_of, conn=conn)
+                ]
+                notes.extend(
+                    {
+                        **note,
+                        "id": f"research-question:{note['id']}",
+                        "citation_type": "question_note",
+                        "citation_id": note["id"],
+                        "object_type": "research_question",
+                        "object_id": note["question_id"],
+                    }
+                    for note in self.temporal.question_notes_as_of(question_ids, as_of, conn=conn)
+                )
+                questions = [
+                    question
+                    for question in (self.temporal.question_as_of(identifier, as_of, conn=conn) for identifier in sorted(question_ids))
+                    if question is not None
+                ]
+            else:
+                notes.extend(self._load_question_notes(conn, sorted(question_ids)))
+                questions = self._load_questions(conn, sorted(question_ids))
             reports = self._load_reports(conn, [item["entity_id"] for item in items.values() if item["entity_type"] == "report"])
-            gaps = self._load_gaps(conn, sorted(question_ids))
-            tasks = self._load_tasks(conn, sorted(task_ids | {gap["task_id"] for gap in gaps if gap.get("task_id")} | {item["entity_id"] for item in items.values() if item["entity_type"] == "research_task"}))
+            if as_of is not None:
+                historical_reports = []
+                for identifier in [item["entity_id"] for item in items.values() if item["entity_type"] == "report"]:
+                    try:
+                        value = self.temporal.report_as_of(identifier, as_of)
+                    except DomainNotFound:
+                        continue
+                    report = value["report"]
+                    revision = value.get("revision") or {}
+                    historical_reports.append(
+                        {
+                            "id": report["id"],
+                            "name": report["name"],
+                            "current_revision_id": revision.get("id"),
+                            "current_status": revision.get("current_status") or report.get("status"),
+                            "sections": revision.get("sections", {}),
+                        }
+                    )
+                reports = historical_reports
+            gaps = self._load_gaps(conn, sorted(question_ids)) if as_of is None else self.temporal.gaps_as_of(question_ids, as_of, conn=conn)
+            gap_task_ids = {gap["task_id"] for gap in gaps if gap.get("task_id")} if as_of is None else set()
+            task_identifiers = task_ids | gap_task_ids | {item["entity_id"] for item in items.values() if item["entity_type"] == "research_task"}
+            tasks = self._load_tasks(conn, sorted(task_identifiers)) if as_of is None else [
+                {**task, "outcome": _load_json(task.get("outcome_json"), {})}
+                for task in self.temporal.tasks_as_of(task_identifiers, as_of, conn=conn)
+            ]
             correction_story_ids = set(scope.get("stories", set()))
             correction_story_ids.update(
                 claim.get("story_id") for claim in claims.values() if claim.get("story_id")
@@ -481,6 +569,7 @@ class AskService:
                 ),
                 "retrieval_ranking": shared.get("ranking", "exact_match_then_bm25_then_entity_type_then_entity_id"),
                 "as_of": as_of,
+                "retrieval_limit": retrieval_limit or 100,
             }
         finally:
             conn.close()
@@ -608,7 +697,18 @@ class AskService:
         for row in rows:
             items[("report", row["id"])] = {"entity_type": "report", "entity_id": row["id"], "title": row["name"], "body": "living report", "score": 0.0, "report_revision_id": row["current_revision_id"]}
 
-    def _expand_item(self, conn, item: Mapping[str, Any], claim_ids: set[str], evidence_ids: set[str], note_ids: set[str], question_ids: set[str], task_ids: set[str]) -> None:
+    def _expand_item(
+        self,
+        conn,
+        item: Mapping[str, Any],
+        claim_ids: set[str],
+        evidence_ids: set[str],
+        note_ids: set[str],
+        question_ids: set[str],
+        task_ids: set[str],
+        *,
+        as_of: str | None = None,
+    ) -> None:
         entity, identifier = item["entity_type"], item["entity_id"]
         if entity == "claim":
             claim_ids.add(identifier)
@@ -623,8 +723,11 @@ class AskService:
             claim_ids.update(row[0] for row in conn.execute("SELECT c.id FROM claims c JOIN story_subjects ss ON ss.story_id = c.story_id WHERE ss.subject_id = ?", (identifier,)))
         elif entity == "question":
             question_ids.add(identifier)
-            claim_ids.update(row[0] for row in conn.execute("SELECT claim_id FROM research_question_claims WHERE question_id = ?", (identifier,)))
-            evidence_ids.update(row[0] for row in conn.execute("SELECT evidence_span_id FROM research_question_evidence WHERE question_id = ?", (identifier,)))
+            boundary = " AND julianday(created_at) <= julianday(?)" if as_of is not None else ""
+            claim_params = (identifier, as_of) if as_of is not None else (identifier,)
+            evidence_params = (identifier, as_of) if as_of is not None else (identifier,)
+            claim_ids.update(row[0] for row in conn.execute(f"SELECT claim_id FROM research_question_claims WHERE question_id = ?{boundary}", claim_params))
+            evidence_ids.update(row[0] for row in conn.execute(f"SELECT evidence_span_id FROM research_question_evidence WHERE question_id = ?{boundary}", evidence_params))
         elif entity == "note":
             if identifier.startswith("research-question:"):
                 question_ids.add(identifier.split(":", 1)[1])
@@ -642,7 +745,9 @@ class AskService:
             row = conn.execute("SELECT question_id, gap_id FROM research_tasks WHERE id = ?", (identifier,)).fetchone()
             if row:
                 question_ids.add(row[0])
-                claim_ids.update(item[0] for item in conn.execute("SELECT claim_id FROM research_question_claims WHERE question_id = ?", (row[0],)))
+                boundary = " AND julianday(created_at) <= julianday(?)" if as_of is not None else ""
+                params = (row[0], as_of) if as_of is not None else (row[0],)
+                claim_ids.update(item[0] for item in conn.execute(f"SELECT claim_id FROM research_question_claims WHERE question_id = ?{boundary}", params))
         elif entity == "source":
             document_ids = [row[0] for row in conn.execute("SELECT id FROM documents WHERE source_id = ?", (identifier,))]
             if document_ids:
@@ -753,7 +858,29 @@ class AskService:
         rows = conn.execute("SELECT lr.id, lr.name, lr.current_revision_id, rr.current_status, rr.sections_json FROM living_reports lr LEFT JOIN report_revisions rr ON rr.id = lr.current_revision_id WHERE lr.id IN ({}) ORDER BY lr.id".format(_placeholders(identifiers)), tuple(identifiers)).fetchall()
         return [{**dict(row), "sections": _load_json(row["sections_json"], {})} for row in rows]
 
-    def _compose(self, run_id: str, conversation_id: str, turn_number: int, prompt: str, retrieved: Mapping[str, Any], context_budget: int) -> dict[str, Any]:
+    def _compose(
+        self,
+        run_id: str,
+        conversation_id: str,
+        turn_number: int,
+        prompt: str,
+        retrieved: Mapping[str, Any],
+        context_budget: int,
+        *,
+        synthesis_router: Any | None = None,
+        synthesis_work_id: str | None = None,
+    ) -> dict[str, Any]:
+        if synthesis_router is not None:
+            return self._compose_with_router(
+                run_id,
+                conversation_id,
+                turn_number,
+                prompt,
+                retrieved,
+                context_budget,
+                synthesis_router,
+                synthesis_work_id=synthesis_work_id,
+            )
         citation_map: dict[tuple[str, str], dict[str, Any]] = {}
         statements: list[dict[str, Any]] = []
         packet_ids = set(retrieved.get("packet_ids", []))
@@ -812,7 +939,7 @@ class AskService:
                 )
                 evidence_citations.append(evidence_citation)
                 (contradictions if evidence["relationship"] == "contradicts" else support).append(evidence)
-                if _is_stale(evidence["retrieved_at"], stale_after_days=self.stale_after_days):
+                if _is_stale(evidence["retrieved_at"], stale_after_days=self.stale_after_days, reference_time=retrieved.get("as_of")):
                     stale_count += 1
             source_citations = []
             source_pairs = {(evidence.get("source_id"), evidence.get("source_name")) for evidence in claim["evidence"] if evidence["id"] in retrieved.get("evidence", {}) and evidence.get("source_id")}
@@ -918,7 +1045,7 @@ class AskService:
         citations = list(citation_map.values())
         conn = storage.connect(self.db_path)
         try:
-            citations = [self._resolve_citation(conn, citation, packet_ids=packet_ids) for citation in citations]
+            citations = [self._resolve_citation(conn, citation, packet_ids=packet_ids, as_of=retrieved.get("as_of")) for citation in citations]
         finally:
             conn.close()
         if not retrieved.get("grounding_evidence_count"):
@@ -936,6 +1063,112 @@ class AskService:
             "retrieval": self._retrieval_metadata(retrieved, context_budget, stale_count=stale_count, ambiguous=ambiguous),
             "provider_route": "local_deterministic",
             "estimated_cost_usd": 0.0,
+            "refusal_code": None,
+        }
+
+    def _compose_with_router(
+        self,
+        run_id: str,
+        conversation_id: str,
+        turn_number: int,
+        prompt: str,
+        retrieved: Mapping[str, Any],
+        context_budget: int,
+        synthesis_router: Any,
+        *,
+        synthesis_work_id: str | None,
+    ) -> dict[str, Any]:
+        """Use the richer Full retrieval packet with a contract-bound provider."""
+        from .ai import ClaimDraft
+
+        drafts = [
+            ClaimDraft(
+                proposition=" ".join(
+                    filter(
+                        None,
+                        (
+                            claim.get("proposition"),
+                            *(
+                                f"Evidence: {evidence.get('excerpt')}"
+                                for evidence in claim.get("evidence", [])
+                                if evidence.get("id") in retrieved.get("evidence", {})
+                            ),
+                        ),
+                    )
+                )
+            )
+            for claim in retrieved.get("claims", {}).values()
+        ]
+        if not retrieved.get("grounding_evidence_count") or not drafts:
+            return self._refused_result(
+                run_id,
+                conversation_id,
+                turn_number,
+                "insufficient_evidence",
+                "Newsroom does not have enough qualifying Claim and Evidence records to answer that question.",
+                retrieval=self._retrieval_metadata(retrieved, context_budget),
+            )
+        output = synthesis_router.synthesis(prompt, drafts, work_id=synthesis_work_id)
+        successful = [
+            event
+            for event in getattr(synthesis_router, "last_execution_events", ())
+            if getattr(event, "outcome", None) in {"succeeded", "low_confidence"}
+        ]
+        event = successful[-1] if successful else None
+        citations: list[dict[str, Any]] = []
+        seen_documents: set[str] = set()
+        for claim in retrieved.get("claims", {}).values():
+            for evidence in claim.get("evidence", []):
+                if evidence.get("id") not in retrieved.get("evidence", {}) or evidence.get("document_id") in seen_documents:
+                    continue
+                document_id = evidence.get("document_id")
+                if not document_id:
+                    continue
+                seen_documents.add(document_id)
+                citations.append(
+                    {
+                        "id": f"cite_{len(citations) + 1}",
+                        "object_type": "evidence",
+                        "object_id": evidence["id"],
+                        "document_id": document_id,
+                        "document_version_id": evidence.get("document_version_id"),
+                        "source_id": evidence.get("source_id"),
+                        "label": evidence.get("excerpt", "")[:300],
+                        "kind": "evidence",
+                        "retrieved_at": evidence.get("retrieved_at"),
+                    }
+                )
+                if len(citations) >= self.max_citations:
+                    break
+            if len(citations) >= self.max_citations:
+                break
+        conn = storage.connect(self.db_path)
+        try:
+            citations = [
+                self._resolve_citation(
+                    conn,
+                    citation,
+                    packet_ids=set(retrieved.get("packet_ids", [])),
+                    as_of=retrieved.get("as_of"),
+                )
+                for citation in citations
+            ]
+        finally:
+            conn.close()
+        answer = output.model_dump() if hasattr(output, "model_dump") else dict(output)
+        route = getattr(event, "route", "execution_unavailable") if event is not None else "execution_unavailable"
+        cost = float(getattr(event, "estimated_cost_usd", 0.0) or 0.0) if event is not None else 0.0
+        return {
+            "run_id": run_id,
+            "conversation_id": conversation_id,
+            "turn_number": turn_number,
+            "status": "answered",
+            "answer": str(answer.get("summary") or answer.get("headline") or ""),
+            "statements": [],
+            "citations": citations,
+            "retrieval": self._retrieval_metadata(retrieved, context_budget),
+            "provider_route": route,
+            "estimated_cost_usd": cost,
             "refusal_code": None,
         }
 
@@ -960,6 +1193,7 @@ class AskService:
             ][:20],
             "grounding_evidence_count": int(retrieved.get("grounding_evidence_count", 0)),
             "retrieval_ranking": retrieved.get("retrieval_ranking"),
+            "retrieval_limit": int(retrieved.get("retrieval_limit", 100)),
             "as_of": retrieved.get("as_of"),
         }
 
@@ -1025,9 +1259,13 @@ class AskService:
             "completed_at": row["completed_at"],
         }
 
-    def _resolve_citation(self, conn, citation: dict[str, Any], *, packet_ids: set[str] | None = None) -> dict[str, Any]:
-        if packet_ids and f"{citation.get('object_type')}:{citation.get('object_id')}" not in packet_ids:
-            raise DomainConflict(f"citation target {citation.get('object_id')} was not part of the retrieval packet")
+    def _resolve_citation(self, conn, citation: dict[str, Any], *, packet_ids: set[str] | None = None, as_of: str | None = None) -> dict[str, Any]:
+        object_type = citation.get("object_type")
+        object_id = citation.get("object_id")
+        if not isinstance(object_type, str) or not isinstance(object_id, str):
+            raise DomainValidation("citation object type and object id are required")
+        if packet_ids and f"{object_type}:{object_id}" not in packet_ids:
+            raise DomainConflict(f"citation target {object_id} was not part of the retrieval packet")
         table_map = {
             "story": ("stories", "id", "deleted_at IS NULL"),
             "claim": ("claims", "id", "1 = 1"),
@@ -1048,13 +1286,17 @@ class AskService:
             "article_analysis": ("article_analyses", "id", "1 = 1"),
             "story_correction": ("story_corrections", "id", "1 = 1"),
         }
-        definition = table_map.get(citation.get("object_type"))
+        definition = table_map.get(object_type)
         if definition is None:
             raise DomainValidation("citation object type is not resolvable")
         table, key, condition = definition
-        found = conn.execute(f"SELECT 1 FROM {table} WHERE {key} = ? AND {condition}", (citation.get("object_id"),)).fetchone()
+        found = conn.execute(f"SELECT 1 FROM {table} WHERE {key} = ? AND {condition}", (object_id,)).fetchone()
         if found is None:
-            raise DomainConflict(f"citation target {citation.get('object_id')} could not be resolved")
+            raise DomainConflict(f"citation target {object_id} could not be resolved")
+        if as_of is not None and not self.temporal.eligible_as_of(
+            object_type, object_id, as_of, conn=conn
+        ):
+            raise DomainConflict(f"citation target {object_id} was not eligible at as_of")
         citation["resolvable"] = True
         return citation
 

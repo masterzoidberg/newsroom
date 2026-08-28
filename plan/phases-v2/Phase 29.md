@@ -12,7 +12,7 @@ The Phase 28 correction chain is accepted:
 Phase 28
 Phase 28.5
 Phase 28.75
-Phase 28.8
+Phase 28.875
 ```
 
 Latest accepted reported repository state:
@@ -48,7 +48,7 @@ plan/phases-v2/Phase 27.md
 plan/phases-v2/Phase 28.md
 plan/phases-v2/Phase 28.5.md
 plan/phases-v2/Phase 28.75.md
-plan/phases-v2/Phase 28.8.md
+plan/phases-v2/Phase 28.875.md
 plan/phases-v2/Strategic Architecture Review.md
 plan/phases-v2/Final Architecture Reconciliation Memo.md
 docs/reviews/PHASE_29_PRE_IMPLEMENTATION_ADVERSARIAL_REVIEW.md
@@ -502,7 +502,7 @@ T2 cites version B
 retraction / un-confirmation across knowledge time
 ```
 
-Every observed result must come from actual Newsroom code through the executable semantic evaluation system established in Phase 28.8.
+Every observed result must come from actual Newsroom code through the executable semantic evaluation system established in Phase 28.875.
 
 No decorative JSON cases.
 
@@ -858,7 +858,7 @@ Do not invent proxies.
 
 # 28. FROZEN FULL-vs-LITE RUN
 
-Use the accepted Phase 28.8 benchmark system.
+Use the accepted Phase 28.875 benchmark system.
 
 At comparison time:
 

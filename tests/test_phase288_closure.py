@@ -53,6 +53,55 @@ LOCAL_FALLBACK_EFFECTIVE_CONFIG = {
 }
 
 
+class _ContractBoundSynthesisProvider(DeterministicSynthesisProvider):
+    provider_name = "openai"
+    model_name = "gpt-4o-mini"
+    temperature = 0.0
+    deterministic = True
+    prompt_version = "lite-document-synthesis-v1"
+    context_budget_tokens = 6000
+    retrieval_limit = 8
+    citation_limit = 8
+
+
+def _contract_router():
+    return AIRouter(
+        local=CapabilityBundle(),
+        paid=CapabilityBundle(synthesis=_ContractBoundSynthesisProvider()),
+        policy=RoutePolicy(
+            local_enabled=False,
+            paid_enabled=True,
+            max_paid_calls=100,
+            max_paid_cost_usd=10.0,
+            max_paid_calls_per_work=1,
+            max_paid_cost_usd_per_work=1.0,
+        ),
+    )
+
+
+def _seed_contract_benchmark_db(tmp_db):
+    apply_migrations(tmp_db)
+    core = CoreService(tmp_db)
+    source = core.create_source({"name": "Benchmark source", "slug": "benchmark-source"})
+    document = core.create_document(
+        {
+            "source_id": source["id"],
+            "canonical_url": "https://benchmark.test/product-launch",
+            "title": "What product launch is described, and what date and quantity are explicitly reported?",
+        }
+    )
+    story = core.create_story({"headline": "Product launch January 1 quantity 10"})
+    ledger = EvidenceService(tmp_db)
+    version = ledger.create_document_version(
+        document["id"], {"content_hash": "z" * 64, "content_kind": "excerpt"}
+    )
+    span = ledger.create_evidence_span(version["id"], {"excerpt": "The product launch occurred January 1 with quantity 10."})
+    claim = ledger.create_claim(story["id"], {"proposition": "The product launch occurred January 1 with quantity 10."})
+    ledger.link_claim_evidence(claim["id"], {"evidence_span_id": span["id"], "relationship": "supports"})
+    ledger.set_claim_state(claim["id"], "supported", "benchmark support")
+    ledger.accept_claim(claim["id"])
+
+
 def _paired_test_doubles(tmp_db, *, full_effective_config, lite_effective_config):
     apply_migrations(tmp_db)
     contract = bind_contract(load_contract(), tmp_db)
@@ -188,17 +237,17 @@ def test_production_lite_rejects_callable_but_test_seam_accepts(tmp_db):
 
 def test_full_local_execution_is_rejected_for_openai_contract(tmp_db):
     apply_migrations(tmp_db)
-    runner = FullBenchmarkRunner(tmp_db, contract=bind_contract(load_contract(), tmp_db))
+    runner = FullBenchmarkRunner(
+        tmp_db,
+        contract=bind_contract(load_contract(), tmp_db),
+        router=AIRouter(
+            local=CapabilityBundle(synthesis=DeterministicSynthesisProvider()),
+            policy=RoutePolicy(local_enabled=True, paid_enabled=False),
+        ),
+    )
 
-    result = runner.run("q01")
-
-    verification = result["contract_verification"]
-    assert verification["valid"] is False
-    assert verification["status"] == "benchmark_contract_not_satisfied"
-    assert {"provider", "model"} <= set(verification["mismatch_fields"])
-    assert result["effective_config"]["provider_route"] == "local_deterministic"
-    assert result["effective_config"]["effective_provider"] == "local"
-    assert result["effective_config"]["effective_model"] is None
+    with pytest.raises(LiteBenchmarkError, match="contract"):
+        runner.run("q01")
 
 
 def test_lite_records_router_effective_route_instead_of_echoing_contract(tmp_db):
@@ -222,13 +271,46 @@ def test_lite_records_router_effective_route_instead_of_echoing_contract(tmp_db)
         router=router,
     )
 
-    result = harness.run("q01")
+    with pytest.raises(LiteBenchmarkError, match="contract"):
+        harness.run("q01")
 
-    assert result["effective_config"]["provider_route"] == "local"
-    assert result["effective_config"]["effective_provider"] == "local"
-    assert result["effective_config"]["effective_model"] is None
-    assert result["contract_verification"]["valid"] is False
-    assert {"provider", "model"} <= set(result["contract_verification"]["mismatch_fields"])
+
+def test_production_full_and_lite_runners_use_same_contract_bound_route(tmp_db):
+    _seed_contract_benchmark_db(tmp_db)
+    contract = bind_contract(load_contract(), tmp_db)
+    full = FullBenchmarkRunner(tmp_db, contract=contract, router=_contract_router())
+    lite = LiteHarness(tmp_db, contract=contract, router=_contract_router())
+
+    paired = PairedBenchmarkOrchestrator(full, lite).run(["q01"])
+    full_result = paired[0]["full"]
+    lite_result = paired[0]["lite"]
+
+    for result in (full_result, lite_result):
+        assert result["test_double"] is False
+        assert result["contract_verification"]["valid"] is True
+        assert result["effective_config"]["effective_provider"] == "openai"
+        assert result["effective_config"]["effective_model"] == "gpt-4o-mini"
+        assert result["effective_config"]["effective_temperature"] == 0.0
+        assert result["effective_config"]["deterministic"] is True
+        assert result["effective_config"]["effective_prompt_version"] == "lite-document-synthesis-v1"
+        assert result["effective_config"]["effective_context_budget_tokens"] == 6000
+        assert result["effective_config"]["effective_retrieval_limit"] == 8
+        assert result["effective_config"]["effective_citation_limit"] == 8
+
+    assert full_result["adapter"] == "newsroom.ask.AskService"
+    assert lite_result["scope"] == "documents_only"
+
+
+def test_production_benchmark_provider_unavailable_fails_closed(tmp_db, monkeypatch):
+    _seed_contract_benchmark_db(tmp_db)
+    monkeypatch.delenv("NEWSROOM_ANALYSIS_API_KEY", raising=False)
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    contract = bind_contract(load_contract(), tmp_db)
+
+    with pytest.raises(LiteBenchmarkError, match="contract"):
+        FullBenchmarkRunner(tmp_db, contract=contract).run("q01")
+    with pytest.raises(LiteBenchmarkError, match="AIRouter synthesis failed"):
+        LiteHarness(tmp_db, contract=contract).run("q01")
 
 
 def test_paired_matching_effective_conditions_are_accepted(tmp_db):
@@ -274,12 +356,8 @@ def test_full_runner_uses_actual_ask_adapter(tmp_db):
     with pytest.raises(TypeError):
         runner.run("q01", lambda question: {"answer": "bypass"})
 
-    result = runner.run("q01")
-
-    assert result["adapter"] == "newsroom.ask.AskService"
-    assert result["question_id"] == "q01"
-    assert "answer" in result
-    assert result["model_config"] == runner.model_config
+    with pytest.raises(LiteBenchmarkError, match="contract"):
+        runner.run("q01")
 
 
 def test_paired_orchestrator_rejects_identity_mismatch(tmp_db):
@@ -300,6 +378,17 @@ def test_paired_orchestrator_rejects_identity_mismatch(tmp_db):
             {**full.identity, "model_config": {**full.model_config, "model": "different"}},
             lite.identity,
         )
+
+
+def test_paired_orchestrator_rejects_question_order_mismatch(tmp_db):
+    apply_migrations(tmp_db)
+    contract = bind_contract(load_contract(), tmp_db)
+    reversed_contract = {**contract, "questions": list(reversed(contract["questions"]))}
+    full = FullBenchmarkRunner(tmp_db, contract=contract)
+    lite = LiteHarness(tmp_db, contract=reversed_contract)
+
+    with pytest.raises(PairedBenchmarkError, match="question_contract"):
+        PairedBenchmarkOrchestrator(full, lite)
 
 
 def test_schema36_history_field_and_query_execution_columns_are_truthful(tmp_path):

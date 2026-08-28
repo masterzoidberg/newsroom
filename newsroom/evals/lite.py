@@ -16,9 +16,10 @@ from pathlib import Path
 from typing import Any, Callable, Mapping, Sequence
 
 from .. import storage
-from ..ai import AIRouter, CapabilityBundle, ClaimDraft, RoutePolicy
+from ..ai import AIRouter, ClaimDraft
 from ..workbench import SearchService
 from .benchmark_contract import add_effective_settings, router_effective_config, verify_execution
+from .benchmark_provider import contract_router
 
 
 class LiteBenchmarkError(ValueError):
@@ -231,7 +232,7 @@ class LiteHarness:
             "corpus_manifest": self.binding["manifest_hash"],
             "question_contract": {
                 "contract_id": self.contract["contract_id"],
-                "question_ids": tuple(sorted(self.questions)),
+                "question_ids": tuple(str(item["id"]) for item in self.contract["questions"]),
             },
             "model_config": dict(self.model_config),
             "blinding": dict(self.contract["blinding"]),
@@ -278,19 +279,12 @@ class LiteHarness:
             raise LiteBenchmarkError("Lite synthesis route does not match the frozen provider/model contract")
         router = self.router
         if router is None:
-            if self.contract["provider"] != "local":
-                raise LiteBenchmarkError(
-                    "Lite production provider route is unavailable; configure the existing AIRouter"
-                )
-            router = AIRouter(
-                local=CapabilityBundle.local_defaults(),
-                policy=RoutePolicy(local_enabled=True, paid_enabled=False),
-            )
+            router = contract_router(self.contract)
             self.router = router
         question = self.questions[question_id]["question"]
         documents = self.retrieve(question)
         answer, effective_config = self._router_synthesis(question, documents, question_id=question_id)
-        return self._envelope(
+        result = self._envelope(
             question_id,
             question,
             documents,
@@ -298,6 +292,13 @@ class LiteHarness:
             effective_config=effective_config,
             test_double=False,
         )
+        verification = result["contract_verification"]
+        if not verification["valid"]:
+            raise LiteBenchmarkError(
+                "Lite benchmark production execution did not satisfy the frozen contract: "
+                + ", ".join(verification["mismatch_fields"])
+            )
+        return result
 
     def run_with_test_double(
         self,

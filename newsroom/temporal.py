@@ -44,6 +44,15 @@ def _before(column: str) -> str:
     return f"julianday({column}) <= julianday(?)"
 
 
+def _before_value(value: str | None, boundary: str) -> bool:
+    if not value:
+        return False
+    try:
+        return normalize_as_of(value) <= boundary
+    except DomainValidation:
+        return False
+
+
 def _json(value: str | None, default: Any) -> Any:
     if not value:
         return default
@@ -58,6 +67,350 @@ class TemporalReadService:
 
     def __init__(self, db_path: str | Path):
         self.db_path = Path(db_path)
+
+    def eligible_as_of(
+        self,
+        object_type: str,
+        object_id: str | None,
+        as_of: str | datetime,
+        *,
+        conn: sqlite3.Connection | None = None,
+    ) -> bool:
+        """Return whether one canonical object was knowable at ``as_of``.
+
+        This is intentionally an allow-list of domain timestamps.  Creation
+        time is sufficient for immutable records, while evidence, revisions,
+        corrections, and lineage use the timestamp at which that relationship
+        became available.  Unknown object types fail closed.
+        """
+
+        boundary = normalize_as_of(as_of)
+        owned = conn is None
+        connection = conn or storage.connect(self.db_path)
+        try:
+            kind = str(object_type).strip().casefold().replace("-", "_")
+            if object_id is None:
+                return False
+            identifier = str(object_id).strip()
+            if kind == "research_question":
+                kind = "question"
+            if kind == "question_note":
+                row = connection.execute(
+                    """SELECT n.created_at, q.created_at AS question_created_at,
+                              q.deleted_at AS question_deleted_at
+                       FROM research_question_notes n
+                       JOIN research_questions q ON q.id = n.question_id
+                      WHERE n.id = ?""",
+                    (identifier,),
+                ).fetchone()
+                return bool(row and self._known(row[0], boundary) and self._live(row[1], row[2], boundary))
+            if kind == "note" and identifier.startswith("research-question:"):
+                return self.eligible_as_of("question_note", identifier.split(":", 1)[1], boundary, conn=connection)
+            if kind == "claim_evidence":
+                row = connection.execute(
+                    "SELECT created_at, claim_id, evidence_span_id FROM claim_evidence WHERE id = ?",
+                    (identifier,),
+                ).fetchone()
+                return bool(
+                    row
+                    and self._known(row[0], boundary)
+                    and self.eligible_as_of("claim", row[1], boundary, conn=connection)
+                    and self.eligible_as_of("evidence", row[2], boundary, conn=connection)
+                )
+            if kind == "question_claim":
+                row = connection.execute(
+                    "SELECT created_at, question_id, claim_id FROM research_question_claims WHERE rowid = ?",
+                    (identifier,),
+                ).fetchone()
+                return bool(
+                    row
+                    and self._known(row[0], boundary)
+                    and self.eligible_as_of("question", row[1], boundary, conn=connection)
+                    and self.eligible_as_of("claim", row[2], boundary, conn=connection)
+                )
+
+            definitions = {
+                "source": ("sources", "created_at", "deleted_at"),
+                "document": ("documents", "created_at", None),
+                "document_version": ("document_versions", "retrieved_at", None),
+                "evidence": ("evidence_spans", "created_at", None),
+                "claim": ("claims", "created_at", None),
+                "story": ("stories", "created_at", "deleted_at"),
+                "story_revision": ("story_revisions", "created_at", None),
+                "subject": ("subjects", "created_at", "deleted_at"),
+                "entity": ("entities", "created_at", None),
+                "monitor": ("monitors", "created_at", None),
+                "watch": ("watches", "created_at", None),
+                "question": ("research_questions", "created_at", "deleted_at"),
+                "gap": ("research_question_gaps", "created_at", None),
+                "research_gap": ("research_question_gaps", "created_at", None),
+                "task": ("research_tasks", "created_at", None),
+                "research_task": ("research_tasks", "created_at", None),
+                "report": ("living_reports", "created_at", None),
+                "report_revision": ("report_revisions", "generated_at", None),
+                "report_revision_cause": ("report_revision_causes", "created_at", None),
+                "story_correction": ("story_corrections", "occurred_at", None),
+                "lineage": ("story_lineage", "created_at", None),
+                "note": ("notes", "created_at", None),
+            }
+            definition = definitions.get(kind)
+            if definition is None:
+                return False
+            table, time_column, deleted_column = definition
+            columns = f"{time_column}{', ' + deleted_column if deleted_column else ''}"
+            row = connection.execute(f"SELECT {columns} FROM {table} WHERE id = ?", (identifier,)).fetchone()
+            if row is None or not self._known(row[0], boundary):
+                return False
+            if deleted_column and not self._live(row[0], row[1], boundary):
+                return False
+            if kind == "document":
+                return self.eligible_as_of("source", self._foreign_id(connection, "documents", "source_id", identifier), boundary, conn=connection)
+            if kind == "document_version":
+                return self._known(row[0], boundary) and self.eligible_as_of(
+                    "document", self._foreign_id(connection, "document_versions", "document_id", identifier), boundary, conn=connection
+                )
+            if kind == "evidence":
+                return self.eligible_as_of(
+                    "document_version", self._foreign_id(connection, "evidence_spans", "document_version_id", identifier), boundary, conn=connection
+                )
+            if kind == "claim":
+                story_id = self._foreign_id(connection, "claims", "story_id", identifier)
+                return not story_id or self.eligible_as_of("story", story_id, boundary, conn=connection)
+            if kind == "story_revision":
+                return self.eligible_as_of("story", self._foreign_id(connection, "story_revisions", "story_id", identifier), boundary, conn=connection)
+            if kind == "question":
+                return True
+            if kind == "note":
+                object_row = connection.execute(
+                    "SELECT object_type, object_id, updated_at FROM notes WHERE id = ?",
+                    (identifier,),
+                ).fetchone()
+                if object_row is None:
+                    return False
+                parent_kind = str(object_row[0]).casefold().replace("-", "_")
+                return _before_value(object_row[2], boundary) and self.eligible_as_of(parent_kind, object_row[1], boundary, conn=connection)
+            if kind in {"gap", "research_gap", "task", "research_task"}:
+                if kind in {"gap", "research_gap"}:
+                    parent_id = self._foreign_id(connection, "research_question_gaps", "question_id", identifier)
+                else:
+                    parent_id = self._foreign_id(connection, "research_tasks", "question_id", identifier)
+                return self.eligible_as_of("question", parent_id, boundary, conn=connection) if parent_id else True
+            if kind == "report_revision":
+                return self.eligible_as_of("report", self._foreign_id(connection, "report_revisions", "report_id", identifier), boundary, conn=connection)
+            if kind == "report_revision_cause":
+                return self.eligible_as_of("report_revision", self._foreign_id(connection, "report_revision_causes", "revision_id", identifier), boundary, conn=connection)
+            return True
+        finally:
+            if owned:
+                connection.close()
+
+    @staticmethod
+    def _known(value: str | None, boundary: str) -> bool:
+        return bool(value) and _before_value(value, boundary)
+
+    @staticmethod
+    def _live(created_at: str | None, deleted_at: str | None, boundary: str) -> bool:
+        return bool(created_at) and _before_value(created_at, boundary) and (not deleted_at or not _before_value(deleted_at, boundary))
+
+    @staticmethod
+    def _foreign_id(conn: sqlite3.Connection, table: str, column: str, identifier: str) -> str | None:
+        row = conn.execute(f"SELECT {column} FROM {table} WHERE id = ?", (identifier,)).fetchone()
+        return str(row[0]) if row and row[0] is not None else None
+
+    def question_as_of(self, question_id: str, as_of: str | datetime, *, conn: sqlite3.Connection | None = None) -> dict[str, Any] | None:
+        boundary = normalize_as_of(as_of)
+        owned = conn is None
+        connection = conn or storage.connect(self.db_path)
+        try:
+            row = connection.execute("SELECT * FROM research_questions WHERE id = ?", (question_id,)).fetchone()
+            if row is None or not self.eligible_as_of("question", question_id, boundary, conn=connection):
+                return None
+            result = dict(row)
+            status = connection.execute(
+                f"SELECT to_status, reason FROM research_question_history WHERE question_id = ? AND {_before('created_at')} ORDER BY julianday(created_at) DESC, rowid DESC LIMIT 1",
+                (question_id, boundary),
+            ).fetchone()
+            assessment = connection.execute(
+                f"SELECT to_state FROM research_question_assessment_history WHERE question_id = ? AND {_before('created_at')} ORDER BY julianday(created_at) DESC, id DESC LIMIT 1",
+                (question_id, boundary),
+            ).fetchone()
+            result["status"] = status[0] if status else "unknown"
+            result["resolution_note"] = status[1] if status and result["status"] in {"resolved", "abandoned"} else None
+            result["assessment_state"] = assessment[0] if assessment else "unknown"
+            result["assessment_explanation"] = "Historical assessment is unavailable from stored history." if assessment is None else result.get("assessment_explanation")
+            result["as_of"] = boundary
+            return result
+        finally:
+            if owned:
+                connection.close()
+
+    def question_notes_as_of(
+        self,
+        question_ids: Iterable[str],
+        as_of: str | datetime,
+        *,
+        conn: sqlite3.Connection | None = None,
+    ) -> list[dict[str, Any]]:
+        values = tuple(dict.fromkeys(str(item) for item in question_ids if str(item)))
+        if not values:
+            return []
+        boundary = normalize_as_of(as_of)
+        owned = conn is None
+        connection = conn or storage.connect(self.db_path)
+        try:
+            rows = connection.execute(
+                f"SELECT * FROM research_question_notes WHERE question_id IN ({','.join('?' for _ in values)}) AND {_before('created_at')} ORDER BY created_at, id",
+                [*values, boundary],
+            ).fetchall()
+            return [dict(row) for row in rows if self.eligible_as_of("question_note", row["id"], boundary, conn=connection)]
+        finally:
+            if owned:
+                connection.close()
+
+    def gaps_as_of(
+        self,
+        question_ids: Iterable[str],
+        as_of: str | datetime,
+        *,
+        conn: sqlite3.Connection | None = None,
+    ) -> list[dict[str, Any]]:
+        values = tuple(dict.fromkeys(str(item) for item in question_ids if str(item)))
+        if not values:
+            return []
+        boundary = normalize_as_of(as_of)
+        owned = conn is None
+        connection = conn or storage.connect(self.db_path)
+        try:
+            rows = connection.execute(
+                f"SELECT * FROM research_question_gaps WHERE question_id IN ({','.join('?' for _ in values)}) AND {_before('created_at')} ORDER BY question_id, created_at, id",
+                [*values, boundary],
+            ).fetchall()
+            result: list[dict[str, Any]] = []
+            for row in rows:
+                if not self.eligible_as_of("research_gap", row["id"], boundary, conn=connection):
+                    continue
+                item = dict(row)
+                history = connection.execute(
+                    f"SELECT to_status FROM research_question_gap_history WHERE gap_id = ? AND {_before('created_at')} ORDER BY julianday(created_at) DESC, id DESC LIMIT 1",
+                    (row["id"], boundary),
+                ).fetchone()
+                item["status"] = history[0] if history else "unknown"
+                item["as_of"] = boundary
+                result.append(item)
+            return result
+        finally:
+            if owned:
+                connection.close()
+
+    def tasks_as_of(
+        self,
+        task_ids: Iterable[str],
+        as_of: str | datetime,
+        *,
+        conn: sqlite3.Connection | None = None,
+    ) -> list[dict[str, Any]]:
+        values = tuple(dict.fromkeys(str(item) for item in task_ids if str(item)))
+        if not values:
+            return []
+        boundary = normalize_as_of(as_of)
+        owned = conn is None
+        connection = conn or storage.connect(self.db_path)
+        try:
+            rows = connection.execute(
+                f"SELECT * FROM research_tasks WHERE id IN ({','.join('?' for _ in values)}) AND {_before('created_at')} ORDER BY created_at, id",
+                [*values, boundary],
+            ).fetchall()
+            result: list[dict[str, Any]] = []
+            for row in rows:
+                if not self.eligible_as_of("research_task", row["id"], boundary, conn=connection):
+                    continue
+                item = dict(row)
+                if not _before_value(item.get("updated_at"), boundary):
+                    item["status"] = "unknown"
+                    item["outcome_json"] = "{}"
+                    item["error_code"] = None
+                    item["error_detail"] = None
+                    item["historical_state"] = "unavailable"
+                item["as_of"] = boundary
+                result.append(item)
+            return result
+        finally:
+            if owned:
+                connection.close()
+
+    def filter_items_as_of(
+        self,
+        items: Iterable[Mapping[str, Any]],
+        as_of: str | datetime,
+        *,
+        terms: Iterable[str] = (),
+        conn: sqlite3.Connection | None = None,
+    ) -> list[dict[str, Any]]:
+        """Filter and project current search rows into a historical packet."""
+
+        boundary = normalize_as_of(as_of)
+        wanted = tuple(str(term).casefold() for term in terms if str(term))
+        owned = conn is None
+        connection = conn or storage.connect(self.db_path)
+        try:
+            result: list[dict[str, Any]] = []
+            for raw in items:
+                item = dict(raw)
+                kind = str(item.get("entity_type") or "").casefold()
+                identifier = str(item.get("entity_id") or "")
+                eligibility_id = identifier
+                eligibility_kind = kind
+                if kind == "note" and identifier.startswith("research-question:"):
+                    eligibility_kind = "question_note"
+                    eligibility_id = identifier.split(":", 1)[1]
+                if not self.eligible_as_of(eligibility_kind, eligibility_id, boundary, conn=connection):
+                    continue
+                if kind == "story":
+                    story = self.story_as_of(identifier, boundary)
+                    revision = story.get("revision") or {}
+                    item["title"] = revision.get("headline") or identifier
+                    item["body"] = " ".join(filter(None, (revision.get("summary"), revision.get("why_it_matters"), story["story"].get("lifecycle"))))
+                    item["lifecycle"] = story["story"].get("lifecycle")
+                elif kind == "question":
+                    question = self.question_as_of(identifier, boundary, conn=connection)
+                    if question is None:
+                        continue
+                    item["title"] = question["question"]
+                    item["body"] = " ".join(filter(None, (question.get("status"), question.get("priority"), question.get("assessment_state"))))
+                    item["state"] = question.get("status")
+                    item["assessment_state"] = question.get("assessment_state")
+                elif kind in {"research_task", "task"}:
+                    task = next((value for value in self.tasks_as_of((identifier,), boundary, conn=connection)), None)
+                    if task is None:
+                        continue
+                    item["body"] = " ".join(filter(None, (task.get("status"), task.get("plan_json"))))
+                    item["state"] = task.get("status")
+                elif kind == "report":
+                    report = self.report_as_of(identifier, boundary)
+                    revision = report.get("revision") or {}
+                    item["body"] = " ".join(filter(None, (report["report"].get("status"), json.dumps(revision.get("sections", {}), sort_keys=True))))
+                    item["current_revision_id"] = revision.get("id")
+                    item["report_revision_id"] = revision.get("id")
+                elif kind == "claim":
+                    claim = next((value for value in self.claims_as_of(boundary, claim_ids=(identifier,))), None)
+                    if claim is None:
+                        continue
+                    item["state"] = claim.get("state")
+                elif kind in {"note", "question_note"}:
+                    if kind == "note":
+                        row = connection.execute("SELECT body FROM notes WHERE id = ?", (identifier,)).fetchone()
+                    else:
+                        row = connection.execute("SELECT body FROM research_question_notes WHERE id = ?", (eligibility_id,)).fetchone()
+                    if row:
+                        item["body"] = row[0]
+                safe_text = " ".join((str(item.get("title") or ""), str(item.get("body") or ""))).casefold()
+                if wanted and not any(term in safe_text for term in wanted):
+                    continue
+                result.append(item)
+            return result
+        finally:
+            if owned:
+                connection.close()
 
     def evidence_as_of(
         self,
@@ -98,7 +451,11 @@ class TemporalReadService:
                 """,
                 [boundary, *params],
             ).fetchall()
-            return {row["id"]: self._evidence_row(row) for row in rows}
+            return {
+                row["id"]: self._evidence_row(row)
+                for row in rows
+                if self.eligible_as_of("evidence", row["id"], boundary, conn=conn)
+            }
         finally:
             conn.close()
 
@@ -185,6 +542,8 @@ class TemporalReadService:
             ).fetchall()
             selected: list[dict[str, Any]] = []
             for row in rows:
+                if not self.eligible_as_of("claim", row["id"], boundary, conn=conn):
+                    continue
                 state = self._claim_state_as_of(conn, row["id"], boundary)
                 if state not in TEMPORAL_CLAIM_STATES:
                     continue
@@ -214,6 +573,8 @@ class TemporalReadService:
                 ).fetchall()
                 evidence = []
                 for item in evidence_rows:
+                    if not self.eligible_as_of("evidence", item["id"], boundary, conn=conn):
+                        continue
                     value = self._evidence_row(item)
                     value["relationship"] = item["relationship"]
                     evidence.append(value)
@@ -237,7 +598,7 @@ class TemporalReadService:
         conn = storage.connect(self.db_path)
         try:
             story = conn.execute("SELECT * FROM stories WHERE id = ?", (story_id,)).fetchone()
-            if story is None:
+            if story is None or not self.eligible_as_of("story", story_id, boundary, conn=conn):
                 raise DomainNotFound("story not found")
             claim_ids = {
                 row[0]
@@ -269,8 +630,20 @@ class TemporalReadService:
                 ).fetchall()
             ]
             claims = self.claims_as_of(boundary, claim_ids=claim_ids, story_id=story_id)
+            historical_story = dict(story)
+            revision = conn.execute(
+                f"SELECT * FROM story_revisions WHERE story_id = ? AND {_before('created_at')} ORDER BY revision_number DESC, id DESC LIMIT 1",
+                (story_id, boundary),
+            ).fetchone()
+            if revision is not None:
+                historical_story["revision"] = dict(revision)
+            else:
+                historical_story["revision"] = None
+            historical_story["lifecycle"] = self._story_lifecycle_as_of(conn, story, boundary)
+            if historical_story["lifecycle"] == "unknown":
+                historical_story["lifecycle_state"] = "unavailable"
             return {
-                "story": dict(story),
+                "story": historical_story,
                 "as_of": boundary,
                 "claims": claims,
                 "corrections": corrections,
@@ -284,19 +657,58 @@ class TemporalReadService:
         finally:
             conn.close()
 
+    def _story_lifecycle_as_of(self, conn: sqlite3.Connection, story: sqlite3.Row, boundary: str) -> str:
+        """Return a lifecycle only when it is supported by stored history."""
+
+        archive_before = conn.execute(
+            f"""SELECT 1
+                  FROM story_lineage sl
+                  JOIN story_corrections sc ON sc.id = sl.correction_id
+                 WHERE sl.source_story_id = ?
+                   AND sl.relationship IN ('merged_into', 'split_into')
+                   AND {_before('sc.occurred_at')}
+                 LIMIT 1""",
+            (story["id"], boundary),
+        ).fetchone()
+        if archive_before:
+            return "archived"
+        future_archive = conn.execute(
+            f"""SELECT 1
+                  FROM story_lineage sl
+                  JOIN story_corrections sc ON sc.id = sl.correction_id
+                 WHERE sl.source_story_id = ?
+                   AND sl.relationship IN ('merged_into', 'split_into')
+                   AND julianday(sc.occurred_at) > julianday(?)
+                 LIMIT 1""",
+            (story["id"], boundary),
+        ).fetchone()
+        if future_archive:
+            return "unknown"
+        if _before_value(story["updated_at"], boundary):
+            return str(story["lifecycle"])
+        return "unknown"
+
     def report_as_of(self, report_id: str, as_of: str | datetime) -> dict[str, Any]:
         boundary = normalize_as_of(as_of)
         conn = storage.connect(self.db_path)
         try:
             report = conn.execute("SELECT * FROM living_reports WHERE id = ?", (report_id,)).fetchone()
-            if report is None:
+            if report is None or not self.eligible_as_of("report", report_id, boundary, conn=conn):
                 raise DomainNotFound("living report not found")
             revision = conn.execute(
                 f"SELECT * FROM report_revisions WHERE report_id = ? AND {_before('generated_at')} ORDER BY revision_number DESC, id DESC LIMIT 1",
                 (report_id, boundary),
             ).fetchone()
+            historical_report = dict(report)
+            if revision is not None:
+                historical_report["current_revision_id"] = revision["id"]
+            elif report["current_revision_id"]:
+                historical_report["current_revision_id"] = None
+            if not _before_value(report["updated_at"], boundary):
+                historical_report["status"] = "unknown"
+                historical_report["historical_state"] = "unavailable"
             if revision is None:
-                return {"report": dict(report), "as_of": boundary, "revision": None, "claims": [], "causes": []}
+                return {"report": historical_report, "as_of": boundary, "revision": None, "claims": [], "causes": []}
             claim_ids = [row[0] for row in conn.execute("SELECT claim_id FROM report_revision_claims WHERE revision_id = ? ORDER BY position, claim_id", (revision["id"],)).fetchall()]
             causes = [
                 dict(row)
@@ -311,7 +723,7 @@ class TemporalReadService:
             revision_value["audit"] = _json(revision_value.pop("audit_json"), {})
             revision_value["what_changed"] = _json(revision_value.get("what_changed"), revision_value["sections"].get("what_changed", []))
             return {
-                "report": dict(report),
+                "report": historical_report,
                 "as_of": boundary,
                 "revision": revision_value,
                 "claims": self.claims_as_of(boundary, claim_ids=claim_ids),
