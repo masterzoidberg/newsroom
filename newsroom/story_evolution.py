@@ -103,6 +103,12 @@ def _time_compatible(left: Any, right: Any, hours: int) -> bool:
     return a is None or b is None or abs((a - b).total_seconds()) <= hours * 3600
 
 
+def effective_document_time(published_at: Any, first_retrieved_at: Any) -> Any:
+    """Use source publication time, or stable first observation when absent."""
+
+    return published_at or first_retrieved_at
+
+
 def _cosine(left: Sequence[float], right: Sequence[float]) -> float:
     if len(left) != len(right) or not left:
         return 0.0
@@ -196,7 +202,7 @@ def _candidate_signals(incoming: StoryCandidate, existing: StoryCandidate, time_
     location_conflict = bool(incoming.locations and existing.locations and not incoming.locations & existing.locations)
     return {
         "url_identity": bool(incoming.document_id and incoming.document_id == existing.document_id) or bool(incoming_url and incoming_url == existing_url),
-        "time_compatible": _time_compatible(incoming.published_at, existing.published_at or existing.created_at, time_window_hours),
+        "time_compatible": _time_compatible(incoming.published_at, existing.published_at, time_window_hours),
         "headline_similarity": round(headline.headline_sim, 6),
         "headline_level": headline.level,
         "text_overlap": round(text_overlap, 6),
@@ -748,7 +754,10 @@ class StoryEvolutionService:
             return []
         return conn.execute(
             """
-            SELECT sd.*, d.canonical_url, d.published_at, d.source_id
+            SELECT sd.*, d.canonical_url, d.published_at, d.source_id,
+                   (SELECT MIN(dv.retrieved_at)
+                    FROM document_versions dv
+                    WHERE dv.document_id = sd.document_id) AS first_retrieved_at
             FROM story_documents sd JOIN documents d ON d.id = sd.document_id
             WHERE sd.story_id = ? ORDER BY sd.linked_at DESC, sd.document_id DESC
             """,
@@ -923,7 +932,11 @@ class StoryEvolutionService:
             docs = self._current_or_legacy_documents(conn, story["id"])
             event_key = docs[0]["event_key"] if docs else None
             canonical_url = docs[0]["canonical_url"] if docs else None
-            published_at = docs[0]["published_at"] if docs else None
+            published_at = (
+                effective_document_time(docs[0]["published_at"], docs[0]["first_retrieved_at"])
+                if docs
+                else None
+            )
             entities = {item for row in docs for item in json.loads(row["entities_json"])}
             locations = {item for row in docs for item in json.loads(row["locations_json"])}
             claims = [row[0] for row in conn.execute("SELECT proposition FROM claims WHERE story_id = ?", (story["id"],))]
@@ -1061,6 +1074,7 @@ __all__ = [
     "StoryEvolutionService",
     "candidate_signals",
     "classify_update",
+    "effective_document_time",
     "replay_evolution",
     "resolve_candidate",
 ]

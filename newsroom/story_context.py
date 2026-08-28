@@ -10,7 +10,12 @@ import sqlite3
 
 
 CURRENT_DOCUMENTS_QUERY = """
-    WITH ranked_documents AS (
+    WITH first_document_observations AS (
+        SELECT document_id, MIN(retrieved_at) AS first_retrieved_at
+        FROM document_versions
+        GROUP BY document_id
+    ),
+    ranked_documents AS (
         SELECT
             c.story_id,
             d.id AS document_id,
@@ -20,6 +25,7 @@ CURRENT_DOCUMENTS_QUERY = """
             d.published_at,
             dv.id AS document_version_id,
             dv.retrieved_at,
+            first_observation.first_retrieved_at,
             sd.event_key,
             COALESCE(sd.entities_json, '[]') AS entities_json,
             COALESCE(sd.locations_json, '[]') AS locations_json,
@@ -32,15 +38,18 @@ CURRENT_DOCUMENTS_QUERY = """
         JOIN evidence_spans es ON es.id = ce.evidence_span_id
         JOIN document_versions dv ON dv.id = es.document_version_id
         JOIN documents d ON d.id = dv.document_id
+        JOIN first_document_observations first_observation
+          ON first_observation.document_id = d.id
         LEFT JOIN story_documents sd
           ON sd.story_id = c.story_id AND sd.document_id = d.id
         WHERE c.story_id = ?
     )
     SELECT story_id, document_id, source_id, canonical_url, title, published_at,
-           document_version_id, retrieved_at, event_key, entities_json, locations_json
+           document_version_id, retrieved_at, first_retrieved_at, event_key,
+           entities_json, locations_json
     FROM ranked_documents
     WHERE document_rank = 1
-    ORDER BY COALESCE(published_at, retrieved_at), document_id
+    ORDER BY COALESCE(published_at, first_retrieved_at), document_id
 """
 
 

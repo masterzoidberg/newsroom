@@ -6,8 +6,9 @@ Phase 28.5, Phase 28.75, and Phase 28.875 completed and accepted the
 architecture correction chain. **Phase 29 — Prove the Intelligence** is the active
 implementation phase and is the authority for temporal truth, closed-loop
 Research proof, dogfood readiness, and controlled Full-vs-Lite validation.
-`Phase 29.5` is the active bounded proof-integrity closure for those Phase 29
-surfaces.
+`Phase 29.5` was the bounded proof-integrity closure for those Phase 29
+surfaces. `Phase 29.6` is the bounded Story time-semantics baseline closure
+and final engineering gate before Phase 29 dogfood acceptance.
 
 Dogfood still requires an explicitly user-approved subject and approved Source
 set; those inputs must not be invented. Phase 29 engineering may proceed while
@@ -24,7 +25,8 @@ never reset, clean, rewrite history, or push as part of phase closure.
 2. `plan/MASTER_PLAN.md` — implementation sequence and gates.
 3. `docs/ARCHITECTURE.md` — architecture overview.
 4. `Phase 29` — intelligence-proof implementation and validation plan.
-5. `Phase 29.5` — current bounded temporal and benchmark proof-integrity closure.
+5. `Phase 29.5` — bounded temporal and benchmark proof-integrity closure.
+6. `Phase 29.6` — Story time-semantics baseline closure and engineering gate.
 
 ## Validation baseline
 

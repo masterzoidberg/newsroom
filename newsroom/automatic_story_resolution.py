@@ -25,7 +25,7 @@ from .evidence_promotion import (
     verify_automatic_promotion,
 )
 from .similarity import normalize_headline, tokenize
-from .story_evolution import StoryCandidate, candidate_signals
+from .story_evolution import StoryCandidate, candidate_signals, effective_document_time
 
 
 QUALIFIED = "qualified"
@@ -296,7 +296,9 @@ def _row_candidate(row) -> tuple[StoryCandidate | None, bool]:
             headline=row["headline_text"],
             text=text,
             created_at=row["story_created_at"],
-            published_at=row["latest_published_at"] or row["story_created_at"],
+            published_at=effective_document_time(
+                row["latest_published_at"], row["latest_first_retrieved_at"]
+            ),
             event_key=row["latest_event_key"],
             entities=entities,
             locations=locations,
@@ -539,9 +541,15 @@ class AutomaticStoryResolutionService:
             return _CandidateRetrieval(())
 
         query = f"""
-            WITH current_story_documents AS (
+            WITH first_document_observations AS (
+                SELECT document_id, MIN(retrieved_at) AS first_retrieved_at
+                FROM document_versions
+                GROUP BY document_id
+            ),
+            current_story_documents AS (
                 SELECT DISTINCT c.story_id, d.id AS document_id,
                        d.published_at, d.source_id,
+                       first_observation.first_retrieved_at,
                        COALESCE(sd.event_key, '') AS event_key,
                        COALESCE(sd.entities_json, '[]') AS entities_json,
                        COALESCE(sd.locations_json, '[]') AS locations_json
@@ -550,6 +558,8 @@ class AutomaticStoryResolutionService:
                 JOIN evidence_spans es ON es.id = ce.evidence_span_id
                 JOIN document_versions dv ON dv.id = es.document_version_id
                 JOIN documents d ON d.id = dv.document_id
+                JOIN first_document_observations first_observation
+                  ON first_observation.document_id = d.id
                 LEFT JOIN story_documents sd
                   ON sd.story_id = c.story_id AND sd.document_id = d.id
                 WHERE c.story_id IS NOT NULL
@@ -655,7 +665,8 @@ class AutomaticStoryResolutionService:
             ),
             ranked_documents AS (
                 SELECT cd.story_id, cd.event_key, cd.entities_json,
-                       cd.locations_json, cd.published_at, cd.source_id,
+                       cd.locations_json, cd.published_at, cd.first_retrieved_at,
+                       cd.source_id,
                        ROW_NUMBER() OVER (
                            PARTITION BY cd.story_id
                            ORDER BY cd.published_at DESC, cd.document_id DESC
@@ -673,6 +684,7 @@ class AutomaticStoryResolutionService:
                        MAX(document_total) AS document_total,
                        MAX(CASE WHEN document_rank = 1 THEN event_key END) AS latest_event_key,
                        MAX(CASE WHEN document_rank = 1 THEN published_at END) AS latest_published_at,
+                       MAX(CASE WHEN document_rank = 1 THEN first_retrieved_at END) AS latest_first_retrieved_at,
                        GROUP_CONCAT(
                            CASE WHEN document_rank <= {MAX_STORY_DOCUMENTS}
                                 THEN substr(entities_json, 1, {MAX_STORY_TEXT_CHARS}) END,
@@ -750,7 +762,8 @@ class AutomaticStoryResolutionService:
                        COALESCE(t.topic_total, 0) AS topic_total,
                        COALESCE(u.subject_total, 0) AS subject_total,
                        d.latest_event_key,
-                       d.latest_published_at
+                       d.latest_published_at,
+                       d.latest_first_retrieved_at
                 FROM candidate_story_ids selected
                 JOIN active_stories active ON active.id = selected.id
                 JOIN stories s ON s.id = selected.id
