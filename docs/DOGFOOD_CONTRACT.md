@@ -1,6 +1,7 @@
 # Phase 29 → dogfood start contract
 
-Status: **A2 trial-ready; observation not started by this setup.**
+Status: **A2 configuration record; A4 observation protocol frozen and official
+observation boundary recorded in `docs/reviews/PHASE_29_OBSERVATION_PROTOCOL.md`.**
 
 This contract records the one approved Phase 29 trial configuration created on
 2026-09-06. It is intentionally narrow and uses the existing Topic, Watch,
@@ -113,11 +114,12 @@ the repository directory or the developer database for this Watch.
 
 ## Observation period
 
-The minimum Phase 29 observation window is four weeks. The environment became
-ready on 2026-09-06, making that the intended observation start date after the
-operator starts the documented processes. This setup stopped the processes
-after operational and recovery proof; it does **not** claim that the window
-has started, nor does it claim a four-week result.
+The minimum Phase 29 observation window is four weeks. This A2 readiness record
+stopped the processes after operational and recovery proof and did not claim
+that the window had started. The A4 observation protocol subsequently verified
+the restored clean baseline and established the official boundary
+`2026-09-06T21:20:48Z`; its earliest four-week boundary is
+`2026-10-04T21:20:48Z`. This contract still does not claim a four-week result.
 
 ## Operators and ownership
 
