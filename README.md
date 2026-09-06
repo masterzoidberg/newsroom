@@ -40,8 +40,8 @@ pending.
 
 The post-audit roadmap is authoritative at `plan/phases-v2/README.md`. Phases
 01–16 remain historical implementation records; **Phase 21 — Structured
-Article Analysis and one real AI provider** is complete (offline gate; Live
-Test B pending an operator-provided credential), following the completed
+Article Analysis and one real AI provider** is complete (offline gate and the
+recorded Live Test B), following the completed
 Phase 20 semantic-scope/automatic-relevance, Phase 19 changed-DocumentVersion
 processing jobs, and Phase 18 durable content artifact work. The current
 production Monitor path is reliable through Source acquisition and
@@ -96,11 +96,18 @@ human decisions; Research Gaps are canonical; and Simple/Advanced changes
 navigation density only. Ask refuses when no qualifying Evidence grounds the
 answer.
 
-Phase 28.875 is the active final acceptance closure for the Phase 28.5/28.75
-correction chain. Phase 29 remains blocked until independent acceptance.
-Dogfood starts only after acceptance with an explicitly user-approved subject
-and Source set; Phase 29 may then proceed in parallel with dogfood, while Phase
-30 waits for the dogfood and Full-vs-Lite evidence.
+Phase 29.6 engineering closure is complete at the current schema-36 baseline.
+Phase 29 real-use/value acceptance remains pending. It still requires one
+approved Watch configuration, unattended observation, human usefulness logging,
+reproducible Full-vs-Lite evaluation, and an intelligence-value verdict. The
+project is not a fully qualified first release merely because engineering
+checks pass: installed Windows qualification, upgrade/recovery, and phone/PWA
+acceptance remain separate release gates. Phase 30 is conditional on the Phase
+29 value verdict.
+
+The command-by-command engineering baseline and its non-claims are recorded in
+`docs/reviews/PHASE_29_BASELINE_ACCEPTANCE.md`. Dogfood requires an explicitly
+user-approved subject and Source set; those inputs must not be invented.
 
 ## Authority
 

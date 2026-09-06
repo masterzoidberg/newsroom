@@ -3,18 +3,21 @@
 Phase 27 — Advanced Story Intelligence is complete.
 
 Phase 28.5, Phase 28.75, and Phase 28.875 completed and accepted the
-architecture correction chain. **Phase 29 — Prove the Intelligence** is the active
-implementation phase and is the authority for temporal truth, closed-loop
+architecture correction chain. **Phase 29 — Prove the Intelligence** remains
+the active acceptance phase and is the authority for temporal truth, closed-loop
 Research proof, dogfood readiness, and controlled Full-vs-Lite validation.
 `Phase 29.5` was the bounded proof-integrity closure for those Phase 29
-surfaces. `Phase 29.6` is the bounded Story time-semantics baseline closure
-and final engineering gate before Phase 29 dogfood acceptance.
+surfaces. **Phase 29.6 engineering closure is complete**: the Story
+time-semantics baseline is closed and the repository is ready for Phase 29
+trial-readiness work.
 
+**Phase 29 real-use/value acceptance is pending.** It still requires an
+approved Watch configuration, unattended observation, human usefulness logging,
+reproducible Full-vs-Lite evaluation, and the intelligence-value verdict.
 Dogfood still requires an explicitly user-approved subject and approved Source
-set; those inputs must not be invented. Phase 29 engineering may proceed while
-that external configuration is pending. Phase 30 is not active and waits for
-the Phase 29 dogfood window, frozen Full-vs-Lite evidence, and the intelligence
-value decision gate.
+set; those inputs must not be invented. Phase 30 is not active and remains
+conditional on the Phase 29 dogfood window, frozen Full-vs-Lite evidence, and
+the intelligence-value decision gate.
 
 The live repository is implementation authority. Preserve unrelated work;
 never reset, clean, rewrite history, or push as part of phase closure.
