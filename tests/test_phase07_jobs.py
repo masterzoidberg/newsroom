@@ -3,6 +3,7 @@ from __future__ import annotations
 import pytest
 
 from newsroom import storage
+from newsroom.ai import SQLiteTelemetrySink, TelemetryEvent
 from newsroom.domain import CoreService, DomainValidation
 from newsroom.jobs import (
     BudgetService,
@@ -92,6 +93,29 @@ def test_enqueue_is_idempotent_and_claim_is_transactional(tmp_db):
 
     with pytest.raises(JobConflict):
         service.complete(first["id"], "worker-b", "succeeded", now=T0)
+
+
+def test_blocked_paid_telemetry_does_not_consume_zero_paid_request_cap(tmp_db):
+    apply_migrations(tmp_db)
+    BudgetService(tmp_db).configure_limit("global", None, "lifetime", "paid_requests", 0)
+    SQLiteTelemetrySink(tmp_db).record(
+        TelemetryEvent(
+            capability="article_analysis",
+            route="paid",
+            provider="unavailable",
+            outcome="blocked",
+            work_id=None,
+            error_code="paid_disabled",
+        )
+    )
+
+    service = JobService(tmp_db)
+    job = service.enqueue("zero_cost_local_job", {})
+    claimed = service.claim_next("worker-a", now=T0)
+
+    assert claimed is not None
+    assert claimed["id"] == job["id"]
+    assert claimed["budget_reservation"]["paid_requests"] == 0
 
 
 def test_expired_lease_is_recovered_and_retry_is_bounded(tmp_db):

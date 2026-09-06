@@ -603,6 +603,8 @@ class LocalArticleAnalysisProvider:
             candidate = ArticleAnalysisEntity(name=token)
             if all(extract.name != token for extract in entities):
                 entities.append(candidate)
+                if len(entities) >= 100:
+                    break
         dates = [match.strip(".,") for match in _ISO_DATE.findall(request.text)][:10]
         locations = [token for token in _CAPITALIZED_WORDS.findall(request.text) if token not in _NON_ENTITY_WORDS and len(token) >= 3][:6]
         scope_text = ", ".join(str(term).strip() for term in request.scope_terms if str(term).strip())

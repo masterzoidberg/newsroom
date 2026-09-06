@@ -567,6 +567,12 @@ class BudgetService:
         if cap_type == "usd":
             return float(row["estimated_cost_usd"] or 0.0)
         if str(row["request_type"] or "").casefold().find("paid") >= 0:
+            try:
+                outcome = json.loads(row["outcome"] or "{}")
+            except (TypeError, ValueError, json.JSONDecodeError):
+                outcome = None
+            if isinstance(outcome, Mapping) and outcome.get("status") == "blocked":
+                return 0.0
             return 1.0
         try:
             outcome = json.loads(row["outcome"] or "{}")

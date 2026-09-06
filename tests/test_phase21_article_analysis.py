@@ -496,6 +496,23 @@ def test_deterministic_local_provider_returns_valid_structured_output():
     ArticleAnalysisOutput.model_validate(result.model_dump())
 
 
+def test_deterministic_local_provider_bounds_entities_for_broad_page_text():
+    entity_names = [
+        f"Agency{chr(65 + index // 26)}{chr(65 + index % 26)}"
+        for index in range(150)
+    ]
+    request = ArticleAnalysisRequest(
+        title="Broad UAP page",
+        text=" ".join(f"{name} published UAP evidence." for name in entity_names),
+        scope_terms=["UAP"],
+    )
+
+    result = LocalArticleAnalysisProvider().analyze(request)
+
+    assert len(result.entities) == 100
+    ArticleAnalysisOutput.model_validate(result.model_dump())
+
+
 class FakeCompletions:
     def __init__(self, content: str, *, total_tokens: int = 321):
         self._content = content
