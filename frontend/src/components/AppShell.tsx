@@ -1,6 +1,7 @@
 import { ReactNode, useEffect, useRef, useState } from "react";
 import { apiFetch } from "../lib/api";
-import type { ServiceState, ViewKey } from "../lib/types";
+import type { ViewKey } from "../lib/types";
+import type { RuntimeControlAction, RuntimeStatus, ServiceState } from "../lib/runtime";
 
 type NavItem = { key: ViewKey; label: string; group: string; icon: string };
 
@@ -22,10 +23,40 @@ export const ADVANCED_NAV_ITEMS: NavItem[] = [
 
 export const NAV_ITEMS = SIMPLE_NAV_ITEMS;
 
-export function AppShell({ view, serviceState, username, onLogout, children }: {
+function serviceLabel(state: ServiceState): string {
+  return {
+    checking: "Checking components",
+    starting: "Starting",
+    idle: "Ready · idle",
+    queued: "Work queued",
+    processing: "Processing",
+    degraded: "Needs attention",
+    stopping: "Stopping",
+    stopped: "Stopped",
+    unavailable: "Service unavailable",
+  }[state];
+}
+
+function serviceDotState(state: ServiceState): "online" | "offline" | "checking" {
+  if (["idle", "queued", "processing"].includes(state)) return "online";
+  if (["degraded", "stopped", "unavailable"].includes(state)) return "offline";
+  return "checking";
+}
+
+const CONTROL_LABELS: Record<RuntimeControlAction, string> = {
+  restart_api: "Restart API",
+  restart_worker: "Restart worker",
+  restart_scheduler: "Restart scheduler",
+  stop_newsroom: "Stop Newsroom",
+};
+
+export function AppShell({ view, serviceState, runtimeStatus, controlPending, username, onRuntimeControl, onLogout, children }: {
   view: ViewKey;
   serviceState: ServiceState;
+  runtimeStatus: RuntimeStatus | null;
+  controlPending: RuntimeControlAction | null;
   username: string;
+  onRuntimeControl: (action: RuntimeControlAction) => void;
   onLogout: () => void;
   children: ReactNode;
 }) {
@@ -42,6 +73,7 @@ export function AppShell({ view, serviceState, username, onLogout, children }: {
   useEffect(() => { mainRef.current?.focus(); setMenuOpen(false); }, [view]);
   const navItems = mode === "advanced" ? ADVANCED_NAV_ITEMS : SIMPLE_NAV_ITEMS;
   const groups = Array.from(new Set(navItems.map((item) => item.group)));
+  const allowedActions = runtimeStatus?.controls.actions ?? [];
 
   return (
     <div className="product-shell">
@@ -56,12 +88,23 @@ export function AppShell({ view, serviceState, username, onLogout, children }: {
             {navItems.filter((item) => item.group === group).map((item) => <a key={item.key} href={`#${item.key}`} className={`nav-item ${view === item.key ? "active" : ""}`} aria-current={view === item.key ? "page" : undefined}><span className="nav-icon" aria-hidden="true">{item.icon}</span>{item.label}</a>)}
           </div>)}
         </nav>
-        <div className="sidebar-footer"><a className="nav-item" href="#settings"><span className="nav-icon" aria-hidden="true">⚙</span>Settings &amp; cost</a><span className={`service-dot ${serviceState}`} aria-hidden="true" /><span>{serviceState === "online" ? "Service online" : serviceState === "offline" ? "Offline mode" : "Checking service"}</span></div>
+        <div className="sidebar-footer">
+          <a className="nav-item" href="#settings"><span className="nav-icon" aria-hidden="true">⚙</span>Settings &amp; cost</a>
+          <span className={`service-dot ${serviceDotState(serviceState)}`} aria-hidden="true" /><span>{serviceLabel(serviceState)}</span>
+          <details open={["degraded", "unavailable", "stopped"].includes(serviceState)}>
+            <summary>Status &amp; recovery</summary>
+            {runtimeStatus ? <>
+              <p className="status-note">Work: {runtimeStatus.work.state} · {runtimeStatus.work.queued_jobs} queued · {runtimeStatus.work.running_jobs} running</p>
+              {(["api", "worker", "scheduler"] as const).map((role) => <p className="status-note" key={role}><strong>{role.toUpperCase()}:</strong> {runtimeStatus.components[role].status}</p>)}
+              {allowedActions.length ? <div className="button-row">{allowedActions.map((action) => <button className={action === "stop_newsroom" ? "quiet-button" : "secondary-button"} type="button" key={action} disabled={controlPending !== null} onClick={() => onRuntimeControl(action)}>{controlPending === action ? "Requesting…" : CONTROL_LABELS[action]}</button>)}</div> : <p className="status-note">Managed recovery controls are unavailable. Use your Newsroom launcher if the local service needs to be started.</p>}
+            </> : <p className="status-note">Runtime details are unavailable. Browser connectivity alone does not prove Newsroom is healthy.</p>}
+          </details>
+        </div>
       </aside>
       <div className="workspace">
         <header className="workspace-header">
           <div><p className="header-kicker">Private workspace</p><p className="header-user">{username}</p></div>
-          <div className="header-actions"><span className={`connection-label ${serviceState}`}>{serviceState === "offline" ? "Offline" : serviceState === "checking" ? "Connecting" : "Synced"}</span><button className="quiet-button" type="button" onClick={onLogout}>Sign out</button></div>
+          <div className="header-actions"><span className={`connection-label ${serviceDotState(serviceState)}`}>{serviceLabel(serviceState)}</span><button className="quiet-button" type="button" onClick={onLogout}>Sign out</button></div>
         </header>
         <main ref={mainRef} className="main-content" id="main-content" tabIndex={-1}>{children}</main>
       </div>
