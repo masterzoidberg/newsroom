@@ -44,6 +44,7 @@ from .runtime_identity import (
     verify_api_owner,
     write_api_owner,
 )
+from .runtime_supervisor import ManagedRoleContext, RuntimeSupervisor, SupervisorError
 from .report_automation import (
     AutomaticReportStageExecutionService,
     automatic_report_stage_completion_hook,
@@ -95,14 +96,19 @@ def _worker_id(value: str) -> str:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Newsroom Windows runtime processes")
     commands = parser.add_subparsers(dest="command", required=True)
-    for name in ("api", "worker", "scheduler"):
+    for name in ("api", "worker", "scheduler", "supervisor"):
         command = commands.add_parser(name)
         command.add_argument("--environment", choices=("dev", "prod"), required=True)
         command.add_argument("--root", type=Path, required=True)
         command.add_argument("--interval", type=_positive_interval, default=None)
+    for name in ("api", "worker", "scheduler"):
+        commands.choices[name].add_argument("--managed-child", action="store_true")
     api = commands.choices["api"]
     api.add_argument("--host", choices=("127.0.0.1", "::1"), default="127.0.0.1")
     api.add_argument("--port", type=_port, default=8127)
+    supervisor = commands.choices["supervisor"]
+    supervisor.add_argument("--host", choices=("127.0.0.1", "::1"), default="127.0.0.1")
+    supervisor.add_argument("--port", type=_port, default=8127)
     worker = commands.choices["worker"]
     worker.add_argument("--worker-id", default="newsroom-worker", type=_worker_id)
     return parser
@@ -188,7 +194,7 @@ def build_worker_queue(db_path: str | Path) -> JobService:
     )
 
 
-def _run_worker(config: RuntimeConfig, options: Any) -> int:
+def _run_worker(config: RuntimeConfig, options: Any, *, stop_event: threading.Event | None = None) -> int:
     _configure_logging(config, "worker")
     handlers = build_worker_handlers(config.database_path)
     queue = build_worker_queue(config.database_path)
@@ -198,18 +204,23 @@ def _run_worker(config: RuntimeConfig, options: Any) -> int:
         worker_id=options.worker_id,
         queue=queue,
     )
-    process.run_forever(_stop_event(), interval_seconds=options.interval or 1.0)
+    process.run_forever(stop_event or _stop_event(), interval_seconds=options.interval or 1.0)
     return 0
 
 
-def _run_scheduler(config: RuntimeConfig, options: Any) -> int:
+def _run_scheduler(config: RuntimeConfig, options: Any, *, stop_event: threading.Event | None = None) -> int:
     _configure_logging(config, "scheduler")
     process = SchedulerProcess(config.database_path)
-    process.run_forever(_stop_event(), interval_seconds=options.interval or 30.0)
+    process.run_forever(stop_event or _stop_event(), interval_seconds=options.interval or 30.0)
     return 0
 
 
-def _run_api(config: RuntimeConfig, options: Any) -> int:
+def _run_api(
+    config: RuntimeConfig,
+    options: Any,
+    *,
+    stop_event: threading.Event | None = None,
+) -> int:
     _configure_logging(config, "api")
     installation = ensure_installation_identity(config)
     release_id = resolve_release_id()
@@ -256,8 +267,6 @@ def _run_api(config: RuntimeConfig, options: Any) -> int:
                     print(diagnosis_message(options.host, options.port, diagnosis), file=sys.stderr)
                     return 3
 
-            # The initial owner may have crashed before publishing a usable API.
-            # Re-acquiring the OS lock lets a concurrent launcher take over safely.
             if lock.acquire():
                 break
             if time.monotonic() >= deadline:
@@ -297,15 +306,38 @@ def _run_api(config: RuntimeConfig, options: Any) -> int:
             port=options.port,
         )
         write_api_owner(config, identity)
-        apply_migrations(config.database_path)
+        if not bool(getattr(options, "managed_child", False)):
+            apply_migrations(config.database_path)
+
+        app = create_app(config=config, runtime_identity=identity.public_payload())
         try:
-            uvicorn.run(
-                create_app(config=config, runtime_identity=identity.public_payload()),
-                host=options.host,
-                port=options.port,
-                log_level="info",
-                access_log=False,
-            )
+            if bool(getattr(options, "managed_child", False)):
+                managed_stop = stop_event or _stop_event()
+                server = uvicorn.Server(
+                    uvicorn.Config(
+                        app,
+                        host=options.host,
+                        port=options.port,
+                        log_level="info",
+                        access_log=False,
+                    )
+                )
+
+                def request_exit() -> None:
+                    managed_stop.wait()
+                    server.should_exit = True
+
+                watcher = threading.Thread(target=request_exit, name="newsroom-api-stop", daemon=True)
+                watcher.start()
+                server.run()
+            else:
+                uvicorn.run(
+                    app,
+                    host=options.host,
+                    port=options.port,
+                    log_level="info",
+                    access_log=False,
+                )
         except SystemExit as exc:
             if exc.code in (None, 0):
                 return 0
@@ -333,16 +365,52 @@ def _run_api(config: RuntimeConfig, options: Any) -> int:
         lock.release()
 
 
+def _run_supervisor(config: RuntimeConfig, options: Any) -> int:
+    installation = ensure_installation_identity(config)
+    process = RuntimeSupervisor(
+        config,
+        installation_id=installation.installation_id,
+        release_id=resolve_release_id(),
+        host=options.host,
+        port=options.port,
+    )
+    return process.run_forever(_stop_event())
+
+
+def _run_component(config: RuntimeConfig, options: Any) -> int:
+    installation = ensure_installation_identity(config)
+    release_id = resolve_release_id()
+    stop_event = _stop_event()
+    try:
+        with ManagedRoleContext(
+            config,
+            installation_id=installation.installation_id,
+            release_id=release_id,
+            role=options.command,
+            stop_event=stop_event,
+            supervisor_managed=bool(options.managed_child),
+        ):
+            if options.command == "api":
+                return _run_api(config, options, stop_event=stop_event)
+            if not options.managed_child:
+                apply_migrations(config.database_path)
+            if options.command == "worker":
+                return _run_worker(config, options, stop_event=stop_event)
+            return _run_scheduler(config, options, stop_event=stop_event)
+    except SupervisorError as exc:
+        if options.command == "api":
+            return _run_api(config, options, stop_event=stop_event)
+        print(str(exc), file=sys.stderr)
+        return 3
+
+
 def main(argv: list[str] | None = None) -> int:
     options = build_parser().parse_args(argv)
     config = runtime_config_from_options(options)
     config.ensure_runtime_dirs()
-    if options.command == "api":
-        return _run_api(config, options)
-    apply_migrations(config.database_path)
-    if options.command == "worker":
-        return _run_worker(config, options)
-    return _run_scheduler(config, options)
+    if options.command == "supervisor":
+        return _run_supervisor(config, options)
+    return _run_component(config, options)
 
 
 if __name__ == "__main__":  # pragma: no cover - exercised by Windows task launchers
