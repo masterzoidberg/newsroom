@@ -241,16 +241,34 @@ def _run_api(config: RuntimeConfig, options: Any) -> int:
                 if diagnosis.status not in {EndpointStatus.AVAILABLE, EndpointStatus.UNKNOWN}:
                     print(diagnosis_message(options.host, options.port, diagnosis), file=sys.stderr)
                     return 3
-            if time.monotonic() >= deadline:
+            else:
+                diagnosis = diagnose_endpoint(
+                    options.host,
+                    options.port,
+                    expected_installation_id=installation.installation_id,
+                    expected_release_id=release_id,
+                )
+                if diagnosis.status in {
+                    EndpointStatus.MISMATCHED,
+                    EndpointStatus.UNMANAGED,
+                    EndpointStatus.FOREIGN,
+                }:
+                    print(diagnosis_message(options.host, options.port, diagnosis), file=sys.stderr)
+                    return 3
+
+            # The initial owner may have crashed before publishing a usable API.
+            # Re-acquiring the OS lock lets a concurrent launcher take over safely.
+            if lock.acquire():
                 break
+            if time.monotonic() >= deadline:
+                print(
+                    f"Port {options.host}:{options.port} cannot be reused because the existing Newsroom owner "
+                    f"could not be verified ({reason}). Close that instance or inspect diagnostics, then retry. "
+                    "No process was stopped and no alternate port was selected.",
+                    file=sys.stderr,
+                )
+                return 3
             time.sleep(0.05)
-        print(
-            f"Port {options.host}:{options.port} cannot be reused because the existing Newsroom owner "
-            f"could not be verified ({reason}). Close that instance or inspect diagnostics, then retry. "
-            "No process was stopped and no alternate port was selected.",
-            file=sys.stderr,
-        )
-        return 3
 
     identity = None
     try:
