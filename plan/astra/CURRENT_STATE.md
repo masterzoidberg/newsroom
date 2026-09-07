@@ -6,24 +6,24 @@ Baseline and checks: [AUDIT_EVIDENCE.md](AUDIT_EVIDENCE.md). Status describes th
 
 | Subsystem | Status | Evidence and remaining boundary |
 |---|---|---|
-| API | MOSTLY DONE | `app.py:create_app`, `runtime.py:_run_api`, `runtime_identity.py`; authenticated same-origin workspace plus public liveness and bounded managed identity. AST-02 adds ownership-aware fixed-port preflight/reuse and no-kill collision diagnosis; aggregate component ownership remains absent until AST-03. |
-| Worker | MOSTLY DONE | `runtime.py:build_worker_handlers`, `worker.py`; complete production handler registry and durable outcomes; whole-process health/singleton missing |
-| Scheduler | MOSTLY DONE | `scheduler.py`, `jobs.py:SchedulerService`; persisted ticks/coalescing and due research; heartbeat is not a full service supervisor |
-| Jobs/retry/leases | MOSTLY DONE | `jobs.py`, coalescing/research worker tests; bounded recovery and reservations; test long handlers vs 120-second job lease before adding restart behavior |
-| Process lifecycle | PARTIAL | `_stop_event` supports cooperative worker/scheduler exit; AST-02 protects API ownership but there is still no aggregate ownership/stop handshake |
-| Startup/port handling | MOSTLY DONE | AST-02 adds stable installation identity, OS-backed API singleton lock, PID creation-token verification, matching-instance reuse, foreign/mismatched/unmanaged/unknown diagnosis and bind-race handling. Supervisor/component reconciliation and owner-friendly launch remain AST-03-05. |
-| Shutdown/restart | PARTIAL | per-process signals and runbook Task commands; no application-level drain/control |
-| Health | PARTIAL | `/health` liveness, `/readiness` DB integrity and bounded `/runtime/identity`; UI still does not present continuous API/worker/scheduler health |
+| API | MOSTLY DONE | `app.py:create_app`, `runtime.py:_run_api`, `runtime_identity.py`; authenticated same-origin workspace plus public liveness and bounded managed identity. AST-02 ownership-aware fixed-port preflight remains authoritative; AST-03 runs the same API as a managed child and supports cooperative Uvicorn shutdown. Browser-facing whole-runtime controls remain AST-04. |
+| Worker | MOSTLY DONE | `runtime.py:build_worker_handlers`, `worker.py`; complete production handler registry and durable outcomes. AST-03 adds managed singleton ownership/heartbeat plus in-flight lease renewal; user-facing status/recovery remains AST-04. |
+| Scheduler | MOSTLY DONE | `scheduler.py`, `jobs.py:SchedulerService`; persisted ticks/coalescing and due research. AST-03 adds managed singleton ownership, heartbeat, reconciliation and bounded restart. |
+| Jobs/retry/leases | MOSTLY DONE | `jobs.py`, `worker.py`, `job_lease.py`; existing bounded recovery/reservations plus AST-03 renewal while the same worker owns a long running handler. Focused tests exceed the original lease and preserve cancellation without a competing claim; paid-budget authority itself is unchanged. |
+| Process lifecycle | MOSTLY DONE | `runtime_supervisor.py`, `runtime_managed.py`; one supervisor authority reconciles one API/worker/scheduler, tracks fresh/stale/ambiguous/unmanaged state, and sends token-bound cooperative stop controls only to verified managed owners. AST-04 still needs authenticated user controls/status. |
+| Startup/port handling | MOSTLY DONE | AST-02 fixed-port identity/preflight remains in force. AST-03 adds all-role preflight, shared manifest/root/release checks and surviving-child reconciliation; stale/ambiguous/unmanaged roles block sibling spawning. One normal owner shortcut/installed authority remains AST-05. |
+| Shutdown/restart | MOSTLY DONE | AST-03 drains scheduler/worker before API, reports a deadline instead of force-killing busy or unmanaged work, and uses bounded per-role restart/backoff with `restart_exhausted`. Owner-facing named controls remain AST-04/05. |
+| Health | MOSTLY DONE | `/health`, `/readiness`, bounded `/runtime/identity`, plus AST-03 local per-component heartbeat/ownership state. The browser still does not present truthful whole-runtime health until AST-04. |
 | Runtime roots | DONE | `config.py`, `paths.py`, `test_runtime_config.py`; explicit dev/prod, root outside repository, root suffix checks |
-| Windows install | MOSTLY DONE | `phase16_windows_deploy.ps1`, `release.py`; artifact identity and separate install/runtime roots, operator ceremony remains; AST-02 Windows creation-token path awaits installed qualification |
-| Task Scheduler | PARTIAL | three fixed-name tasks, AtStartup/S4U, IgnoreNew per task; cannot prevent manually launched worker/scheduler duplicates; no matching tasks returned during audit |
-| Upgrade/migrations | MOSTLY DONE | `migrations.py`, `operations.py`, `cli.py`; contiguous schema 36, integrity checks, rehearsal tools; coordinated writer shutdown is manual. AST-02 moves API migration after endpoint ownership/preflight only; worker/scheduler behavior is unchanged. |
+| Windows install | MOSTLY DONE | `phase16_windows_deploy.ps1`, `release.py`; artifact identity and separate install/runtime roots. Supervisor is implemented but current installer/task topology is still three legacy entries; installed Windows lifecycle/creation-token qualification remains AST-05/19. |
+| Task Scheduler | PARTIAL | Existing installer still creates three fixed-name AtStartup/S4U tasks. AST-03 supplies the single supervisor runtime authority, but task registration/migration to one sign-in launcher is deliberately AST-05. |
+| Upgrade/migrations | MOSTLY DONE | `migrations.py`, `operations.py`, `cli.py`; contiguous schema 36 and integrity tools. AST-03 makes the supervisor the normal managed migration writer only when API/worker/scheduler managed locks are all free; reconciliation of active same-release children skips migration writes. Installed upgrade choreography remains AST-14/19. |
 | Backup/restore | MOSTLY DONE | `operations.py`, `storage.py`, phase15 tests; verified SQLite backup/restore, not effortless owner UX |
 | Logical export/import | MOSTLY DONE | explicit `_EXPORT_COLUMNS`, round-trip/integrity tests; bounded logical reconstruction is not full database recovery |
 | Logs/telemetry | MOSTLY DONE | rotating runtime logs, `telemetry.py`, AI telemetry; no cohesive user diagnostics/recovery screen |
-| Release identity | MOSTLY DONE | manifest hash verification in `release.py`; AST-02 consumes installed/source release identity for ownership matching; dirty worktree is recorded, not automatically a distributable release |
-| Tests | MOSTLY DONE | broad offline regression suite plus AST-02 real socket/subprocess identity/collision coverage; browser source checks do not replace journey tests |
-| CI | MOSTLY DONE | clean Ubuntu backend/Ruff and frontend install/lint/typecheck/build pass on AST-01 and AST-02 heads; Windows installed-runtime/keyring/lifecycle checks remain absent |
+| Release identity | MOSTLY DONE | manifest hash verification in `release.py`; AST-02/03 consume source/installed release identity for endpoint and managed-child matching; dirty worktree is recorded, not automatically a distributable release |
+| Tests | MOSTLY DONE | broad offline regression suite plus AST-02 socket/identity coverage and AST-03 real subprocess supervisor/crash/stale-heartbeat/drain/lease coverage; installed Windows lifecycle and browser journey checks remain later gates |
+| CI | MOSTLY DONE | clean Ubuntu backend/Ruff and frontend install/lint/typecheck/build pass on AST-01, AST-02 and AST-03 implementation heads; Windows installed-runtime/keyring/lifecycle checks remain absent |
 
 ## Core product
 
