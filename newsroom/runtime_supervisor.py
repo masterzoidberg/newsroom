@@ -135,8 +135,22 @@ class RuntimeSupervisor:
         process = self._children.get(role)
         if process is not None and process.poll() is not None:
             exit_code = process.returncode
+            stderr_tail = ""
+            stream = getattr(process, "stderr", None)
+            if stream is not None:
+                try:
+                    stderr_tail = stream.read()[-4096:].strip()
+                except (OSError, ValueError):
+                    stderr_tail = ""
+                finally:
+                    try:
+                        stream.close()
+                    except (OSError, ValueError):
+                        pass
             self._children.pop(role, None)
             self._logger.warning("managed child exited role=%s exit_code=%s", role, exit_code)
+            if stderr_tail:
+                self._logger.warning("managed child stderr role=%s tail=%s", role, stderr_tail)
         state = component_state(
             self.config,
             role,
@@ -180,7 +194,10 @@ class RuntimeSupervisor:
             cwd=Path(__file__).resolve().parents[1],
             stdin=subprocess.DEVNULL,
             stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
         )
         self._children[role] = process
         self._logger.info("spawned managed child role=%s pid=%s", role, process.pid)
