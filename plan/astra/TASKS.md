@@ -1,12 +1,12 @@
 # Canonical task ledger
 
-Execution state after AST-01. Allowed statuses: NOT_STARTED, READY, IN_PROGRESS, BLOCKED, DONE, DEFERRED. A dependency means verified DONE unless a recorded decision explicitly narrows it. Promote the next eligible task to READY when updating NEXT; never treat elapsed time as paid authorization or human scoring.
+Execution state after AST-02. Allowed statuses: NOT_STARTED, READY, IN_PROGRESS, BLOCKED, DONE, DEFERRED. A dependency means verified DONE unless a recorded decision explicitly narrows it. Promote the next eligible task to READY when updating NEXT; never treat elapsed time as paid authorization or human scoring.
 
 | ID | Title | Status | Priority | Milestone | Dependencies | Size |
 |---|---|---|---|---|---|---|
 | AST-01 | Freeze the execution baseline and isolate development from observation | DONE | P0 | M0 | None | M |
-| AST-02 | Identify application instances and diagnose port conflicts | READY | P0 | M1 | AST-01 | M |
-| AST-03 | Supervise existing runtime components safely | NOT_STARTED | P0 | M1 | AST-02 | M |
+| AST-02 | Identify application instances and diagnose port conflicts | DONE | P0 | M1 | AST-01 | M |
+| AST-03 | Supervise existing runtime components safely | READY | P0 | M1 | AST-02 | M |
 | AST-04 | Expose honest component status and recovery controls | NOT_STARTED | P0 | M1 | AST-03 | M |
 | AST-05 | Ship one Start Newsroom entry point | NOT_STARTED | P0 | M1 | AST-04 | M |
 | AST-06 | Create typed public AI configuration metadata | NOT_STARTED | P0 | M2 | AST-05 | M |
@@ -75,7 +75,7 @@ Execution state after AST-01. Allowed statuses: NOT_STARTED, READY, IN_PROGRESS,
 ## AST-02 — Identify application instances and diagnose port conflicts
 
 - **ID:** AST-02
-- **Status:** READY
+- **Status:** DONE
 - **Priority:** P0
 - **Milestone:** M1
 - **Dependencies:** AST-01
@@ -87,7 +87,7 @@ Execution state after AST-01. Allowed statuses: NOT_STARTED, READY, IN_PROGRESS,
 
 **Why now:** Current 8127 already serves Newsroom but duplicate startup blindly binds.
 
-**Files/subsystems:** newsroom/runtime.py; newsroom/config.py; newsroom/app.py; tests/test_runtime_config.py; tests/test_phase16_deployment.py.
+**Files/subsystems:** `newsroom/runtime.py`; `newsroom/app.py`; new `newsroom/runtime_identity.py`; new `tests/test_runtime_identity.py`; new `tests/test_runtime_identity_recovery.py`. Existing `newsroom/config.py`, `tests/test_runtime_config.py`, `tests/test_phase16_deployment.py` and release/install contracts were inspected and exercised without schema or installer behavior changes.
 
 **Implementation approach:** Add a stable non-secret installation identity and process identity checks using root/role/release plus PID creation time. Use an OS exclusive lock, not a PID-file-only guard. Define status protocol for matching, unmanaged, foreign and unknown owners. Handle the bind race after preflight. Permit healthy verified reuse; never terminate or silently move ports.
 
@@ -97,18 +97,34 @@ Execution state after AST-01. Allowed statuses: NOT_STARTED, READY, IN_PROGRESS,
 
 **Acceptance criteria:**
 
-- [ ] Matching healthy instance is reused without a second API bind
-- [ ] Foreign/mismatched/unknown ownership gives actionable fixed-port diagnosis and no kill
-- [ ] Concurrent launches and PID reuse cannot falsely identify another process
+- [x] Matching healthy instance is reused without a second API bind
+- [x] Foreign/mismatched/unknown ownership gives actionable fixed-port diagnosis and no kill
+- [x] Concurrent launches and PID reuse cannot falsely identify another process
 
-**Completion evidence:** Not yet executed. Required: Process/socket test results and redacted identity/status examples. Record actual HEAD/artifact, changed files, commands with exit results, manual checks and remaining limitations here upon completion.
+**Completion evidence:**
+
+- AST-02 was implemented on `astra/AST-02-instance-preflight`, stacked from verified AST-01 head `4dfc950c3b574cac37d0f149730dd3b97716d880` because AST-01 remains an unmerged draft dependency. Remote `main` remained at `3d7f9cfe91b34feeaa5602a5febd9077e1d87b7f` during implementation.
+- Final implementation head before plan-only closure is `b180e0f138f7ba1c544f7e91166de945515bf81c`. Schema remains 36. No migration file, provider route, budget authority, evidence/provenance rule or data model changed.
+- `runtime_identity.py` persists a stable installation UUID under the canonical runtime root, holds an OS-backed exclusive API lock, records diagnostic owner metadata with canonical root/role/release/PID/process-creation token, verifies process identity against PID reuse, and classifies endpoints as `available`, `matching`, `mismatched`, `unmanaged`, `foreign` or `unknown`.
+- `GET /api/v1/runtime/identity` exposes only bounded non-secret identity needed for local verification and is marked `Cache-Control: no-store`; filesystem paths are not returned publicly.
+- API startup now establishes ownership/preflight before applying API migrations or binding. A healthy verified same-installation/same-release API returns a successful reuse result without a second Uvicorn bind. A matching HTTP identity without the expected OS lock is treated as unknown rather than trusted.
+- Different-root Newsroom, unmanaged Newsroom, unrelated foreign listeners and unverifiable/ambiguous listeners all fail on the configured fixed endpoint with recovery guidance. No diagnostic path terminates a process or silently chooses another port.
+- Concurrent same-root launches converge through the OS lock plus a bounded reconciliation window. A discovered edge where the first lock holder can die before publishing a usable API was corrected: the waiting launcher may take the released OS lock and proceed, but only after actually owning it. No infinite retry loop was introduced.
+- A post-preflight Uvicorn bind failure is diagnosed through the same ownership-aware fixed-port path, covering the bind race without fallback port selection.
+- Packaged release identity remains supported: the larger installed `release-manifest.json` uses a separate bounded reader rather than weakening the small runtime-owner metadata bound. Corrupt stale owner metadata degrades to untrusted/unknown rather than crashing or being trusted.
+- Final local affected command `python -m pytest -q tests/test_runtime_identity.py tests/test_runtime_identity_recovery.py tests/test_runtime_config.py tests/test_phase16_deployment.py tests/test_api.py` passed all 22 collected tests. `python -m compileall -q newsroom tests` also passed. Local Ruff was unavailable, so no local Ruff pass is claimed.
+- Hosted GitHub Actions run `34082005737` at implementation head `b180e0f138f7ba1c544f7e91166de945515bf81c` passed Ruff, the full backend pytest suite, frontend `npm ci`, lint, typecheck and production build.
+- Redacted managed identity example: `{"managed":true,"installation_id":"<uuid>","role":"api","release_id":"<release>","pid":"<pid>","process_creation_token":"<creation-token>"}`. Matching status reuses the owner; mismatched/unmanaged/foreign/unknown status returns fixed-port recovery guidance and explicitly performs no kill/no alternate-port action.
+- Tests used ephemeral loopback ports and temporary roots only. The active `phase29-trial/prod` runtime, its data/processes and port `8127` were not contacted or modified. No paid provider call was made and no secret/private trial artifact was read or committed.
+- Remaining qualification boundary: the Windows-specific process creation-time implementation is source/compile reviewed but was not exercised in a clean installed Windows lifecycle during AST-02. Installed Windows lifecycle qualification remains AST-05/AST-19; this does not weaken the tested ownership contract or justify claiming that later gate complete.
+- Draft PR #2 remains open, stacked on `astra/AST-01-baseline`, and is not merged.
 
 **Prompt:** [AST-02](prompts/AST-02.md).
 
 ## AST-03 — Supervise existing runtime components safely
 
 - **ID:** AST-03
-- **Status:** NOT_STARTED
+- **Status:** READY
 - **Priority:** P0
 - **Milestone:** M1
 - **Dependencies:** AST-02
