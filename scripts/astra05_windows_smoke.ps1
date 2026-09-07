@@ -143,7 +143,7 @@ function Get-ManagedSnapshot {
 function Get-RuntimeLogSummary {
     $logsRoot = Join-Path $RuntimeRoot 'logs'
     $summary = [ordered]@{}
-    foreach ($name in @('api.log', 'worker.log', 'scheduler.log')) {
+    foreach ($name in @('supervisor.log', 'api.log', 'worker.log', 'scheduler.log')) {
         $path = Join-Path $logsRoot $name
         if (Test-Path -LiteralPath $path -PathType Leaf) {
             $summary[$name] = ((Get-Content -LiteralPath $path -Tail 20) -join "`n")
