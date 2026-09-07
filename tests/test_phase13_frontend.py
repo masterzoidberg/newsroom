@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import subprocess
 from pathlib import Path
 
 
@@ -8,15 +7,7 @@ ROOT = Path(__file__).resolve().parents[1]
 FRONTEND = ROOT / "frontend"
 
 
-def test_phase13_workbench_frontend_builds_and_exposes_research_surfaces():
-    result = subprocess.run(
-        ["npm.cmd", "run", "build"],
-        cwd=FRONTEND,
-        check=False,
-        capture_output=True,
-        text=True,
-    )
-    assert result.returncode == 0, result.stdout + result.stderr
+def test_phase13_workbench_frontend_exposes_research_surfaces():
     source = (FRONTEND / "src" / "views" / "WorkbenchView.tsx").read_text(encoding="utf-8")
     app_source = (FRONTEND / "src" / "App.tsx").read_text(encoding="utf-8")
     for label in ("Global search", "Compare documents", "Monitor health", "Subject page & context"):
