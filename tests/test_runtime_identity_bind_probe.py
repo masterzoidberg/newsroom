@@ -16,9 +16,13 @@ def _inconclusive_connect(*_args, **_kwargs):
     raise OSError("inconclusive connect probe")
 
 
-def test_inconclusive_connect_uses_bind_proof_for_free_loopback_port(monkeypatch):
+def _unexpected_connect(*_args, **_kwargs):
+    raise AssertionError("free endpoint must be proven by bind before connect probing")
+
+
+def test_free_loopback_port_is_proven_before_connect_probe(monkeypatch):
     port = _unused_loopback_port()
-    monkeypatch.setattr(runtime_identity.socket, "create_connection", _inconclusive_connect)
+    monkeypatch.setattr(runtime_identity.socket, "create_connection", _unexpected_connect)
 
     diagnosis = diagnose_endpoint(
         "127.0.0.1",
