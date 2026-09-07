@@ -1,8 +1,8 @@
 # Immediate execution queue
 
-1. **AST-04 — READY:** Expose honest component status and recovery controls. Read its [prompt](prompts/AST-04.md), recheck the current dependency stack before branching, and keep all development on the isolated Astra root/endpoint established by AST-01.
-2. AST-05 — NOT_STARTED, waits for AST-04: ship one Start Newsroom entry point.
-3. AST-06 — NOT_STARTED, waits for AST-05: create typed public AI configuration metadata.
+1. **AST-05 — READY:** Ship one Start Newsroom entry point. Read its [prompt](prompts/AST-05.md), recheck the current dependency stack before branching, and keep installation qualification isolated from the active observation runtime.
+2. AST-06 — NOT_STARTED, waits for AST-05: create typed public AI configuration metadata.
+3. AST-07 — NOT_STARTED, waits for AST-06: store credentials in an approved operating-system vault.
 
 AST-01 is DONE on draft PR #1. Its implementation established the isolated Astra development target, removed Windows-only frontend-build subprocesses from backend pytest, and passed the clean Ubuntu backend/Ruff/frontend CI gate. The PR remains unmerged.
 
@@ -10,7 +10,9 @@ AST-02 is DONE on stacked draft PR #2, based on `astra/AST-01-baseline`. Impleme
 
 AST-03 is DONE on stacked draft PR #3, based on `astra/AST-02-instance-preflight`. Implementation head `6c2b17edf83f3ea72401b1b2291c48748b8977cd` adds one per-runtime supervisor for the existing API/worker/scheduler processes, a shared non-secret runtime manifest, OS-backed per-role ownership, PID-creation-token verification, fresh-heartbeat state, token-bound stop controls, surviving-child reconciliation, bounded restart/backoff, managed migration ownership, graceful drain ordering, and long-running Job lease renewal. Local focused verification passed 20/20 plus compileall; hosted run `34088867948` passed full backend pytest, Ruff, frontend install/lint/typecheck/build. The active trial and port 8127 were not contacted or modified.
 
-The UAP trial already has an approved configuration and a recorded boundary `2026-09-06T21:20:48Z`; earliest four-week boundary is `2026-10-04T21:20:48Z`, subject to active-observation/event-volume sufficiency. AST-16 continues that protocol only when explicitly executed. Do not recreate A2, reset the clock, start a monitoring automation, or alter the trial as part of AST-04.
+AST-04 is DONE on stacked draft PR #4, based on `astra/AST-03-supervisor`. Corrected implementation head `371ff0e24d72f1f0de72eb7f08ff8d1a6c74a659` exposes authenticated bounded whole-runtime status, strict auth/CSRF recovery actions, bounded browser polling/backoff, separate browser-network state, and external launcher guidance. Hosted run `34147588347` passed full backend pytest, Ruff, frontend install/lint/typecheck/build and the isolated browser smoke. Corrected browser artifact `10028215213` (`sha256:2720fce46a269e67dcc4c1d08fef021b6f034dd71b06b1c18790cc4d6606f8d6`) was visually reviewed for idle, stale-worker/degraded and API-unavailable states. The first artifact was deliberately rejected after it exposed sidebar recovery-panel overlap; the corrected evidence contains the panel without overlap. No active trial process or port 8127 was contacted.
+
+The UAP trial already has an approved configuration and a recorded boundary `2026-09-06T21:20:48Z`; earliest four-week boundary is `2026-10-04T21:20:48Z`, subject to active-observation/event-volume sufficiency. AST-16 continues that protocol only when explicitly executed. Do not recreate A2, reset the clock, start a monitoring automation, or alter the trial as part of AST-05.
 
 AST-17 remains BLOCKED for actual comparative execution: an eligible frozen snapshot mapping, explicit paid-provider authorization, and human blinded scoring are still needed. Preparation does not authorize spending. AST-21/22 remain DEFERRED until their evidence gates justify them.
 
