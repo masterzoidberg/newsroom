@@ -7,6 +7,11 @@ Target workspace: `G:\Projects\Newsroom -v2`
 This repository is the standalone successor to the completed Hermes Newsroom
 reference implementation. **Hermes is not a runtime dependency.**
 
+Current completion execution is governed by `plan/astra/`. The phase summaries
+below are retained as historical implementation evidence; they are not the
+current task-order authority. See `docs/reviews/ASTRA_EXECUTION_BASELINE.md` for
+the isolated development target and current reproducibility record.
+
 ## Current state
 
 The standalone deterministic core, evaluation foundation, evidence-ledger
@@ -38,8 +43,8 @@ bounded Task Scheduler restart configuration, and opt-in private Tailscale Serve
 configuration with final acceptance rehearsal evidence; final promotion remains
 pending.
 
-The post-audit roadmap is authoritative at `plan/phases-v2/README.md`. Phases
-01–16 remain historical implementation records; **Phase 21 — Structured
+The historical post-audit roadmap is retained at `plan/phases-v2/README.md`.
+Phases 01–16 remain historical implementation records; **Phase 21 — Structured
 Article Analysis and one real AI provider** is complete (offline gate and the
 recorded Live Test B), following the completed
 Phase 20 semantic-scope/automatic-relevance, Phase 19 changed-DocumentVersion
@@ -105,16 +110,22 @@ checks pass: installed Windows qualification, upgrade/recovery, and phone/PWA
 acceptance remain separate release gates. Phase 30 is conditional on the Phase
 29 value verdict.
 
-The command-by-command engineering baseline and its non-claims are recorded in
-`docs/reviews/PHASE_29_BASELINE_ACCEPTANCE.md`. Dogfood requires an explicitly
+The command-by-command historical Phase 29 engineering baseline and its
+non-claims are recorded in `docs/reviews/PHASE_29_BASELINE_ACCEPTANCE.md`.
+Current Astra execution/reproducibility evidence is recorded separately in
+`docs/reviews/ASTRA_EXECUTION_BASELINE.md`. Dogfood requires an explicitly
 user-approved subject and Source set; those inputs must not be invented.
 
 ## Authority
 
-1. `plan/STANDALONE_NEWSROOM_PRODUCT_SPEC.md` — product contract.
-2. `plan/MASTER_PLAN.md` — implementation sequence and gates.
-3. `docs/ARCHITECTURE.md` — architecture overview.
-4. `docs/PORTING_AUDIT.md` — what was reused, redesigned, or rejected from v1.
+1. `plan/STANDALONE_NEWSROOM_PRODUCT_SPEC.md` — product invariants and intended product contract.
+2. `plan/astra/README.md` — current completion execution layer and reading order.
+3. `plan/astra/TASKS.md` and `plan/astra/NEXT.md` — canonical task states and immediate queue.
+4. `docs/ARCHITECTURE.md` — architecture overview.
+5. `docs/PORTING_AUDIT.md` — what was reused, redesigned, or rejected from v1.
+
+Historical phase plans and `plan/MASTER_PLAN.md` remain evidence and migration
+history; they do not override Astra task ordering.
 
 ## Bootstrap validation
 
@@ -129,6 +140,9 @@ The imported deterministic core and standalone storage tests must remain green.
 No runtime database, logs, backups, secrets, provider caches, or downloaded
 article bodies belong in this repository. The planned standalone runtime roots
 are under `%LOCALAPPDATA%\Newsroom\...` with explicit dev/prod selection.
+Astra development uses the explicit isolated root/endpoint contract in
+`docs/reviews/ASTRA_EXECUTION_BASELINE.md`; it must not default to the active
+Phase 29 trial root or port.
 
 Operational procedures live in `docs/OPERATIONS_RUNBOOK.md` and
 `docs/RECOVERY_RUNBOOK.md`. The Phase 16 deployment rehearsal is
