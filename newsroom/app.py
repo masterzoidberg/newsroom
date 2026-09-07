@@ -9,7 +9,7 @@ import uuid
 from pathlib import Path
 from typing import Optional
 
-from fastapi import APIRouter, FastAPI, Request
+from fastapi import APIRouter, BackgroundTasks, FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
@@ -33,6 +33,7 @@ from .domain_api import create_domain_router
 from .evidence import EvidenceService
 from .integrity import check_database
 from .migrations import apply_migrations
+from .runtime_status import RuntimeControlAction, RuntimeControlUnavailable, RuntimeStatusService
 from .security import RequestLimiter, subsystem_for_path
 from .telemetry import OperationalTelemetry
 
@@ -57,6 +58,12 @@ class AuthCredentials(BaseModel):
         if not isinstance(value, str):
             raise ValueError("username must be a string")
         return value.strip().lower()
+
+
+class RuntimeControlRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    action: RuntimeControlAction
 
 
 def _request_id(request: Request) -> str:
@@ -100,6 +107,7 @@ def create_app(
     runtime.ensure_runtime_dirs()
     apply_migrations(runtime.database_path)
     auth = AuthService(runtime.database_path)
+    runtime_status_service = RuntimeStatusService(runtime, runtime_identity)
 
     app = FastAPI(title="Newsroom", version=__version__)
     app.state.runtime_config = runtime
@@ -123,7 +131,8 @@ def create_app(
             )
         if (
             request.url.path.startswith("/api/v1/auth/")
-            or request.url.path in {"/api/v1/metrics", "/api/v1/runtime/identity"}
+            or request.url.path == "/api/v1/metrics"
+            or request.url.path.startswith("/api/v1/runtime/")
         ):
             response.headers["Cache-Control"] = "no-store"
 
@@ -350,6 +359,34 @@ def create_app(
             request.cookies.get(CSRF_COOKIE),
         ):
             raise HTTPException(status_code=403, detail="csrf validation failed")
+
+    @api.get("/runtime/status")
+    async def runtime_status(request: Request):
+        require_user(request)
+        return {
+            "request_id": _request_id(request),
+            **runtime_status_service.snapshot(),
+        }
+
+    @api.post("/runtime/control", status_code=202)
+    async def runtime_control(
+        payload: RuntimeControlRequest,
+        request: Request,
+        background_tasks: BackgroundTasks,
+    ):
+        user = require_user(request)
+        require_csrf(request, user)
+        try:
+            owner = runtime_status_service.prepare_control(payload.action)
+        except RuntimeControlUnavailable as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        background_tasks.add_task(runtime_status_service.dispatch_control, owner)
+        return {
+            "accepted": True,
+            "action": payload.action,
+            "transition": "stopping" if payload.action == "stop_newsroom" else "restarting",
+            "request_id": _request_id(request),
+        }
 
     @api.get("/metrics")
     async def metrics(request: Request):
