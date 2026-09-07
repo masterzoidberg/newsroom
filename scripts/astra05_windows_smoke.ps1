@@ -76,8 +76,8 @@ function Invoke-StartLauncher([string]$Launcher) {
             Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
             throw 'Start Newsroom launcher did not exit within the smoke-test deadline.'
         }
-        $stdout = if (Test-Path -LiteralPath $stdoutPath) { Get-Content -LiteralPath $stdoutPath -Raw } else { '' }
-        $stderr = if (Test-Path -LiteralPath $stderrPath) { Get-Content -LiteralPath $stderrPath -Raw } else { '' }
+        $stdout = if (Test-Path -LiteralPath $stdoutPath) { [string](Get-Content -LiteralPath $stdoutPath -Raw) } else { '' }
+        $stderr = if (Test-Path -LiteralPath $stderrPath) { [string](Get-Content -LiteralPath $stderrPath -Raw) } else { '' }
         return [pscustomobject]@{
             ExitCode = $process.ExitCode
             Output = (($stdout.Trim(), $stderr.Trim()) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }) -join "`n"
