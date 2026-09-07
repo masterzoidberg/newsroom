@@ -4,20 +4,28 @@
 
 At audit time `Get-NetTCPConnection -LocalPort 8127 -State Listen` returned `127.0.0.1:8127`, PID **48036**, Python 3.12, started 2026-09-06 18:03:19 local. Sanitized process inspection identified `newsroom.runtime api` against the `phase29-trial` root. Worker PID **38908** and scheduler PID **59636** shared parent **54688** and the same start time. Public `GET /api/v1/health` returned `service=newsroom`, `status=ok`, `version=0.1.0-dev`.
 
-`runtime.py:main` resolves the root, creates directories, applies migrations, then `_run_api` calls `uvicorn.run(create_app(...), host, port)`. There is no preflight listener identification or application-instance lock. A second command attempts to bind an already occupied endpoint and Windows rejects it with 10048. The **current conflict is explained by an already-running Newsroom API**. The audit did not launch a duplicate on 8127 or reproduce the historical failure destructively; no historical error timestamp proves the owner at the exact original event.
+At the audited baseline `runtime.py:main` resolved the root, created directories, applied migrations, then `_run_api` called `uvicorn.run(create_app(...), host, port)`. There was no preflight listener identification or application-instance lock. A second command attempted to bind an already occupied endpoint and Windows rejected it with 10048. The **observed conflict was explained by an already-running Newsroom API**. The audit did not launch a duplicate on 8127 or reproduce the historical failure destructively; no historical error timestamp proves the owner at the exact original event.
 
 No `Newsroom*` scheduled tasks were returned by the read-only query. Do not attribute this specific instance to Task Scheduler. The installer can nevertheless produce the same experience: `IgnoreNew` prevents another instance of each registered task, not an independent manual Python command. Fixed task names also do not describe multiple installations/roots cleanly.
+
+## Implementation status after AST-02
+
+AST-02 implements the API-side ownership and fixed-port diagnosis slice without starting the supervisor architecture. `newsroom/runtime_identity.py` now provides a stable non-secret installation UUID bound to the canonical runtime root, an OS-backed exclusive API lock, owner metadata containing canonical root/role/release/PID/process-creation token, bounded local endpoint classification, and redacted public identity data. `runtime.py:_run_api` performs preflight before API migration/bind, reuses only a healthy verified matching API, fails closed for mismatched/unmanaged/foreign/unknown ownership, and diagnoses a bind race through the same fixed-port path. It never kills a listener or silently selects another port.
+
+Concurrent same-root launches converge through the OS lock plus a bounded reconciliation window. If the first lock holder dies before becoming usable, the waiting launcher may take the released OS lock and continue; if ownership remains ambiguous after the bound, startup fails with recovery guidance. PID creation time is part of verification so stale metadata/PID reuse cannot by itself establish ownership. The public `/api/v1/runtime/identity` response intentionally omits filesystem paths.
+
+This is not yet the normal-user startup authority. Worker/scheduler singleton ownership, child reconciliation, heartbeats, stop/restart/drain and one-action launch remain AST-03 through AST-05. Windows process-creation-token code is implemented but clean installed-Windows lifecycle qualification remains a later acceptance boundary. The active trial and port 8127 were not contacted or modified by AST-02 development.
 
 ## Current failure modes
 
 | Question | Current answer |
 |---|---|
-| Can components get out of sync? | Yes. Independent roots/commands/installation versions and separate failures; API liveness says nothing about worker readiness. |
+| Can components get out of sync? | Yes. AST-02 protects API ownership, but worker/scheduler still use independent roots/commands/installation versions and separate failures; API liveness says nothing about worker readiness. |
 | How does UI know health? | `App.tsx` checks `/health` at mount and browser online/offline changes. `navigator.onLine` is not API health; “Synced” overstates the result. |
 | What happens after reboot? | Registered tasks use AtStartup/S4U. Manual processes have no automatic resurrection. The current trial must not be assumed installed as tasks. |
 | After update? | Runbook requires manual writer shutdown/restart; no single version/migration transition authority. |
 | Graceful exit? | Worker/scheduler observe a stop event between operations; worker finishes synchronous handler. Task stopping is not demonstrated as graceful Python shutdown. |
-| Crash recovery? | Job leases/retries and stage identities exist. `WorkerProcess` does not periodically renew a running job lease; validate long-handler behavior before relying on automatic crash restarts. |
+| Crash recovery? | API concurrent-start crash handoff is bounded by AST-02. Aggregate child restart is not implemented. Job leases/retries and stage identities exist; `WorkerProcess` does not periodically renew a running job lease, so validate long-handler behavior before relying on automatic crash restarts. |
 
 ## Recommended minimum architecture
 
@@ -29,11 +37,11 @@ Tradeoff: the initial supported unattended promise is “while this Windows user
 
 ## Single authority and identity
 
-- A non-secret install/runtime manifest outside the repository holds install path, explicit environment/root, fixed host/port, stable installation UUID and selected release identity. Existing `RuntimeConfig` remains the root guard.
-- Use an OS-backed exclusive lock scoped to user + canonical root. A PID file is diagnostic metadata, not a lock. Store PID, process creation time, component role, installation UUID and release generation. Defend against PID reuse.
-- Supervisor is the only normal startup writer/migration owner. Child entry points retain advanced/dev use, but validate schema/identity and refuse conflicting managed ownership.
-- Root/role identity is verified locally using owner metadata and process identity; public HTTP responses need not expose filesystem paths. A health response saying “newsroom” alone is not proof of same root or executable.
-- Use a same-user protected local control channel for stop/restart/status. Web lifecycle actions require the existing auth/CSRF guard and only allow named operations; never accept arbitrary commands or arbitrary process IDs.
+- A non-secret install/runtime manifest outside the repository holds install path, explicit environment/root, fixed host/port, stable installation UUID and selected release identity. Existing `RuntimeConfig` remains the root guard. AST-02 implements the root-stable UUID and API ownership metadata; AST-03/05 will make the supervisor/installer the normal manifest authority.
+- Use an OS-backed exclusive lock scoped to user + canonical root. A PID file is diagnostic metadata, not a lock. Store PID, process creation time, component role, installation UUID and release generation. Defend against PID reuse. AST-02 implements this for the API role.
+- Supervisor is the only normal startup writer/migration owner. Child entry points retain advanced/dev use, but validate schema/identity and refuse conflicting managed ownership. This remains AST-03 work; AST-02 only moves API migration behind API ownership/preflight.
+- Root/role identity is verified locally using owner metadata and process identity; public HTTP responses need not expose filesystem paths. A health response saying “newsroom” alone is not proof of same root or executable. AST-02 implements this API identity boundary.
+- Use a same-user protected local control channel for stop/restart/status. Web lifecycle actions require the existing auth/CSRF guard and only allow named operations; never accept arbitrary commands or arbitrary process IDs. This remains AST-03/04 work.
 
 ## Launch algorithm
 
@@ -45,7 +53,7 @@ Tradeoff: the initial supported unattended promise is “while this Windows user
 6. Start API/worker/scheduler with identical root and release context, hidden windows, bounded startup deadline. Use short component heartbeats plus readiness, not process presence alone.
 7. Open the same-origin browser/PWA when usable. Show Starting / Ready / Degraded / Stopping / Stopped / Needs attention; distinguish collecting, processing and serving.
 
-A successful bind can still race after preflight: handle the actual bind failure through the same diagnostic path. No infinite retry loops.
+AST-02 implements the API subset of steps 2-4 and handles a successful-preflight/failed-bind race through the same diagnostic path. The supervisor-wide convergence, writer coordination and component repair in steps 1 and 5-7 remain later tasks. No infinite retry loops.
 
 ## Shutdown, failure and update
 

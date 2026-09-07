@@ -94,6 +94,7 @@ def create_app(
     config: RuntimeConfig | None = None,
     *,
     frontend_dist: str | Path | None = None,
+    runtime_identity: dict[str, object] | None = None,
 ) -> FastAPI:
     runtime = config or RuntimeConfig.for_environment("dev")
     runtime.ensure_runtime_dirs()
@@ -120,7 +121,10 @@ def create_app(
             response.headers["Strict-Transport-Security"] = (
                 "max-age=31536000; includeSubDomains"
             )
-        if request.url.path.startswith("/api/v1/auth/") or request.url.path == "/api/v1/metrics":
+        if (
+            request.url.path.startswith("/api/v1/auth/")
+            or request.url.path in {"/api/v1/metrics", "/api/v1/runtime/identity"}
+        ):
             response.headers["Cache-Control"] = "no-store"
 
     @app.middleware("http")
@@ -295,6 +299,23 @@ def create_app(
             "status": "ok",
             "version": __version__,
             "request_id": _request_id(request),
+        }
+
+    @api.get("/runtime/identity")
+    async def runtime_identity_status(request: Request):
+        if runtime_identity is None:
+            return {
+                "service": "newsroom",
+                "managed": False,
+                "version": __version__,
+                "request_id": _request_id(request),
+            }
+        return {
+            "service": "newsroom",
+            "managed": True,
+            "version": __version__,
+            "request_id": _request_id(request),
+            **runtime_identity,
         }
 
     @api.get("/readiness")

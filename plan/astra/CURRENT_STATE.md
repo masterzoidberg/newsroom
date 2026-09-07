@@ -6,24 +6,24 @@ Baseline and checks: [AUDIT_EVIDENCE.md](AUDIT_EVIDENCE.md). Status describes th
 
 | Subsystem | Status | Evidence and remaining boundary |
 |---|---|---|
-| API | MOSTLY DONE | `app.py:create_app`, `runtime.py:_run_api`; authenticated same-origin workspace, public liveness; live 8127 health returned Newsroom/ok; no ownership-aware reuse |
+| API | MOSTLY DONE | `app.py:create_app`, `runtime.py:_run_api`, `runtime_identity.py`; authenticated same-origin workspace plus public liveness and bounded managed identity. AST-02 adds ownership-aware fixed-port preflight/reuse and no-kill collision diagnosis; aggregate component ownership remains absent until AST-03. |
 | Worker | MOSTLY DONE | `runtime.py:build_worker_handlers`, `worker.py`; complete production handler registry and durable outcomes; whole-process health/singleton missing |
 | Scheduler | MOSTLY DONE | `scheduler.py`, `jobs.py:SchedulerService`; persisted ticks/coalescing and due research; heartbeat is not a full service supervisor |
 | Jobs/retry/leases | MOSTLY DONE | `jobs.py`, coalescing/research worker tests; bounded recovery and reservations; test long handlers vs 120-second job lease before adding restart behavior |
-| Process lifecycle | PARTIAL | `_stop_event` supports cooperative worker/scheduler exit; no aggregate ownership/stop handshake |
-| Startup/port handling | PARTIAL | direct Uvicorn bind, no listener diagnosis or root identity |
+| Process lifecycle | PARTIAL | `_stop_event` supports cooperative worker/scheduler exit; AST-02 protects API ownership but there is still no aggregate ownership/stop handshake |
+| Startup/port handling | MOSTLY DONE | AST-02 adds stable installation identity, OS-backed API singleton lock, PID creation-token verification, matching-instance reuse, foreign/mismatched/unmanaged/unknown diagnosis and bind-race handling. Supervisor/component reconciliation and owner-friendly launch remain AST-03-05. |
 | Shutdown/restart | PARTIAL | per-process signals and runbook Task commands; no application-level drain/control |
-| Health | PARTIAL | `/health` liveness and `/readiness` DB integrity; UI polls on mount/network changes, not continuous component health |
+| Health | PARTIAL | `/health` liveness, `/readiness` DB integrity and bounded `/runtime/identity`; UI still does not present continuous API/worker/scheduler health |
 | Runtime roots | DONE | `config.py`, `paths.py`, `test_runtime_config.py`; explicit dev/prod, root outside repository, root suffix checks |
-| Windows install | MOSTLY DONE | `phase16_windows_deploy.ps1`, `release.py`; artifact identity and separate install/runtime roots, operator ceremony remains |
-| Task Scheduler | PARTIAL | three fixed-name tasks, AtStartup/S4U, IgnoreNew per task; cannot prevent manually launched duplicates; no matching tasks returned during audit |
-| Upgrade/migrations | MOSTLY DONE | `migrations.py`, `operations.py`, `cli.py`; contiguous schema 36, integrity checks, rehearsal tools; coordinated writer shutdown is manual |
+| Windows install | MOSTLY DONE | `phase16_windows_deploy.ps1`, `release.py`; artifact identity and separate install/runtime roots, operator ceremony remains; AST-02 Windows creation-token path awaits installed qualification |
+| Task Scheduler | PARTIAL | three fixed-name tasks, AtStartup/S4U, IgnoreNew per task; cannot prevent manually launched worker/scheduler duplicates; no matching tasks returned during audit |
+| Upgrade/migrations | MOSTLY DONE | `migrations.py`, `operations.py`, `cli.py`; contiguous schema 36, integrity checks, rehearsal tools; coordinated writer shutdown is manual. AST-02 moves API migration after endpoint ownership/preflight only; worker/scheduler behavior is unchanged. |
 | Backup/restore | MOSTLY DONE | `operations.py`, `storage.py`, phase15 tests; verified SQLite backup/restore, not effortless owner UX |
 | Logical export/import | MOSTLY DONE | explicit `_EXPORT_COLUMNS`, round-trip/integrity tests; bounded logical reconstruction is not full database recovery |
 | Logs/telemetry | MOSTLY DONE | rotating runtime logs, `telemetry.py`, AI telemetry; no cohesive user diagnostics/recovery screen |
-| Release identity | MOSTLY DONE | manifest hash verification in `release.py`; dirty worktree is recorded, not automatically a distributable release |
-| Tests | MOSTLY DONE | broad offline regression suite, trust-boundary/coalescing/temporal coverage; browser source checks do not replace journey tests |
-| CI | PARTIAL | Linux backend and frontend jobs; backend test invokes `npm.cmd`, while backend job has no frontend npm install; Windows/runtime/keyring checks absent |
+| Release identity | MOSTLY DONE | manifest hash verification in `release.py`; AST-02 consumes installed/source release identity for ownership matching; dirty worktree is recorded, not automatically a distributable release |
+| Tests | MOSTLY DONE | broad offline regression suite plus AST-02 real socket/subprocess identity/collision coverage; browser source checks do not replace journey tests |
+| CI | MOSTLY DONE | clean Ubuntu backend/Ruff and frontend install/lint/typecheck/build pass on AST-01 and AST-02 heads; Windows installed-runtime/keyring/lifecycle checks remain absent |
 
 ## Core product
 
