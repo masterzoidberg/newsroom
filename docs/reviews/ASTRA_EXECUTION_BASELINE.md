@@ -69,38 +69,43 @@ No Astra development or browser test may default to the active trial root or por
 
 ## CI portability correction
 
-Before AST-01, `tests/test_phase12_frontend.py` invoked `npm.cmd run build`. That is a Windows executable name and caused the Ubuntu backend pytest path to fail before the frontend contract assertions could run. The backend job also intentionally installs only Python dependencies.
+Before AST-01, three backend pytest contract tests for the frontend invoked `npm.cmd run build`: Phase 12, Phase 13, and Phase 14. `npm.cmd` is a Windows executable name, while the Ubuntu backend job intentionally installs only Python dependencies. The Phase 12 instance was identified during initial audit; the first hosted AST-01 run then exposed the two remaining instances in Phase 13 and Phase 14.
 
 AST-01 separates responsibilities instead of duplicating frontend installation in the backend job:
 
-- backend pytest validates source-level PWA/product contract invariants without spawning npm;
+- backend pytest validates source-level PWA/product/workbench/Ask contract invariants without spawning npm;
 - the existing frontend CI job owns `npm ci`, TypeScript checks, and the production Vite build on Ubuntu.
 
-This preserves both contract coverage and real build coverage while removing the Windows-only backend dependency.
+This preserves both contract coverage and a real clean frontend build while removing every Windows-only npm dependency from backend pytest.
 
 ## Verification evidence
 
 A supplied repository snapshot was used only as an isolated verification copy. For the affected paths, its Git blob hashes matched current GitHub `main` exactly before modification:
 
 - `tests/test_phase12_frontend.py`: `6ed7cb3026d28a883b351c785ee57b3880585ed0`
+- `tests/test_phase13_frontend.py`: `d1e587c2a6d78608949f008f8bc906396676483e`
+- `tests/test_phase14_frontend.py`: `e772acdca58882c1ccc82fc792e62521ee4e1381`
 - `newsroom/config.py`: `7d3840a76782d592214f525d5a24eebb3c32db4a`
 - `.github/workflows/ci.yml`: `1e227ce182febf242be2525ea6475e080ed7b11b`
 - `frontend/package.json`: `1336caaaa7b52d454ebf2b532ca60de22368821d`
 
-Observed local/container checks on that isolated snapshot:
+Observed checks:
 
 | Check | Result |
 |---|---|
-| `python -m pytest -q tests/test_phase12_frontend.py tests/test_runtime_config.py` before correction | **FAIL as expected**: frontend test raised `FileNotFoundError` for `npm.cmd`; the five runtime-config tests passed |
-| Same targeted command after the source-contract refactor | **PASS**: 6 passed |
+| `python -m pytest -q tests/test_phase12_frontend.py tests/test_runtime_config.py` before correction | **FAIL as expected**: Phase 12 raised `FileNotFoundError` for `npm.cmd`; the five runtime-config tests passed |
+| Same targeted command after the first source-contract refactor | **PASS**: 6 passed |
+| `python -m pytest -q tests/test_phase12_frontend.py tests/test_phase13_frontend.py tests/test_phase14_frontend.py tests/test_runtime_config.py` after hosted discovery/fix | **PASS**: 8 passed |
 | `python -m newsroom.evals validate` | **PASS**: 46 corpus cases valid |
-| `python -m newsroom.evals lite-contract` | **PASS**: 20-question contract valid; results intentionally not run |
+| `python -m newsroom.evals lite-contract` | **PASS**: 20-question contract valid; comparative results intentionally not run |
 | `python -m newsroom.evals baseline` | **PASS**: 20 baseline/semantic cases executed; metrics are diagnostic, not a value verdict |
-| Full `python -m pytest -q` in the container | **UNVERIFIED locally**: execution exceeded the bounded local tool window after reaching 21%; no pass is claimed |
-| Ruff in the container | **UNVERIFIED locally**: Ruff is not installed in the container |
+| Full `python -m pytest -q` in the local container | **UNVERIFIED locally**: execution exceeded the bounded local tool window after reaching 21%; no pass is claimed from that attempt |
+| Ruff in the local container | **UNVERIFIED locally**: Ruff is not installed in that container |
 | `npm run build` against bundled snapshot `node_modules` | **UNVERIFIED locally**: the uploaded dependencies are Windows-shaped and lack Rollup's Linux optional binary; this is not treated as a repository build failure |
+| Draft PR run `34076549706` at commit `99aa49c3047f31ccc18b5e6f6a3869811e36abff` | **PARTIAL/FAIL**: frontend and Ruff passed; backend exposed the two remaining Phase 13/14 `npm.cmd` failures |
+| Draft PR run `34076899509` at commit `1d22282955c3dfa9057c0c765dd8b4988de58236` | **PASS**: Ubuntu backend pytest, Ruff, frontend dependency install, lint, typecheck, and production build all succeeded |
 
-The draft PR's clean GitHub Actions Ubuntu jobs are the authoritative full backend/Ruff/frontend-build verification for this branch. Their exact run result is recorded in `plan/astra/TASKS.md` when AST-01 is closed.
+The hosted clean run is the authoritative full backend/Ruff/frontend-build verification for the implementation code. The final plan-only closure commit is also checked by the draft PR before merge.
 
 ## Non-claims and preservation
 
