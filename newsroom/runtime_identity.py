@@ -482,10 +482,6 @@ def _endpoint_connect_state(host: str, port: int, timeout_seconds: float) -> str
     except ConnectionRefusedError:
         return "closed"
     except (TimeoutError, socket.timeout, OSError):
-        # Windows can report an unbound loopback endpoint with an inconclusive
-        # connect error. A successful exclusive bind is a stronger proof that
-        # no listener currently owns the exact configured endpoint. The socket
-        # is closed immediately; later bind races still fail closed in _run_api.
         return "closed" if _endpoint_bind_available(host, port) else "unknown"
 
 
@@ -518,6 +514,13 @@ def diagnose_endpoint(
     timeout_seconds: float = 0.35,
 ) -> EndpointDiagnosis:
     """Classify the configured endpoint without killing or changing anything."""
+    # Prove a free loopback endpoint by binding before any client connect.
+    # This avoids TCP self-connect on Windows when a configured server port is
+    # inside the dynamic client range and would otherwise be chosen as the
+    # source port for the probe itself.
+    if _endpoint_bind_available(host, port):
+        return EndpointDiagnosis(EndpointStatus.AVAILABLE, "configured endpoint is available")
+
     connect_state = _endpoint_connect_state(host, port, timeout_seconds)
     if connect_state == "closed":
         return EndpointDiagnosis(EndpointStatus.AVAILABLE, "configured endpoint is available")
