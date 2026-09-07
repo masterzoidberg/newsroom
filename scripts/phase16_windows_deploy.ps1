@@ -114,7 +114,7 @@ function Write-StartLauncher(
 ) {
     $pythonLiteral = Quote-PowerShellLiteral $PythonExe
     $installLiteral = Quote-PowerShellLiteral $Install
-    $runtimeCommand = $Runtime.Replace('"', '\"')
+    $runtimeLiteral = Quote-PowerShellLiteral $Runtime
     $installationLiteral = Quote-PowerShellLiteral $InstallationId
     $content = @"
 [CmdletBinding()]
@@ -122,9 +122,10 @@ param([switch]`$NoBrowser)
 `$ErrorActionPreference = 'Stop'
 `$env:PYTHONPATH = $installLiteral
 `$expectedInstallationId = $installationLiteral
+`$runtimeRoot = $runtimeLiteral
 `$startInfo = New-Object System.Diagnostics.ProcessStartInfo
 `$startInfo.FileName = $pythonLiteral
-`$startInfo.Arguments = "-m newsroom.runtime supervisor --environment prod --root `"$runtimeCommand`" --host 127.0.0.1 --port $ListenPort"
+`$startInfo.Arguments = '-m newsroom.runtime supervisor --environment prod --root "' + `$runtimeRoot + '" --host 127.0.0.1 --port $ListenPort'
 `$startInfo.WorkingDirectory = $installLiteral
 `$startInfo.UseShellExecute = `$false
 `$startInfo.CreateNoWindow = `$true
