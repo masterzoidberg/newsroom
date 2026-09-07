@@ -1,6 +1,6 @@
 # Active decisions
 
-D01-D13 were established during the 2026-09-06/07 audit. D14 records the first implemented runtime-identity decision from AST-02. Planning decisions remain contracts unless their implementation status is explicitly recorded in CURRENT_STATE/TASKS.
+D01-D13 were established during the 2026-09-06/07 audit. D14 records the runtime-identity decision from AST-02. D15 records the bounded supervisor/lease decision from AST-03. Planning decisions remain contracts unless their implementation status is explicitly recorded in CURRENT_STATE/TASKS.
 
 | ID | Decision | Basis / revisit condition |
 |---|---|---|
@@ -18,16 +18,21 @@ D01-D13 were established during the 2026-09-06/07 audit. D14 records the first i
 | D12 | No broad Phase 30 or commercial platform without value verdict | provenance complexity must earn its place through unchanged decision rule |
 | D13 | Test CI portability explicitly; local green is not CI proof | Linux backend workflow meets hard-coded npm.cmd frontend build test |
 | D14 | API ownership uses a root-stable installation UUID, OS-held exclusive lock, PID creation token and bounded local identity protocol; matching fixed-port instances may be reused, all unverified owners fail closed | AST-02 behavioral tests and hosted CI; AST-03 may move normal ownership to the supervisor but must preserve these verification/no-kill/no-random-port invariants |
+| D15 | Normal managed runtime uses one supervisor over the existing API/worker/scheduler, with a shared root/release/endpoint manifest, OS-held per-role locks, PID creation-token verification, fresh heartbeats, token-bound cooperative stop controls, managed-only migration ownership, bounded per-role restart/backoff and continuous renewal of a running Job lease while the same worker still owns it | AST-03 real subprocess/crash/heartbeat/drain/lease tests plus hosted full CI. Stale/ambiguous/unmanaged roles fail closed and are never killed or replaced. Installed Windows/task registration and authenticated browser lifecycle control remain AST-05 and AST-04 respectively. |
 
 ## Deviations and discoveries
 
 - The first browser reconnaissance captured loading states after hash navigation. It was repeated with an explicit busy-state wait; only the settled pass supports empty-state conclusions.
 - Settled mobile screenshot exposed internal Settings button/card overlap despite no page-width overflow. AST-13 includes component-boundary acceptance.
-- Current test count is 844, not the older acceptance record's 838. Both refer to different commits; preserve historical records.
-- AST-02 was implemented as a stacked draft PR because AST-01 is verified but still unmerged; the stack makes the dependency explicit rather than rebasing the task onto stale `main`.
-- AST-02 discovered that simultaneous startup can lose its first lock holder before the API becomes ready. The bounded waiting launcher now attempts to re-acquire the released OS lock and proceeds only after it owns that lock; it still never kills a process or chooses another port.
+- Current test count is 844 at the audited baseline, not the older acceptance record's 838. Historical records refer to different commits and are preserved as such.
+- AST-02 was implemented as a stacked draft PR because AST-01 is verified but still unmerged; AST-03 continues the same explicit stacked dependency model rather than pretending stale `main` contains verified prerequisites.
+- AST-02 discovered that simultaneous startup can lose its first lock holder before the API becomes ready. The bounded waiting launcher attempts to re-acquire the released OS lock and proceeds only after it owns that lock; it still never kills a process or chooses another port.
 - AST-02 also discovered that the installed `release-manifest.json` can exceed the deliberately small runtime-owner metadata limit. Release-manifest parsing therefore uses a separate bounded reader rather than weakening the runtime identity-file bound.
-- Windows PID creation-time verification is implemented for the target platform but has not been qualified in a clean installed Windows lifecycle in AST-02. That remains an explicit installed-platform acceptance boundary for AST-05/AST-19, not a reason to infer failure of the cross-platform ownership contract.
-- AST-02 changed no schema, provider route, budget authority, evidence/provenance rule or active trial behavior. No paid call was made and port 8127 was not contacted.
+- Windows PID creation-time verification is implemented for the target platform but has not been qualified in a clean installed Windows lifecycle. That remains an explicit installed-platform acceptance boundary for AST-05/AST-19.
+- AST-03 confirmed a concrete lease-safety gap: `WorkerProcess` could execute a synchronous handler longer than the existing 120-second Job lease without renewal. The correction renews only the same running Job while the same worker remains lease owner; ownership/status loss stops renewal and prevents that worker from issuing a stale completion.
+- AST-03 self-review found that sequential child startup could otherwise spawn a new sibling before discovering an unmanaged role. Startup now preflights all roles first; stale, ambiguous or unmanaged ownership blocks sibling creation. Shutdown sends controls only to verified `supervisor_managed` owners and reports anything else without stopping it.
+- AST-03 migration ownership is conservative: the supervisor applies normal managed migrations only when API/worker/scheduler managed locks are all free. A replacement supervisor reconciling surviving same-release children does not write migrations.
+- AST-03 uses no process termination in product supervisor logic. Tests deliberately kill fixture processes to prove crash recovery, but production stop/restart is cooperative and a busy worker that misses the deadline is reported rather than force-killed.
+- AST-03 changed no schema migration, provider route, budget authority, evidence/provenance rule or active trial behavior. No paid call was made and port 8127 was not contacted.
 
 Future updates must add date, task, evidence, rationale, compatibility/data impact and any change to dependencies. Do not overwrite historical decisions to conceal changed assumptions.
