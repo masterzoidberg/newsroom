@@ -326,6 +326,7 @@ class RuntimeSupervisor:
                 }
                 if any(state.status != "healthy" for state in states.values()):
                     self._logger.error("managed startup incomplete states=%s", state_summary)
+                    print(f"managed startup incomplete states={state_summary}", file=sys.stderr)
                     shutdown_result = self.shutdown()
                     self._logger.info(
                         "startup-failure drain drained=%s remaining_roles=%s",
