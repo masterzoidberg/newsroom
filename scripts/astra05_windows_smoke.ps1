@@ -66,10 +66,25 @@ function Register-ProbeTask([string]$Name, [string]$Launcher) {
 }
 
 function Invoke-StartLauncher([string]$Launcher) {
-    $output = & powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $Launcher -NoBrowser 2>&1
-    return [pscustomobject]@{
-        ExitCode = $LASTEXITCODE
-        Output = (($output | ForEach-Object { [string]$_ }) -join "`n")
+    $stdoutPath = Join-Path $tempRoot ('.launcher-' + [Guid]::NewGuid().ToString('N') + '.out.log')
+    $stderrPath = Join-Path $tempRoot ('.launcher-' + [Guid]::NewGuid().ToString('N') + '.err.log')
+    $arguments = "-NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File `"$Launcher`" -NoBrowser"
+    try {
+        $process = Start-Process -FilePath 'powershell.exe' -ArgumentList $arguments -PassThru -WindowStyle Hidden `
+            -RedirectStandardOutput $stdoutPath -RedirectStandardError $stderrPath
+        if (-not $process.WaitForExit(40000)) {
+            Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
+            throw 'Start Newsroom launcher did not exit within the smoke-test deadline.'
+        }
+        $stdout = if (Test-Path -LiteralPath $stdoutPath) { Get-Content -LiteralPath $stdoutPath -Raw } else { '' }
+        $stderr = if (Test-Path -LiteralPath $stderrPath) { Get-Content -LiteralPath $stderrPath -Raw } else { '' }
+        return [pscustomobject]@{
+            ExitCode = $process.ExitCode
+            Output = (($stdout.Trim(), $stderr.Trim()) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }) -join "`n"
+        }
+    }
+    finally {
+        Remove-Item -LiteralPath $stdoutPath, $stderrPath -Force -ErrorAction SilentlyContinue
     }
 }
 
@@ -122,6 +137,18 @@ function Get-ManagedSnapshot {
         }
     }
     return [pscustomobject]$snapshot
+}
+
+function Get-RuntimeLogSummary {
+    $logsRoot = Join-Path $RuntimeRoot 'logs'
+    $summary = [ordered]@{}
+    foreach ($name in @('api.log', 'worker.log', 'scheduler.log')) {
+        $path = Join-Path $logsRoot $name
+        if (Test-Path -LiteralPath $path -PathType Leaf) {
+            $summary[$name] = ((Get-Content -LiteralPath $path -Tail 20) -join "`n")
+        }
+    }
+    return [pscustomobject]$summary
 }
 
 function Wait-Healthy([int]$TimeoutSeconds = 30) {
@@ -269,7 +296,11 @@ try {
 
     $launcherPath = Join-Path $InstallRoot 'start-newsroom.ps1'
     $firstLaunch = Invoke-StartLauncher $launcherPath
-    Assert-True ($firstLaunch.ExitCode -eq 0) "First installed launcher failed: $($firstLaunch.Output)"
+    if ($firstLaunch.ExitCode -ne 0) {
+        $snapshotJson = Get-ManagedSnapshot | ConvertTo-Json -Depth 4 -Compress
+        $logsJson = Get-RuntimeLogSummary | ConvertTo-Json -Depth 4 -Compress
+        throw "First installed launcher failed: $($firstLaunch.Output) Snapshot=$snapshotJson Logs=$logsJson"
+    }
     $initial = Wait-Healthy
 
     $launcherArgs = "-NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File `"$launcherPath`" -NoBrowser"
