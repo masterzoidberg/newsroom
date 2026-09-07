@@ -181,12 +181,15 @@ def ensure_runtime_manifest(
     return expected
 
 
-def current_owner(config: RuntimeConfig, role: str) -> ManagedOwner | None:
+def current_owner(
+    config: RuntimeConfig,
+    role: str,
+) -> ManagedOwner | None:
     payload = _read_json(component_owner_path(config, role))
     if payload is None:
         return None
     try:
-        return ManagedOwner(
+        owner = ManagedOwner(
             installation_id=str(payload["installation_id"]),
             root=str(payload["root"]),
             role=str(payload["role"]),
@@ -197,6 +200,7 @@ def current_owner(config: RuntimeConfig, role: str) -> ManagedOwner | None:
         )
     except (KeyError, TypeError, ValueError):
         return None
+    return owner
 
 
 def verify_owner(
