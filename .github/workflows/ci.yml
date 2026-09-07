@@ -46,3 +46,10 @@ jobs:
         run: npm run typecheck
       - name: Frontend production build
         run: npm run build
+      - name: AST-04 browser status smoke
+        run: python3 ../scripts/astra04_browser_smoke.py --frontend-dist dist --output ../.artifacts/astra04-browser-status
+      - name: Upload AST-04 browser status evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: astra04-browser-status
+          path: .artifacts/astra04-browser-status
