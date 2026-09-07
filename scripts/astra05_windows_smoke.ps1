@@ -8,7 +8,9 @@ param(
 $ErrorActionPreference = 'Stop'
 $SourceRoot = [IO.Path]::GetFullPath($SourceRoot)
 $OutputDirectory = [IO.Path]::GetFullPath($OutputDirectory)
-$CurrentUser = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name
+$currentIdentity = [System.Security.Principal.WindowsIdentity]::GetCurrent()
+$CurrentUser = $currentIdentity.Name
+$CurrentUserSid = $currentIdentity.User.Value
 $LegacyNames = @('Newsroom-API', 'Newsroom-Worker', 'Newsroom-Scheduler')
 $runId = [Guid]::NewGuid().ToString('N')
 $tempRoot = Join-Path $env:RUNNER_TEMP "newsroom-astra05-$runId"
@@ -24,6 +26,22 @@ $listener = $null
 function Assert-True([bool]$Condition, [string]$Message) {
     if (-not $Condition) {
         throw $Message
+    }
+}
+
+function Resolve-AccountSid([string]$Account) {
+    if ([string]::IsNullOrWhiteSpace($Account)) {
+        return $null
+    }
+    try {
+        if ($Account -match '^S-1-') {
+            return ([System.Security.Principal.SecurityIdentifier]$Account).Value
+        }
+        $ntAccount = New-Object System.Security.Principal.NTAccount($Account)
+        return ($ntAccount.Translate([System.Security.Principal.SecurityIdentifier])).Value
+    }
+    catch {
+        return $null
     }
 }
 
@@ -136,7 +154,9 @@ function Request-SupervisorStop {
         requested_at = [DateTime]::UtcNow.ToString('o')
     }
     try {
-        $payload | ConvertTo-Json -Compress | Set-Content -LiteralPath $temporary -Encoding utf8
+        $json = $payload | ConvertTo-Json -Compress
+        $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+        [System.IO.File]::WriteAllText($temporary, $json, $utf8NoBom)
         Move-Item -LiteralPath $temporary -Destination $controlPath -Force
     }
     finally {
@@ -174,6 +194,7 @@ $Port = Get-FreeLoopbackPort
 $evidence = [ordered]@{
     platform = [Environment]::OSVersion.VersionString
     current_user = $CurrentUser
+    current_user_sid = $CurrentUserSid
     port = $Port
     trial_contacted = $false
     paid_calls = 0
@@ -233,7 +254,8 @@ try {
     Assert-True (@($task.Actions).Count -eq 1) 'Namespaced task has more than one action.'
     Assert-True ([string]$task.Actions[0].Arguments -like '*start-newsroom.ps1*') 'Namespaced task does not invoke the Start Newsroom launcher.'
     Assert-True ([string]$task.Actions[0].Arguments -like '*-NoBrowser*') 'Sign-in task must reuse the launcher without opening a browser.'
-    Assert-True ([string]$task.Principal.UserId -eq $CurrentUser) 'Namespaced task principal is not the current Windows user.'
+    $taskPrincipalSid = Resolve-AccountSid ([string]$task.Principal.UserId)
+    Assert-True ($taskPrincipalSid -eq $CurrentUserSid) 'Namespaced task principal does not resolve to the current Windows user SID.'
     Assert-True ([string]$task.Principal.LogonType -match 'Interactive') 'Namespaced task does not use an interactive logon token.'
     Assert-True (@($task.Triggers | Where-Object { $_.CimClass.CimClassName -match 'LogonTrigger' }).Count -eq 1) 'Namespaced task does not have exactly one logon trigger.'
 
@@ -286,7 +308,8 @@ try {
         name = $taskName
         trigger = 'AtLogOn'
         logon_type = 'Interactive'
-        same_user = $true
+        same_user_sid = $true
+        principal_sid = $taskPrincipalSid
         action_uses_single_launcher = $true
         manual_trigger_reached_healthy = $true
     }
