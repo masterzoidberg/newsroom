@@ -7,9 +7,9 @@ the source repository.
 ## Windows release and startup
 
 Run the deployment script from the accepted checkout. Validation is read-only
-with respect to install roots, scheduled tasks, and Tailscale; production
-installation refuses a dirty Git worktree and refuses to overwrite a non-empty
-install directory.
+with respect to install roots, shortcuts, scheduled tasks, and Tailscale;
+production installation refuses a dirty Git worktree and refuses to overwrite a
+non-empty install directory.
 
 ```powershell
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\phase16_windows_deploy.ps1 -Mode Validate
@@ -18,13 +18,54 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\phase16_window
 
 The default production layout is `%LOCALAPPDATA%\Newsroom\app\prod` for the
 immutable application artifact and `%LOCALAPPDATA%\Newsroom\prod` for data,
-backups, logs, and cache. Override both explicitly when the operator chooses a
-different volume. The generated launchers bind API only to `127.0.0.1`, use the
-same-origin FastAPI/PWA build, and start one bounded worker plus one scheduler.
-Task Scheduler uses an at-start trigger, a five-restart limit, a one-minute
-restart interval, and ignores overlapping instances. The process identity is
-recorded in `release-manifest.json`; `release.py` verifies every installed
-artifact hash.
+backups, logs, cache, and managed runtime identity. Installation creates one
+**Start Newsroom** shortcut under the current user's Start Menu and one hidden
+`start-newsroom.ps1` launcher in the install root. The shortcut starts or reuses
+the AST-03 supervisor on the configured fixed loopback port, waits for the
+matching managed API identity, and opens the product. Repeated shortcut launches
+reuse the verified managed instance. They never kill a listener or choose an
+alternate port.
+
+When `-RegisterTasks` is selected, the installer registers exactly one
+installation-namespaced Task Scheduler entry such as
+`Newsroom-<installation-prefix>-Start`. It runs the same launcher with
+`-NoBrowser` **at interactive user sign-in**, under the same Windows identity as
+the installer. The task keeps the existing five-restart/one-minute bound,
+`StartWhenAvailable`, and `IgnoreNew`; it does not use S4U and it does not
+create separate API, worker, and scheduler tasks. This milestone makes no
+pre-login guarantee.
+
+Historical installs may contain the fixed task names `Newsroom-API`,
+`Newsroom-Worker`, and `Newsroom-Scheduler`. The installer detects those names
+before copying install files. If task registration is requested while legacy
+tasks are present, installation stops without changing install files or tasks
+unless `-MigrateLegacyTasks` is supplied explicitly. Migration removes only
+those three exact names after verifying that each action still points to the
+known historical `run-api.ps1`, `run-worker.ps1`, or `run-scheduler.ps1`
+launcher. Any unrecognized action is left untouched and causes migration to
+stop for manual review. Unrelated scheduled tasks are never enumerated as
+migration targets.
+
+```powershell
+# Only after reviewing the detected historical Newsroom task names/actions:
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\phase16_windows_deploy.ps1 `
+  -Mode Install -RegisterTasks -MigrateLegacyTasks
+```
+
+`release-manifest.json` records the source and installed artifact digests,
+runtime installation UUID, generated launcher/shortcut hashes, the single task
+name, trigger/logon type, and whether a reviewed legacy migration occurred.
+`release.py` continues to verify the copied application artifact hashes.
+
+Closing the browser or the Start Newsroom launcher does **not** stop background
+monitoring. The supervisor and its API/worker/scheduler children are independent
+background processes. Use the authenticated Status & recovery controls in the
+product to stop or restart the managed runtime. A locked desktop does not by
+itself request shutdown, but acquisition cannot occur while the computer is
+asleep or powered off. On wake, the running scheduler uses existing durable
+coalescing/catch-up behavior. On reboot, Newsroom starts only after the configured
+Windows user signs in. Pre-login/logged-out operation is outside the supported
+milestone and must not be inferred from the old S4U task topology.
 
 After the local health checks pass, configure private HTTPS access explicitly:
 
@@ -36,8 +77,9 @@ tailscale serve get-config --all
 Tailscale Serve must target `http://127.0.0.1:8127`; do not use Funnel or bind
 the application to a LAN/public interface. Application authentication remains
 required even on the private tailnet. The installer does not create passwords
-or persist provider secrets; set those through the operator-controlled process
-environment or secret manager before enabling an optional provider.
+or persist provider secrets. Future OS-vault credentials are intentionally tied
+to this same-user startup identity; do not move the scheduled task to a service
+or different account without separately qualifying credential access.
 
 ## Safety boundaries
 
@@ -72,11 +114,11 @@ npm.cmd run build
 Pop-Location
 ```
 
-Runtime secrets must be supplied by the Windows service/task environment or a
-local secret manager. Do not put them in `settings`, exports, logs, the source
-tree, or command arguments. The logical export intentionally omits users,
-sessions, settings, note bodies, search text, provider payloads, raw Ask
-answers, and prompt metadata.
+Runtime secrets must be supplied only through the approved configuration path
+for the release being qualified. Do not put them in `settings`, exports, logs,
+the source tree, scheduled-task arguments, or launcher arguments. The logical
+export intentionally omits users, sessions, settings, note bodies, search text,
+provider payloads, raw Ask answers, and prompt metadata.
 
 ## Health and telemetry
 
@@ -85,8 +127,13 @@ python -m newsroom.cli status --environment prod --root C:\Newsroom\prod
 python -m newsroom.cli verify --environment prod --root C:\Newsroom\prod
 ```
 
-`GET /api/v1/health` is a low-sensitivity liveness check. `GET
-/api/v1/readiness` checks SQLite integrity and required schema relationships.
+`GET /api/v1/health` is a low-sensitivity API liveness check, not whole-runtime
+health. `GET /api/v1/readiness` checks SQLite integrity and required schema
+relationships. Authenticated `GET /api/v1/runtime/status` projects the managed
+supervisor/API/worker/scheduler state plus bounded active-job counts. The product
+Status & recovery surface is the normal owner view for starting, idle,
+processing, degraded, stopping, stopped, and unavailable states.
+
 Authenticated operators can use `GET /api/v1/metrics`; it returns only bounded
 counters and latency aggregates. A non-empty `failure_counts_by_subsystem`
 identifies whether failures cluster in auth, acquisition, research, jobs, Ask,
@@ -116,14 +163,20 @@ also removes expired or long-revoked sessions.
 
 ## Failure response
 
-1. If readiness is not ready, stop new worker/scheduler starts and capture the
+1. If Start Newsroom reports that the configured endpoint cannot be used, do
+   not start a second port or terminate the existing listener. Review the
+   runtime status/logs, identify whether the owner is matching, unmanaged,
+   mismatched, foreign, or unknown, resolve that owner explicitly, and retry the
+   same shortcut.
+2. If readiness is not ready, stop new worker/scheduler starts and capture the
    safe output of `verify` plus the request ID from the failing API response.
-2. If acquisition is failing, inspect source-profile error codes and the
+3. If acquisition is failing, inspect source-profile error codes and the
    `acquisition_events` outcome; do not disable SSRF or response bounds.
-3. If jobs are stuck, stop the worker, verify the database, then restart it;
-   expired leases recover through the durable queue with bounded retry/backoff.
-4. If a provider is unavailable or a budget is exhausted, keep the local route
+4. If jobs are stuck, use the managed Status & recovery controls first. Do not
+   force-kill an ambiguous/unmanaged owner; expired leases recover through the
+   durable queue with bounded retry/backoff.
+5. If a provider is unavailable or a budget is exhausted, keep the local route
    active and leave paid routing disabled; do not retry outside the persisted
    Job/Question budget.
-5. Preserve the original database and logs until a verified backup and export
+6. Preserve the original database and logs until a verified backup and export
    have been captured.

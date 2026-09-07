@@ -53,3 +53,52 @@ jobs:
         with:
           name: astra04-browser-status
           path: .artifacts/astra04-browser-status
+
+  windows-start-newsroom:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Install Windows smoke dependencies
+        shell: powershell
+        run: >-
+          python -m pip install
+          "argon2-cffi>=23.1"
+          "fastapi>=0.100"
+          "openai>=1.68,<2.0"
+          "pydantic>=2.0"
+          "uvicorn>=0.23"
+          "pytest>=8.0"
+          "httpx>=0.24"
+      - name: Install frontend dependencies
+        working-directory: frontend
+        run: npm ci
+      - name: Build accepted frontend artifact
+        working-directory: frontend
+        run: npm run build
+      - name: Verify release source remains clean
+        shell: powershell
+        run: |
+          $dirty = @(git status --porcelain --untracked-files=all)
+          if ($dirty.Count -ne 0) {
+            throw "Windows qualification source is dirty: $($dirty -join '; ')"
+          }
+      - name: AST-05 installed Windows lifecycle smoke
+        shell: powershell
+        run: >-
+          .\scripts\astra05_windows_smoke.ps1
+          -SourceRoot "${{ github.workspace }}"
+          -OutputDirectory "${{ github.workspace }}\.artifacts\astra05-windows"
+          -PythonExe python
+      - name: Upload AST-05 Windows qualification evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: astra05-windows-qualification
+          path: .artifacts/astra05-windows
