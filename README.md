@@ -43,8 +43,8 @@ bounded Task Scheduler restart configuration, and opt-in private Tailscale Serve
 configuration with final acceptance rehearsal evidence; final promotion remains
 pending.
 
-The post-audit roadmap is authoritative at `plan/phases-v2/README.md`. Phases
-01–16 remain historical implementation records; **Phase 21 — Structured
+The historical post-audit roadmap is retained at `plan/phases-v2/README.md`.
+Phases 01–16 remain historical implementation records; **Phase 21 — Structured
 Article Analysis and one real AI provider** is complete (offline gate and the
 recorded Live Test B), following the completed
 Phase 20 semantic-scope/automatic-relevance, Phase 19 changed-DocumentVersion
