@@ -460,16 +460,33 @@ def verify_api_owner(
     return True, "verified"
 
 
+def _endpoint_bind_available(host: str, port: int) -> bool:
+    """Prove a loopback endpoint is bindable without taking lasting ownership."""
+    family = socket.AF_INET6 if ":" in host else socket.AF_INET
+    probe = socket.socket(family, socket.SOCK_STREAM)
+    try:
+        if os.name == "nt" and hasattr(socket, "SO_EXCLUSIVEADDRUSE"):
+            probe.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
+        probe.bind((host, port))
+    except OSError:
+        return False
+    finally:
+        probe.close()
+    return True
+
+
 def _endpoint_connect_state(host: str, port: int, timeout_seconds: float) -> str:
     try:
         with socket.create_connection((host, port), timeout=timeout_seconds):
             return "open"
     except ConnectionRefusedError:
         return "closed"
-    except (TimeoutError, socket.timeout):
-        return "unknown"
-    except OSError:
-        return "unknown"
+    except (TimeoutError, socket.timeout, OSError):
+        # Windows can report an unbound loopback endpoint with an inconclusive
+        # connect error. A successful exclusive bind is a stronger proof that
+        # no listener currently owns the exact configured endpoint. The socket
+        # is closed immediately; later bind races still fail closed in _run_api.
+        return "closed" if _endpoint_bind_available(host, port) else "unknown"
 
 
 def _http_json(host: str, port: int, path: str, timeout_seconds: float) -> tuple[int, dict[str, Any] | None] | None:
