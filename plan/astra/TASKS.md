@@ -1,14 +1,14 @@
 # Canonical task ledger
 
-Execution state after AST-03. Allowed statuses: NOT_STARTED, READY, IN_PROGRESS, BLOCKED, DONE, DEFERRED. A dependency means verified DONE unless a recorded decision explicitly narrows it. Promote the next eligible task to READY when updating NEXT; never treat elapsed time as paid authorization or human scoring.
+Execution state after AST-04. Allowed statuses: NOT_STARTED, READY, IN_PROGRESS, BLOCKED, DONE, DEFERRED. A dependency means verified DONE unless a recorded decision explicitly narrows it. Promote the next eligible task to READY when updating NEXT; never treat elapsed time as paid authorization or human scoring.
 
 | ID | Title | Status | Priority | Milestone | Dependencies | Size |
 |---|---|---|---|---|---|---|
 | AST-01 | Freeze the execution baseline and isolate development from observation | DONE | P0 | M0 | None | M |
 | AST-02 | Identify application instances and diagnose port conflicts | DONE | P0 | M1 | AST-01 | M |
 | AST-03 | Supervise existing runtime components safely | DONE | P0 | M1 | AST-02 | M |
-| AST-04 | Expose honest component status and recovery controls | READY | P0 | M1 | AST-03 | M |
-| AST-05 | Ship one Start Newsroom entry point | NOT_STARTED | P0 | M1 | AST-04 | M |
+| AST-04 | Expose honest component status and recovery controls | DONE | P0 | M1 | AST-03 | M |
+| AST-05 | Ship one Start Newsroom entry point | READY | P0 | M1 | AST-04 | M |
 | AST-06 | Create typed public AI configuration metadata | NOT_STARTED | P0 | M2 | AST-05 | M |
 | AST-07 | Store credentials in an approved operating-system vault | NOT_STARTED | P0 | M2 | AST-06 | M |
 | AST-08 | Make paid admission durable across processes and reloads | NOT_STARTED | P0 | M2 | AST-07 | M |
@@ -173,7 +173,7 @@ Execution state after AST-03. Allowed statuses: NOT_STARTED, READY, IN_PROGRESS,
 ## AST-04 — Expose honest component status and recovery controls
 
 - **ID:** AST-04
-- **Status:** READY
+- **Status:** DONE
 - **Priority:** P0
 - **Milestone:** M1
 - **Dependencies:** AST-03
@@ -185,28 +185,42 @@ Execution state after AST-03. Allowed statuses: NOT_STARTED, READY, IN_PROGRESS,
 
 **Why now:** Public liveness and browser network status do not prove worker/scheduler progress.
 
-**Files/subsystems:** newsroom/app.py; newsroom/domain_api.py; frontend/src/App.tsx; frontend/src/components/AppShell.tsx; frontend/src/views/AdminViews.tsx.
+**Files/subsystems:** `newsroom/app.py`; new `newsroom/runtime_status.py`; `frontend/src/App.tsx`; `frontend/src/components/AppShell.tsx`; new `frontend/src/lib/runtime.ts`; `.github/workflows/ci.yml`; new `scripts/astra04_browser_smoke.py`; new `tests/test_runtime_status_api.py`; new `tests/test_runtime_status_frontend.py`. AST-03 `runtime_managed.py` and `runtime_supervisor.py` remain the lifecycle authority and were reused rather than duplicated.
 
-**Implementation approach:** Expose authenticated bounded runtime status and named restart/stop requests to the supervisor through its protected control channel. Poll lightweight heartbeats with sensible backoff; distinguish API down, worker/scheduler degraded, idle, stopped and starting. Keep expensive integrity scans out of frequent status polling. Show an external launcher recovery path when API is unavailable.
+**Implementation approach:** Expose authenticated bounded runtime status and named restart/stop requests through the existing AST-03 cooperative control primitive. Poll lightweight heartbeats plus active-job counts with bounded backoff; distinguish API down, worker/scheduler degraded, idle, queued/processing, stopped and starting. Keep `/readiness` integrity scans out of frequent status polling. Keep browser network state separate and show an external launcher recovery path when API is unavailable.
 
-**Non-goals:** Arbitrary command execution, exposing root paths publicly, new general diagnostics dashboard.
+**Non-goals:** Arbitrary command execution, exposing root paths/PIDs/process tokens publicly, force-kill controls, random-port recovery, new general diagnostics dashboard.
 
-**Tests:** Auth/CSRF/control allowlist tests; browser component-down and network-only failure; stop acknowledgement before API closes.
+**Tests:** Auth/CSRF/control allowlist tests; bounded status payload; idle/queued/processing work; stale worker; browser component-down and network-only failure; stop/restart acknowledgement; isolated rendered browser states.
 
 **Acceptance criteria:**
 
-- [ ] Status identifies missing/stale components and distinguishes no work from failure
-- [ ] Authorized named controls work and unauthorized/CSRF-invalid calls fail
-- [ ] Browser does not claim Synced based only on navigator.onLine or API liveness
+- [x] Status identifies missing/stale components and distinguishes no work from failure
+- [x] Authorized named controls work and unauthorized/CSRF-invalid calls fail
+- [x] Browser does not claim Synced based only on navigator.onLine or API liveness
 
-**Completion evidence:** Not yet executed. Required: API contract, mocked health failures and browser screenshots. Record actual HEAD/artifact, changed files, commands with exit results, manual checks and remaining limitations here upon completion.
+**Completion evidence:**
+
+- AST-04 was implemented on `astra/AST-04-status-controls`, stacked directly from verified AST-03 closure head `85f41e1e3c80eba3eb65407c57433f1fa34dbde9`. The corrected implementation head before plan-only closure is `371ff0e24d72f1f0de72eb7f08ff8d1a6c74a659`; schema remains 36 and no migration was added.
+- Authenticated `GET /api/v1/runtime/status` reuses AST-03 supervisor/component ownership and heartbeat state and adds only queued/running Job counts. It is `Cache-Control: no-store`; the public payload excludes runtime root, PID and process-creation token. The heavier `/readiness` database-integrity check is not part of ordinary polling.
+- Authenticated, CSRF-protected `POST /api/v1/runtime/control` has a strict Pydantic allowlist: `restart_api`, `restart_worker`, `restart_scheduler`, `stop_newsroom`. Invalid arbitrary actions fail validation; unavailable/unmanaged targets fail closed. A restart cooperatively stops one verified managed child and AST-03 remains responsible for bounded restart/backoff. Stop targets the verified supervisor so writer-drain ordering remains scheduler/worker before API. No force-kill or arbitrary PID/command path was introduced.
+- Control acknowledgement returns HTTP 202 with an explicit `restarting` or `stopping` transition before the cooperative stop primitive is dispatched as background work, so a Stop Newsroom request can be acknowledged before the API closes.
+- `App.tsx` no longer calls `/health` for service truth and `AppShell.tsx` no longer renders `Synced`. The browser polls `/runtime/status` every five seconds when healthy and backs failures off from 3 seconds to a bounded 30 seconds. `navigator.onLine` remains a separately labeled browser-network signal and an immediate retry trigger, never a health conclusion.
+- Owner-facing states include `Ready · idle`, `Work queued`, `Processing`, `Needs attention`, `Starting`, `Stopping`, `Stopped` and `Service unavailable`. When the API is unavailable/stopped, the UI explains that browser network availability does not prove the local service is running and points to the installed Newsroom launcher.
+- Focused local verification before push passed 20/20 across the new API/status/frontend-contract tests and affected auth/API behavior. Frontend TypeScript no-emit also passed. Local Vite production bundling was not claimed because the supplied `node_modules` was Windows-shaped; clean Ubuntu CI remained the build authority.
+- First hosted implementation run `34147352639` at `ad5b38a5e3732ec34fa3fe20995c24f5fe30a393` passed backend pytest, Ruff and the frontend build/smoke mechanically, but browser artifact `10028137244` failed human visual review because the expanded recovery panel escaped the narrow sidebar and overlapped Settings content. The task remained open; that artifact is retained as failed visual evidence rather than called acceptance.
+- The recovery panel was contained within the scrollable sidebar without a new design system or general dashboard. Corrected implementation head `371ff0e24d72f1f0de72eb7f08ff8d1a6c74a659` then passed hosted run `34147588347`: full backend pytest PASS, Ruff PASS, frontend `npm ci`/lint/typecheck/production build PASS, isolated browser smoke PASS and artifact upload PASS.
+- Corrected browser artifact `10028215213`, digest `sha256:2720fce46a269e67dcc4c1d08fef021b6f034dd71b06b1c18790cc4d6606f8d6`, contains `01-idle.png`, `02-worker-stale.png`, `03-api-unavailable.png` and a manifest. Human visual review accepted all three: idle is compact/truthful; stale worker shows `Needs attention`, the stale role and all four named controls without overlap; API unavailable separates browser-network availability from local API failure and shows launcher recovery guidance.
+- The browser-evidence harness binds only an ephemeral `127.0.0.1` fixture port and contains no `8127` default; its manifest records `trial_contacted=false`. The active `phase29-trial/prod` runtime, data/processes/provider/budget and port `8127` were not contacted or modified. No paid provider call was made.
+- Remaining qualification boundary: AST-04 does not create or qualify the installed Windows one-click launcher, sign-in/reboot/lock/wake behavior or legacy Task Scheduler migration. Those remain AST-05/AST-19 and are not inferred from mocked browser evidence.
+- Draft PR #4 remains open, draft, mergeable, stacked on `astra/AST-03-supervisor`, and unmerged.
 
 **Prompt:** [AST-04](prompts/AST-04.md).
 
 ## AST-05 — Ship one Start Newsroom entry point
 
 - **ID:** AST-05
-- **Status:** NOT_STARTED
+- **Status:** READY
 - **Priority:** P0
 - **Milestone:** M1
 - **Dependencies:** AST-04
