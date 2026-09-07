@@ -76,11 +76,14 @@ function Invoke-StartLauncher([string]$Launcher) {
             Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
             throw 'Start Newsroom launcher did not exit within the smoke-test deadline.'
         }
+        $process.WaitForExit()
+        $process.Refresh()
+        $exitCode = [int]$process.ExitCode
         $stdout = if (Test-Path -LiteralPath $stdoutPath) { Get-Content -LiteralPath $stdoutPath -Raw } else { '' }
         $stderr = if (Test-Path -LiteralPath $stderrPath) { Get-Content -LiteralPath $stderrPath -Raw } else { '' }
         $captured = @([string]$stdout, [string]$stderr) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
         return [pscustomobject]@{
-            ExitCode = $process.ExitCode
+            ExitCode = $exitCode
             Output = ($captured -join "`n")
         }
     }
@@ -309,6 +312,10 @@ try {
     $duplicateB = Start-Process -FilePath 'powershell.exe' -ArgumentList $launcherArgs -PassThru -WindowStyle Hidden
     Assert-True ($duplicateA.WaitForExit(30000)) 'First duplicate launcher did not exit within bounds.'
     Assert-True ($duplicateB.WaitForExit(30000)) 'Second duplicate launcher did not exit within bounds.'
+    $duplicateA.WaitForExit()
+    $duplicateB.WaitForExit()
+    $duplicateA.Refresh()
+    $duplicateB.Refresh()
     Assert-True ($duplicateA.ExitCode -eq 0 -and $duplicateB.ExitCode -eq 0) 'Concurrent duplicate launch returned a failure.'
     $afterDuplicate = Wait-Healthy
     foreach ($role in @('supervisor', 'api', 'worker', 'scheduler')) {
