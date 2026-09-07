@@ -161,16 +161,25 @@ class RuntimeSupervisor:
             return state
         if state.status in {"stale", "ambiguous", "unmanaged"}:
             return state
-        self._spawn(role)
+        spawned = False
+        if state.status == "missing":
+            self._spawn(role)
+            spawned = True
         deadline = time.monotonic() + self.startup_timeout_seconds
         while time.monotonic() < deadline:
             state = self.state(role)
             if state.status in {"healthy", "stale", "ambiguous", "unmanaged"}:
                 return state
+            if state.status == "missing" and not spawned:
+                self._spawn(role)
+                spawned = True
             time.sleep(self.poll_interval_seconds)
         return self.state(role)
 
     def ensure_all(self) -> dict[str, ComponentState]:
+        initial = {role: self.state(role) for role in RUNTIME_ROLES}
+        if any(state.status in {"stale", "ambiguous", "unmanaged"} for state in initial.values()):
+            return initial
         return {role: self.ensure_role(role) for role in RUNTIME_ROLES}
 
     def monitor_once(self) -> dict[str, ComponentState]:
@@ -191,27 +200,44 @@ class RuntimeSupervisor:
 
     def shutdown(self, *, timeout_seconds: float | None = None) -> ShutdownResult:
         deadline = time.monotonic() + (self.shutdown_timeout_seconds if timeout_seconds is None else timeout_seconds)
+        blocked: list[str] = []
+        targets: list[str] = []
         for role in ("scheduler", "worker"):
             state = self.state(role)
-            if state.owner is not None and state.status in {"healthy", "stale", "starting"}:
+            if state.status == "missing":
+                continue
+            if (
+                state.owner is not None
+                and state.owner.supervisor_managed
+                and state.status in {"healthy", "stale", "starting"}
+            ):
                 request_component_stop(self.config, state.owner)
-        while time.monotonic() < deadline:
-            remaining_writers = tuple(role for role in ("scheduler", "worker") if self.state(role).status != "missing")
-            if not remaining_writers:
-                break
-            time.sleep(self.poll_interval_seconds)
-        remaining_writers = tuple(role for role in ("scheduler", "worker") if self.state(role).status != "missing")
+                targets.append(role)
+            else:
+                blocked.append(role)
+        while targets and time.monotonic() < deadline:
+            targets = [role for role in targets if self.state(role).status != "missing"]
+            if targets:
+                time.sleep(self.poll_interval_seconds)
+        remaining_writers = tuple(dict.fromkeys([*blocked, *targets]))
         if remaining_writers:
             return ShutdownResult(False, remaining_writers)
+
         api_state = self.state("api")
-        if api_state.owner is not None and api_state.status in {"healthy", "stale", "starting"}:
-            request_component_stop(self.config, api_state.owner)
+        if api_state.status == "missing":
+            return ShutdownResult(True, ())
+        if (
+            api_state.owner is None
+            or not api_state.owner.supervisor_managed
+            or api_state.status not in {"healthy", "stale", "starting"}
+        ):
+            return ShutdownResult(False, ("api",))
+        request_component_stop(self.config, api_state.owner)
         while time.monotonic() < deadline:
             if self.state("api").status == "missing":
                 return ShutdownResult(True, ())
             time.sleep(self.poll_interval_seconds)
-        remaining = tuple(role for role in RUNTIME_ROLES if self.state(role).status != "missing")
-        return ShutdownResult(not remaining, remaining)
+        return ShutdownResult(False, ("api",))
 
     def restart(self) -> ShutdownResult:
         result = self.shutdown()
