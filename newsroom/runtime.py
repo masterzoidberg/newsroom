@@ -4,7 +4,9 @@ from __future__ import annotations
 import argparse
 import logging
 import signal
+import sys
 import threading
+import time
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from typing import Any
@@ -27,6 +29,21 @@ from .intelligent_monitoring import WatchMaintenanceService
 from .jobs import JobService, compose_completion_hooks, compose_rerun_factories
 from .migrations import apply_migrations
 from .monitoring import MonitorExecutionService, monitor_job_completion_hook
+from .runtime_identity import (
+    EndpointDiagnosis,
+    EndpointStatus,
+    ExclusiveFileLock,
+    api_lock_path,
+    build_process_identity,
+    clear_api_owner,
+    diagnose_endpoint,
+    diagnosis_message,
+    ensure_installation_identity,
+    read_api_owner,
+    resolve_release_id,
+    verify_api_owner,
+    write_api_owner,
+)
 from .report_automation import (
     AutomaticReportStageExecutionService,
     automatic_report_stage_completion_hook,
@@ -194,23 +211,117 @@ def _run_scheduler(config: RuntimeConfig, options: Any) -> int:
 
 def _run_api(config: RuntimeConfig, options: Any) -> int:
     _configure_logging(config, "api")
-    uvicorn.run(
-        create_app(config=config),
-        host=options.host,
-        port=options.port,
-        log_level="info",
-        access_log=False,
-    )
-    return 0
+    installation = ensure_installation_identity(config)
+    release_id = resolve_release_id()
+    lock = ExclusiveFileLock(api_lock_path(config))
+    if not lock.acquire():
+        deadline = time.monotonic() + 5.0
+        reason = "owner metadata is missing or invalid"
+        while True:
+            owner = read_api_owner(config)
+            verified, reason = verify_api_owner(
+                config,
+                owner,
+                installation=installation,
+                release_id=release_id,
+                host=options.host,
+                port=options.port,
+            )
+            if verified and owner is not None:
+                diagnosis = diagnose_endpoint(
+                    options.host,
+                    options.port,
+                    expected_installation_id=installation.installation_id,
+                    expected_release_id=release_id,
+                    expected_owner=owner,
+                )
+                if diagnosis.status is EndpointStatus.MATCHING:
+                    print(diagnosis_message(options.host, options.port, diagnosis), file=sys.stderr)
+                    return 0
+                if diagnosis.status not in {EndpointStatus.AVAILABLE, EndpointStatus.UNKNOWN}:
+                    print(diagnosis_message(options.host, options.port, diagnosis), file=sys.stderr)
+                    return 3
+            if time.monotonic() >= deadline:
+                break
+            time.sleep(0.05)
+        print(
+            f"Port {options.host}:{options.port} cannot be reused because the existing Newsroom owner "
+            f"could not be verified ({reason}). Close that instance or inspect diagnostics, then retry. "
+            "No process was stopped and no alternate port was selected.",
+            file=sys.stderr,
+        )
+        return 3
+
+    identity = None
+    try:
+        diagnosis = diagnose_endpoint(
+            options.host,
+            options.port,
+            expected_installation_id=installation.installation_id,
+            expected_release_id=release_id,
+        )
+        if diagnosis.status is not EndpointStatus.AVAILABLE:
+            if diagnosis.status is EndpointStatus.MATCHING:
+                diagnosis = EndpointDiagnosis(
+                    EndpointStatus.UNKNOWN,
+                    "matching HTTP identity was present without the expected runtime lock",
+                    diagnosis.identity,
+                )
+            print(diagnosis_message(options.host, options.port, diagnosis), file=sys.stderr)
+            return 3
+
+        identity = build_process_identity(
+            config,
+            installation,
+            role="api",
+            release_id=release_id,
+            host=options.host,
+            port=options.port,
+        )
+        write_api_owner(config, identity)
+        apply_migrations(config.database_path)
+        try:
+            uvicorn.run(
+                create_app(config=config, runtime_identity=identity.public_payload()),
+                host=options.host,
+                port=options.port,
+                log_level="info",
+                access_log=False,
+            )
+        except SystemExit as exc:
+            if exc.code in (None, 0):
+                return 0
+            race_diagnosis = diagnose_endpoint(
+                options.host,
+                options.port,
+                expected_installation_id=installation.installation_id,
+                expected_release_id=release_id,
+            )
+            if race_diagnosis.status is EndpointStatus.AVAILABLE:
+                race_diagnosis = EndpointDiagnosis(
+                    EndpointStatus.UNKNOWN,
+                    "API bind failed after preflight and the endpoint owner could not be confirmed",
+                )
+            print(
+                "API bind failed after preflight. "
+                + diagnosis_message(options.host, options.port, race_diagnosis),
+                file=sys.stderr,
+            )
+            return 3
+        return 0
+    finally:
+        if identity is not None:
+            clear_api_owner(config, identity)
+        lock.release()
 
 
 def main(argv: list[str] | None = None) -> int:
     options = build_parser().parse_args(argv)
     config = runtime_config_from_options(options)
     config.ensure_runtime_dirs()
-    apply_migrations(config.database_path)
     if options.command == "api":
         return _run_api(config, options)
+    apply_migrations(config.database_path)
     if options.command == "worker":
         return _run_worker(config, options)
     return _run_scheduler(config, options)
