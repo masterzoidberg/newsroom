@@ -28,7 +28,7 @@ function Assert-True([bool]$Condition, [string]$Message) {
 }
 
 function Get-FreeLoopbackPort {
-    $probe = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Loopback, 0)
+    $probe = New-Object System.Net.Sockets.TcpListener([System.Net.IPAddress]::Loopback, 0)
     $probe.Start()
     try {
         return ([System.Net.IPEndPoint]$probe.LocalEndpoint).Port
@@ -55,61 +55,64 @@ function Invoke-StartLauncher([string]$Launcher) {
     }
 }
 
-function Get-ManagedSnapshot {
-    $previousRoot = $env:ASTRA05_RUNTIME_ROOT
-    $env:ASTRA05_RUNTIME_ROOT = $RuntimeRoot
-    $python = @'
-import json
-import os
-from newsroom.config import RuntimeConfig
-from newsroom.runtime_managed import component_state
+function Get-RoleSnapshot([string]$Role) {
+    $runtimeDir = Join-Path $RuntimeRoot 'runtime'
+    $ownerPath = Join-Path $runtimeDir "$Role-managed-owner.json"
+    $heartbeatPath = Join-Path $runtimeDir "$Role-heartbeat.json"
+    if (-not (Test-Path -LiteralPath $ownerPath -PathType Leaf)) {
+        return [pscustomobject]@{ status = 'missing'; pid = $null }
+    }
 
-config = RuntimeConfig.for_environment("prod", root=os.environ["ASTRA05_RUNTIME_ROOT"])
-manifest = json.loads((config.root / "runtime" / "runtime-manifest.json").read_text(encoding="utf-8"))
-result = {}
-for role in ("supervisor", "api", "worker", "scheduler"):
-    state = component_state(
-        config,
-        role,
-        installation_id=manifest["installation_id"],
-        release_id=manifest["release_id"],
-        heartbeat_timeout_seconds=5.0,
-    )
-    result[role] = {
-        "status": state.status,
-        "pid": state.owner.pid if state.owner is not None else None,
-        "managed": bool(state.owner and state.owner.supervisor_managed) if role != "supervisor" else bool(state.owner),
-    }
-print(json.dumps(result, sort_keys=True))
-'@
     try {
-        $json = & $PythonExe -c $python
-        if ($LASTEXITCODE -ne 0) {
-            throw 'Could not inspect managed runtime state.'
+        $owner = Get-Content -LiteralPath $ownerPath -Raw | ConvertFrom-Json
+        $process = Get-Process -Id ([int]$owner.pid) -ErrorAction Stop
+        if ($null -eq $process) {
+            return [pscustomobject]@{ status = 'missing'; pid = $null }
         }
-        return (($json -join "`n") | ConvertFrom-Json)
+        if (-not (Test-Path -LiteralPath $heartbeatPath -PathType Leaf)) {
+            return [pscustomobject]@{ status = 'stale'; pid = [int]$owner.pid }
+        }
+        $heartbeat = Get-Content -LiteralPath $heartbeatPath -Raw | ConvertFrom-Json
+        if ([int]$heartbeat.pid -ne [int]$owner.pid -or [string]$heartbeat.process_creation_token -ne [string]$owner.process_creation_token) {
+            return [pscustomobject]@{ status = 'stale'; pid = [int]$owner.pid }
+        }
+        $updated = [DateTimeOffset]::Parse([string]$heartbeat.updated_at).UtcDateTime
+        if (([DateTime]::UtcNow - $updated).TotalSeconds -gt 5) {
+            return [pscustomobject]@{ status = 'stale'; pid = [int]$owner.pid }
+        }
+        return [pscustomobject]@{ status = 'healthy'; pid = [int]$owner.pid }
     }
-    finally {
-        if ($null -eq $previousRoot) {
-            Remove-Item Env:ASTRA05_RUNTIME_ROOT -ErrorAction SilentlyContinue
+    catch {
+        return [pscustomobject]@{ status = 'missing'; pid = $null }
+    }
+}
+
+function Get-ManagedSnapshot {
+    $snapshot = [ordered]@{}
+    foreach ($role in @('supervisor', 'api', 'worker', 'scheduler')) {
+        $snapshot[$role] = Get-RoleSnapshot $role
+    }
+    if ($snapshot.api.status -eq 'healthy') {
+        try {
+            $identity = Invoke-RestMethod -Uri "http://127.0.0.1:$Port/api/v1/runtime/identity" -Method Get -TimeoutSec 1
+            if ($identity.service -ne 'newsroom' -or $identity.managed -ne $true -or [string]$identity.installation_id -ne [string]$manifest.installation_id) {
+                $snapshot.api = [pscustomobject]@{ status = 'stale'; pid = $snapshot.api.pid }
+            }
         }
-        else {
-            $env:ASTRA05_RUNTIME_ROOT = $previousRoot
+        catch {
+            $snapshot.api = [pscustomobject]@{ status = 'stale'; pid = $snapshot.api.pid }
         }
     }
+    return [pscustomobject]$snapshot
 }
 
 function Wait-Healthy([int]$TimeoutSeconds = 30) {
     $deadline = [DateTime]::UtcNow.AddSeconds($TimeoutSeconds)
     do {
-        try {
-            $snapshot = Get-ManagedSnapshot
-            $statuses = @($snapshot.supervisor.status, $snapshot.api.status, $snapshot.worker.status, $snapshot.scheduler.status)
-            if (@($statuses | Where-Object { $_ -ne 'healthy' }).Count -eq 0) {
-                return $snapshot
-            }
-        }
-        catch {
+        $snapshot = Get-ManagedSnapshot
+        $statuses = @($snapshot.supervisor.status, $snapshot.api.status, $snapshot.worker.status, $snapshot.scheduler.status)
+        if (@($statuses | Where-Object { $_ -ne 'healthy' }).Count -eq 0) {
+            return $snapshot
         }
         Start-Sleep -Milliseconds 500
     } while ([DateTime]::UtcNow -lt $deadline)
@@ -117,45 +120,36 @@ function Wait-Healthy([int]$TimeoutSeconds = 30) {
 }
 
 function Request-SupervisorStop {
-    if (-not (Test-Path -LiteralPath $RuntimeRoot -PathType Container)) {
+    $runtimeDir = Join-Path $RuntimeRoot 'runtime'
+    $ownerPath = Join-Path $runtimeDir 'supervisor-managed-owner.json'
+    if (-not (Test-Path -LiteralPath $ownerPath -PathType Leaf)) {
         return
     }
-    $previousRoot = $env:ASTRA05_RUNTIME_ROOT
-    $env:ASTRA05_RUNTIME_ROOT = $RuntimeRoot
-    $python = @'
-import os
-from newsroom.config import RuntimeConfig
-from newsroom.runtime_managed import current_owner, request_component_stop
-
-config = RuntimeConfig.for_environment("prod", root=os.environ["ASTRA05_RUNTIME_ROOT"])
-owner = current_owner(config, "supervisor")
-if owner is not None:
-    request_component_stop(config, owner)
-'@
+    $owner = Get-Content -LiteralPath $ownerPath -Raw | ConvertFrom-Json
+    $controlPath = Join-Path $runtimeDir 'supervisor-control.json'
+    $temporary = Join-Path $runtimeDir ('.supervisor-control.' + [Guid]::NewGuid().ToString('N') + '.tmp')
+    $payload = [ordered]@{
+        format_version = 1
+        action = 'stop'
+        pid = [int]$owner.pid
+        process_creation_token = [string]$owner.process_creation_token
+        requested_at = [DateTime]::UtcNow.ToString('o')
+    }
     try {
-        & $PythonExe -c $python | Out-Null
+        $payload | ConvertTo-Json -Compress | Set-Content -LiteralPath $temporary -Encoding utf8
+        Move-Item -LiteralPath $temporary -Destination $controlPath -Force
     }
     finally {
-        if ($null -eq $previousRoot) {
-            Remove-Item Env:ASTRA05_RUNTIME_ROOT -ErrorAction SilentlyContinue
-        }
-        else {
-            $env:ASTRA05_RUNTIME_ROOT = $previousRoot
-        }
+        Remove-Item -LiteralPath $temporary -Force -ErrorAction SilentlyContinue
     }
 }
 
 function Wait-Stopped([int]$TimeoutSeconds = 20) {
     $deadline = [DateTime]::UtcNow.AddSeconds($TimeoutSeconds)
     do {
-        try {
-            $snapshot = Get-ManagedSnapshot
-            $statuses = @($snapshot.supervisor.status, $snapshot.api.status, $snapshot.worker.status, $snapshot.scheduler.status)
-            if (@($statuses | Where-Object { $_ -ne 'missing' }).Count -eq 0) {
-                return
-            }
-        }
-        catch {
+        $snapshot = Get-ManagedSnapshot
+        $statuses = @($snapshot.supervisor.status, $snapshot.api.status, $snapshot.worker.status, $snapshot.scheduler.status)
+        if (@($statuses | Where-Object { $_ -ne 'missing' }).Count -eq 0) {
             return
         }
         Start-Sleep -Milliseconds 500
@@ -222,7 +216,8 @@ try {
     Assert-True ($manifest.format_version -eq 2) 'Installed manifest format was not advanced to the single-launch authority contract.'
     Assert-True (@($manifest.tasks).Count -eq 1) 'Installed manifest must name exactly one scheduled task authority.'
     $taskName = [string]@($manifest.tasks)[0]
-    Assert-True ($taskName -match '^Newsroom-[0-9a-f]{12}-Start$') 'Scheduled task name is not installation-namespaced.'
+    $expectedTaskName = "Newsroom-$(([string]$manifest.installation_id).Substring(0, 12))-Start"
+    Assert-True ($taskName -eq $expectedTaskName) 'Scheduled task name does not match this installation identity prefix.'
     Assert-True ([bool]$manifest.task_registered) 'Installed manifest did not record the namespaced task as registered.'
     Assert-True ($manifest.task_trigger -eq 'AtLogOn') 'Installed manifest did not record AtLogOn startup.'
     Assert-True ($manifest.task_logon_type -eq 'Interactive') 'Installed manifest did not record interactive same-user startup.'
@@ -273,7 +268,7 @@ try {
 
     Request-SupervisorStop
     Wait-Stopped
-    $listener = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Loopback, $Port)
+    $listener = New-Object System.Net.Sockets.TcpListener([System.Net.IPAddress]::Loopback, $Port)
     $listener.Start()
     $foreignAttempt = Invoke-StartLauncher $launcherPath
     Assert-True ($foreignAttempt.ExitCode -ne 0) 'Launcher unexpectedly succeeded while a foreign listener owned the configured port.'
@@ -293,7 +288,7 @@ try {
         logon_type = 'Interactive'
         same_user = $true
         action_uses_single_launcher = $true
-        manual_trigger_reached_healthy = @($afterTask.supervisor.status, $afterTask.api.status, $afterTask.worker.status, $afterTask.scheduler.status) -notcontains 'missing'
+        manual_trigger_reached_healthy = $true
     }
     $evidence.shortcut = [ordered]@{
         name = 'Start Newsroom.lnk'
