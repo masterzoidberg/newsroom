@@ -6,6 +6,7 @@ import time
 from pathlib import Path
 from typing import Any, Callable, Mapping
 
+from .job_lease import renew_running_job_lease
 from .jobs import JobService
 
 
@@ -54,9 +55,40 @@ class WorkerProcess:
                 retryable=False,
                 now=now,
             )
+        lease_stop = threading.Event()
+        lease_lost = threading.Event()
+
+        def renew_lease() -> None:
+            interval = max(0.5, min(30.0, float(self.queue.lease_seconds) / 3.0))
+            while not lease_stop.wait(interval):
+                try:
+                    renewed = renew_running_job_lease(
+                        self.queue.db_path,
+                        job_id=job["id"],
+                        worker_id=self.worker_id,
+                        lease_seconds=self.queue.lease_seconds,
+                    )
+                except Exception:
+                    # Transient SQLite/IO failures get another bounded renewal
+                    # interval rather than ending a valid lease early.
+                    continue
+                if not renewed:
+                    lease_lost.set()
+                    return
+
+        renewal = threading.Thread(
+            target=renew_lease,
+            name=f"newsroom-lease-{job['id']}",
+            daemon=True,
+        )
+        renewal.start()
         try:
             result = handler(job)
         except RetryableJobFailure as exc:
+            lease_stop.set()
+            renewal.join(timeout=1.0)
+            if lease_lost.is_set():
+                return self.queue.get(job["id"])
             return self.queue.complete(
                 job["id"],
                 self.worker_id,
@@ -67,6 +99,10 @@ class WorkerProcess:
                 now=now,
             )
         except Exception as exc:  # handlers are an internal allow-listed boundary
+            lease_stop.set()
+            renewal.join(timeout=1.0)
+            if lease_lost.is_set():
+                return self.queue.get(job["id"])
             return self.queue.complete(
                 job["id"],
                 self.worker_id,
@@ -76,6 +112,10 @@ class WorkerProcess:
                 retryable=False,
                 now=now,
             )
+        lease_stop.set()
+        renewal.join(timeout=1.0)
+        if lease_lost.is_set():
+            return self.queue.get(job["id"])
         return self.queue.complete(
             job["id"],
             self.worker_id,

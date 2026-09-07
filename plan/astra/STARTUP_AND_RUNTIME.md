@@ -8,62 +8,84 @@ At the audited baseline `runtime.py:main` resolved the root, created directories
 
 No `Newsroom*` scheduled tasks were returned by the read-only query. Do not attribute this specific instance to Task Scheduler. The installer can nevertheless produce the same experience: `IgnoreNew` prevents another instance of each registered task, not an independent manual Python command. Fixed task names also do not describe multiple installations/roots cleanly.
 
-## Implementation status after AST-02
+## Implementation status after AST-03
 
-AST-02 implements the API-side ownership and fixed-port diagnosis slice without starting the supervisor architecture. `newsroom/runtime_identity.py` now provides a stable non-secret installation UUID bound to the canonical runtime root, an OS-backed exclusive API lock, owner metadata containing canonical root/role/release/PID/process-creation token, bounded local endpoint classification, and redacted public identity data. `runtime.py:_run_api` performs preflight before API migration/bind, reuses only a healthy verified matching API, fails closed for mismatched/unmanaged/foreign/unknown ownership, and diagnoses a bind race through the same fixed-port path. It never kills a listener or silently selects another port.
+AST-02 remains the API endpoint-ownership authority. `newsroom/runtime_identity.py` provides the stable non-secret installation UUID, OS-backed API lock, root/role/release/PID creation-token verification, bounded endpoint classification and redacted public identity. API startup still reuses only a verified matching fixed-port API, fails closed for mismatched/unmanaged/foreign/unknown ownership, diagnoses bind races, never kills a listener and never silently selects another port.
 
-Concurrent same-root launches converge through the OS lock plus a bounded reconciliation window. If the first lock holder dies before becoming usable, the waiting launcher may take the released OS lock and continue; if ownership remains ambiguous after the bound, startup fails with recovery guidance. PID creation time is part of verification so stale metadata/PID reuse cannot by itself establish ownership. The public `/api/v1/runtime/identity` response intentionally omits filesystem paths.
+AST-03 adds `runtime_managed.py` and `runtime_supervisor.py` around the existing API, worker and scheduler rather than replacing them. One supervisor validates a shared non-secret root/environment/release/host/port manifest and coordinates one managed owner per role with OS-backed role locks, PID creation-token verification, fresh heartbeats and token-bound stop-control files. A replacement supervisor reconciles surviving verified same-release children by exact identity instead of spawning duplicates. Stale, ambiguous or unmanaged roles block sibling startup; they are not adopted, killed or restarted over.
 
-This is not yet the normal-user startup authority. Worker/scheduler singleton ownership, child reconciliation, heartbeats, stop/restart/drain and one-action launch remain AST-03 through AST-05. Windows process-creation-token code is implemented but clean installed-Windows lifecycle qualification remains a later acceptance boundary. The active trial and port 8127 were not contacted or modified by AST-02 development.
+Normal managed migration ownership moves to the supervisor. It applies migrations only when API/worker/scheduler managed locks are all free. A supervisor that is reconciling active same-release children validates the manifest but performs no migration write. Advanced/direct child commands remain available and are explicitly `unmanaged` from the supervisor's perspective.
+
+Managed shutdown requests scheduler and worker stop before API and waits for a bounded drain deadline. If a busy managed worker remains after the deadline, shutdown reports it and does not force-kill it. The managed API maps its cooperative stop event to Uvicorn's `should_exit`. Unexpectedly missing managed children use capped per-role exponential restart/backoff; after the bound the supervisor remains degraded with `restart_exhausted` rather than retrying forever. Stale/ambiguous/unmanaged owners are never automatic restart targets.
+
+AST-03 also closes the demonstrated long-handler lease gap. `WorkerProcess` now renews the existing Job lease while that Job is still `running` and owned by the same worker. If durable ownership/status is lost, renewal stops and that worker does not issue a stale completion. Focused cancellation testing holds a handler beyond its original lease, requests cancellation, proves recovery cannot create a second attempt, and then finishes as the existing durable cancellation path specifies.
+
+This is still not the full normal-user launch/control experience. The browser does not yet expose truthful component status or named stop/restart controls; that is AST-04. The Windows installer still creates its legacy independent task topology and does not yet expose one obvious `Start Newsroom` entry point; that is AST-05. Clean installed-Windows lifecycle, locked/wake/reboot and process-creation-token qualification remain AST-05/19. The active trial and port 8127 were not contacted or modified by AST-03 development.
 
 ## Current failure modes
 
 | Question | Current answer |
 |---|---|
-| Can components get out of sync? | Yes. AST-02 protects API ownership, but worker/scheduler still use independent roots/commands/installation versions and separate failures; API liveness says nothing about worker readiness. |
-| How does UI know health? | `App.tsx` checks `/health` at mount and browser online/offline changes. `navigator.onLine` is not API health; “Synced” overstates the result. |
-| What happens after reboot? | Registered tasks use AtStartup/S4U. Manual processes have no automatic resurrection. The current trial must not be assumed installed as tasks. |
-| After update? | Runbook requires manual writer shutdown/restart; no single version/migration transition authority. |
-| Graceful exit? | Worker/scheduler observe a stop event between operations; worker finishes synchronous handler. Task stopping is not demonstrated as graceful Python shutdown. |
-| Crash recovery? | API concurrent-start crash handoff is bounded by AST-02. Aggregate child restart is not implemented. Job leases/retries and stage identities exist; `WorkerProcess` does not periodically renew a running job lease, so validate long-handler behavior before relying on automatic crash restarts. |
+| Can components get out of sync? | The managed supervisor prevents a second verified role owner, reconciles surviving children and restarts only missing managed roles. Stale/ambiguous/unmanaged state remains deliberately degraded rather than being overwritten. The old independent installed task topology remains until AST-05. |
+| How does UI know health? | It still does not. `App.tsx` relies on API/browser signals and can overstate “Synced.” AST-03 creates local component heartbeat state; AST-04 must expose it through authenticated bounded status. |
+| What happens after reboot? | Existing registered tasks still use their historical AtStartup/S4U topology. AST-03 provides the supervisor command, but AST-05 must make one sign-in launcher/task authoritative and migrate legacy task handling explicitly. |
+| After update? | Supervisor manifest/release matching and stopped-writer migration ownership reduce divergence, but installed artifact staging/backup/rollback remains AST-14/19. Active old-release children are not silently crossed by a new-release supervisor. |
+| Graceful exit? | Managed scheduler/worker get cooperative stop controls first, API last. A busy worker can outlive the deadline and is reported instead of force-killed. Unmanaged/ambiguous processes are never stopped by the supervisor. |
+| Crash recovery? | Missing managed children restart with capped backoff; supervisor-process loss can be reconciled against surviving exact child identities. Fresh-process/stale-heartbeat ambiguity does not trigger a duplicate. Long handlers renew their Job lease while ownership remains valid. |
 
-## Recommended minimum architecture
+## Minimum architecture
 
-Keep API, worker and scheduler as separate existing processes. Add **one small per-user launcher/supervisor**, a `Start Newsroom` shortcut, and one optional Task Scheduler entry that starts that same supervisor **at user sign-in**. It owns one runtime manifest, lifecycle lock, child identities and bounded restart policy. No tray framework, Windows service rewrite, Electron wrapper, Docker requirement, or scheduler replacement.
+Keep API, worker and scheduler as the separate existing processes. AST-03 implements **one small per-user supervisor** above them. AST-05 should make a `Start Newsroom` shortcut and one optional Task Scheduler entry start that same supervisor **at user sign-in**. No tray framework, Windows service rewrite, Electron wrapper, Docker requirement, scheduler replacement or distributed task queue is required.
 
-Why: child separation already matches durable job design; a per-user process can use the same user's credential store. Three independent scheduled tasks preserve the confusing topology. A Windows service adds account/profile/credential and installation complexity; a tray is useful later but unnecessary for one-action startup.
+Why: child separation already matches durable Job design; a per-user process can use the same user's future credential store. Three independent scheduled tasks preserve the confusing topology. A Windows service adds account/profile/credential and installation complexity; a tray is useful later but unnecessary for one-action startup.
 
-Tradeoff: the initial supported unattended promise is “while this Windows user is signed in,” including browser closed/desktop locked where qualified. No acquisition during sleep, power-off or logged-out pre-sign-in operation is promised. On wake/sign-in, catch up through existing coalescing. If operation before login is required later, qualify a separate account/service design rather than silently change credential scope. Microsoft documents S4U restrictions on network/encrypted-file access; do not assume the current deployment principal works with a new credential backend. See [Task logon types](https://learn.microsoft.com/en-us/windows/win32/api/taskschd/ne-taskschd-task_logon_type).
+Tradeoff: the initial supported unattended promise remains “while this Windows user is signed in,” including browser closed/desktop locked where qualified. No acquisition during sleep, power-off or logged-out pre-sign-in operation is promised. On wake/sign-in, catch up through existing coalescing. If operation before login is required later, qualify a separate account/service design rather than silently changing credential scope. Microsoft documents S4U restrictions on network/encrypted-file access; do not assume the current deployment principal works with a new credential backend. See [Task logon types](https://learn.microsoft.com/en-us/windows/win32/api/taskschd/ne-taskschd-task_logon_type).
 
 ## Single authority and identity
 
-- A non-secret install/runtime manifest outside the repository holds install path, explicit environment/root, fixed host/port, stable installation UUID and selected release identity. Existing `RuntimeConfig` remains the root guard. AST-02 implements the root-stable UUID and API ownership metadata; AST-03/05 will make the supervisor/installer the normal manifest authority.
-- Use an OS-backed exclusive lock scoped to user + canonical root. A PID file is diagnostic metadata, not a lock. Store PID, process creation time, component role, installation UUID and release generation. Defend against PID reuse. AST-02 implements this for the API role.
-- Supervisor is the only normal startup writer/migration owner. Child entry points retain advanced/dev use, but validate schema/identity and refuse conflicting managed ownership. This remains AST-03 work; AST-02 only moves API migration behind API ownership/preflight.
-- Root/role identity is verified locally using owner metadata and process identity; public HTTP responses need not expose filesystem paths. A health response saying “newsroom” alone is not proof of same root or executable. AST-02 implements this API identity boundary.
-- Use a same-user protected local control channel for stop/restart/status. Web lifecycle actions require the existing auth/CSRF guard and only allow named operations; never accept arbitrary commands or arbitrary process IDs. This remains AST-03/04 work.
+- A non-secret runtime manifest outside the repository records installation UUID, explicit environment/root, fixed host/port and selected release identity. `RuntimeConfig` remains the root guard. AST-02 owns the root-stable installation identity; AST-03 implements the runtime manifest; AST-05 will make the installer/shortcut its normal entry point.
+- OS-backed exclusive locks are the ownership authority. PID/owner files are diagnostic/verification metadata, never locks. Managed owners include role, installation, release, PID and process creation token to defend against PID reuse.
+- The supervisor is the normal managed migration/startup writer. Managed children skip migration writes. Direct/dev child entry points remain available but are marked unmanaged and cannot be silently taken over.
+- API root/release identity is still verified through AST-02's bounded endpoint protocol. A health response saying “newsroom” alone is not proof of same root or release.
+- AST-03's local control protocol accepts only a token-bound stop request for a verified managed owner. AST-04 must place authenticated/CSRF-protected named web controls in front of supervisor actions; never expose arbitrary commands or arbitrary process IDs.
 
 ## Launch algorithm
 
-1. Read/validate manifest and root; acquire the instance lock or contact its verified owner. Concurrent shortcuts converge on one supervisor.
-2. Inspect configured endpoint before starting children. If occupied, retrieve bounded liveness information and validate PID creation time, executable/installation and root identity.
-3. Matching healthy managed Newsroom: reuse it, repair only verified missing components, open browser. Matching old unmanaged API: permit browser reuse with a clear unmanaged/degraded status; require explicit controlled migration before taking ownership or stopping it.
-4. Foreign listener, mismatched root/release, inaccessible owner or ambiguous identity: do not bind or kill. Display port, available process name/PID and “Close that application, then Retry” / “Open diagnostics.” Advanced endpoint changes update one manifest coherently and are explicit. Never choose a random replacement port.
-5. Verify installed artifacts, schema compatibility and writable runtime paths. Run migrations only with all relevant writers stopped; on failure preserve data and show recovery action.
-6. Start API/worker/scheduler with identical root and release context, hidden windows, bounded startup deadline. Use short component heartbeats plus readiness, not process presence alone.
-7. Open the same-origin browser/PWA when usable. Show Starting / Ready / Degraded / Stopping / Stopped / Needs attention; distinguish collecting, processing and serving.
+1. Read/validate the runtime root and installation identity; acquire/reuse the supervisor ownership lock. Concurrent supervisor invocations converge on the verified existing supervisor or acquire the lock after a crashed owner disappears.
+2. Validate the shared runtime manifest. A structural root/environment/endpoint mismatch fails. A release change is allowed only when component locks are all free; active same-release children may be reconciled without a migration write.
+3. Preflight all API/worker/scheduler role states before spawning. Healthy verified managed roles are reused. Any stale, ambiguous or unmanaged role blocks sibling spawning so startup cannot create a half-managed topology around an owner it cannot safely control.
+4. For the API endpoint, retain AST-02 fixed-port diagnosis. Matching healthy API is reused; foreign/mismatched/unmanaged/unknown endpoint ownership fails closed. Never kill a listener or choose a random port.
+5. With no managed component locks held, apply migrations once under supervisor authority. Then start only missing roles with the identical root/release context and bounded startup deadline.
+6. Require fresh role heartbeat plus verified PID creation token; API additionally requires AST-02 matching endpoint readiness. Process presence alone is insufficient.
+7. Monitor missing managed children with capped exponential backoff. Never restart stale/ambiguous/unmanaged roles over their owner. After the cap, retain degraded `restart_exhausted` state.
+8. AST-04/05 will open the same-origin browser and surface Starting / Ready / Degraded / Stopping / Stopped / Needs attention through owner-facing controls.
 
-AST-02 implements the API subset of steps 2-4 and handles a successful-preflight/failed-bind race through the same diagnostic path. The supervisor-wide convergence, writer coordination and component repair in steps 1 and 5-7 remain later tasks. No infinite retry loops.
+No infinite retry loops are part of the managed runtime.
 
 ## Shutdown, failure and update
 
-Stop scheduler submissions, stop worker claims, drain current work for a bounded deadline, then stop API. Do not force-terminate another user's or unmanaged process. If owned work exceeds the deadline, surface status; forced termination must preserve uncertain paid-call state and rely on safe recovery. Closing the browser leaves background operation running; an explicit Stop Newsroom command stops it. Restart follows the same authority and does not duplicate work.
+Stop scheduler submissions and worker claims cooperatively, let current work drain for a bounded deadline, then stop API. Do not force-terminate an unmanaged, ambiguous or merely busy process. If owned work exceeds the deadline, return the remaining role(s) and leave the work running. Closing the browser leaves background operation running; AST-04/05 will provide the explicit user-facing Stop/Restart path.
 
-Restart an unexpectedly failed owned child with capped exponential backoff; after the cap, remain degraded with an actionable reason. Supervisor restart must reconcile existing children rather than duplicate them. Test crash, long handler, lease expiry and cancellation interactions together.
+Unexpectedly missing managed children restart with capped per-role backoff. Stale heartbeats remain degraded because process identity still exists and spawning a replacement would risk duplicate work. A replacement supervisor reconciles surviving verified children rather than duplicating them. Running Job handlers renew their existing lease while the same worker retains durable ownership, reducing false expiry/recovery during long synchronous work. Existing paid invocation uncertainty/idempotency records are untouched; AST-03 creates no new paid-call route.
 
-Upgrade: stage/verify new artifact, stop writers, verified backup, migrate/rehearse as appropriate, start and check all components, then confirm. Do not roll old binaries onto an incompatible new schema. Rollback means the verified prior artifact plus a deliberate compatible backup recovery path. Preserve diagnostics on failure.
+Upgrade: stage/verify a new artifact, stop writers, create a verified backup, migrate/rehearse as appropriate, start and check all components, then confirm. The runtime manifest refuses release changes while managed component locks are active. Do not roll old binaries onto an incompatible new schema. Full owner-controlled backup/update/rollback remains AST-14/19.
 
-Developer startup uses the same launcher logic with an explicit dev manifest/root and a separately configured port. Vite remains an optional developer tool, never part of the owner's startup procedure. No developer test may default to active 8127 or the trial root.
+Developer startup uses the same supervisor logic with an explicit dev manifest/root and a separately configured port. Vite remains an optional developer tool, never part of the owner's startup procedure. No developer test may default to active 8127 or the trial root.
+
+## AST-03 lifecycle evidence
+
+| Scenario | Verified behavior |
+|---|---|
+| Repeated supervisor launch | Exact existing API/worker/scheduler child PIDs are reused; second supervisor spawns no child. |
+| Supervisor process crash | Children remain alive; replacement supervisor reconciles the same three PIDs rather than duplicating them. |
+| One child crash | Only the missing role restarts; healthy sibling PIDs remain unchanged. |
+| Stale heartbeat with live owner | State becomes stale/degraded; no replacement is spawned; resumed heartbeat restores the same PID. |
+| Existing unmanaged role | All-role preflight blocks managed sibling startup; shutdown reports the role and does not stop it. |
+| Restart crash loop | Per-role count/backoff reaches `restart_exhausted`; no infinite respawn. |
+| Busy worker at shutdown deadline | Shutdown reports worker remaining and leaves it alive; it can drain naturally before API stop. |
+| Long handler beyond Job lease plus cancellation | Lease renews while worker ownership remains valid; competing recovery/claim does not occur; original attempt finishes through durable cancellation. |
+
+Focused local regression: `python -m pytest -q tests/test_runtime_supervisor.py tests/test_worker_lease.py tests/test_phase07_jobs.py tests/test_phase16_deployment.py` passed 20/20. `python -m compileall -q newsroom tests` passed. Hosted GitHub Actions run `34088867948` at implementation head `6c2b17edf83f3ea72401b1b2291c48748b8977cd` passed Ruff, full backend pytest, frontend install/lint/typecheck and production build.
 
 ## Start Newsroom final acceptance (AST-05 and AST-19)
 

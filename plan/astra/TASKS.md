@@ -1,13 +1,13 @@
 # Canonical task ledger
 
-Execution state after AST-02. Allowed statuses: NOT_STARTED, READY, IN_PROGRESS, BLOCKED, DONE, DEFERRED. A dependency means verified DONE unless a recorded decision explicitly narrows it. Promote the next eligible task to READY when updating NEXT; never treat elapsed time as paid authorization or human scoring.
+Execution state after AST-03. Allowed statuses: NOT_STARTED, READY, IN_PROGRESS, BLOCKED, DONE, DEFERRED. A dependency means verified DONE unless a recorded decision explicitly narrows it. Promote the next eligible task to READY when updating NEXT; never treat elapsed time as paid authorization or human scoring.
 
 | ID | Title | Status | Priority | Milestone | Dependencies | Size |
 |---|---|---|---|---|---|---|
 | AST-01 | Freeze the execution baseline and isolate development from observation | DONE | P0 | M0 | None | M |
 | AST-02 | Identify application instances and diagnose port conflicts | DONE | P0 | M1 | AST-01 | M |
-| AST-03 | Supervise existing runtime components safely | READY | P0 | M1 | AST-02 | M |
-| AST-04 | Expose honest component status and recovery controls | NOT_STARTED | P0 | M1 | AST-03 | M |
+| AST-03 | Supervise existing runtime components safely | DONE | P0 | M1 | AST-02 | M |
+| AST-04 | Expose honest component status and recovery controls | READY | P0 | M1 | AST-03 | M |
 | AST-05 | Ship one Start Newsroom entry point | NOT_STARTED | P0 | M1 | AST-04 | M |
 | AST-06 | Create typed public AI configuration metadata | NOT_STARTED | P0 | M2 | AST-05 | M |
 | AST-07 | Store credentials in an approved operating-system vault | NOT_STARTED | P0 | M2 | AST-06 | M |
@@ -124,7 +124,7 @@ Execution state after AST-02. Allowed statuses: NOT_STARTED, READY, IN_PROGRESS,
 ## AST-03 — Supervise existing runtime components safely
 
 - **ID:** AST-03
-- **Status:** READY
+- **Status:** DONE
 - **Priority:** P0
 - **Milestone:** M1
 - **Dependencies:** AST-02
@@ -136,28 +136,44 @@ Execution state after AST-02. Allowed statuses: NOT_STARTED, READY, IN_PROGRESS,
 
 **Why now:** Port checks alone do not ensure processing or prevent child divergence.
 
-**Files/subsystems:** newsroom/runtime.py; newsroom/worker.py; newsroom/scheduler.py; newsroom/jobs.py; tests/test_phase07_jobs.py.
+**Files/subsystems:** `newsroom/runtime.py`; new `newsroom/runtime_managed.py`; new `newsroom/runtime_supervisor.py`; new `newsroom/job_lease.py`; `newsroom/worker.py`; new `tests/test_runtime_supervisor.py`; new `tests/test_worker_lease.py`. Existing scheduler/job/runtime-identity/Phase 7/Phase 16 contracts were exercised without schema or provider changes.
 
-**Implementation approach:** Implement a small supervisor around existing child entry points with one shared manifest/root/release. Add component heartbeat and graceful drain/control. Coordinate migration ownership and child reconciliation. Verify 120-second job lease vs long-running handlers; implement only a demonstrated minimal renewal/ownership correction needed for safe supervision. Bound child restart/backoff and preserve uncertain paid work.
+**Implementation approach:** Keep the existing three child entry points and place one small per-runtime supervisor around them. Use one root/release/endpoint manifest, OS-backed per-role ownership locks, PID-creation-token verification, heartbeats, token-bound stop controls, all-role preflight, bounded child restart/backoff, and cooperative writer drain. Managed migrations are owned by the supervisor only when every component lock is free. Preserve AST-02 endpoint/no-kill invariants. Renew a running Job lease only while the same worker still owns the synchronous handler.
 
-**Non-goals:** Replacing durable jobs, distributed workers, task queue rewrite, forced termination of unmanaged processes.
+**Non-goals:** Replacing durable jobs, distributed workers, task queue rewrite, forced termination of unmanaged processes, AST-04 browser controls or AST-05 installer/shortcut work.
 
-**Tests:** Subprocess crash/restart, supervisor crash with children alive, long handler beyond lease, cancellation, stale heartbeat, graceful drain and bounded restart exhaustion.
+**Tests:** Subprocess crash/restart, supervisor crash with children alive, long handler beyond lease, cancellation, stale heartbeat, unmanaged component, graceful drain and bounded restart exhaustion.
 
 **Acceptance criteria:**
 
-- [ ] One owned child per required role survives repeated/concurrent launches
-- [ ] Stop/restart drains or reports deadline safely and never duplicates downstream work or uncertain paid calls
-- [ ] Failure/restart bounds and long-handler lease safety have explicit test evidence
+- [x] One owned child per required role survives repeated/concurrent launches
+- [x] Stop/restart drains or reports deadline safely and never duplicates downstream work or uncertain paid calls
+- [x] Failure/restart bounds and long-handler lease safety have explicit test evidence
 
-**Completion evidence:** Not yet executed. Required: Lifecycle state table, subprocess results and owned-process count evidence. Record actual HEAD/artifact, changed files, commands with exit results, manual checks and remaining limitations here upon completion.
+**Completion evidence:**
+
+- AST-03 was implemented on `astra/AST-03-supervisor`, stacked from AST-02 closure head `db5d94bc6ed531d130bdc853e54474f403425fc6` because AST-01/02 remain verified unmerged draft dependencies. Implementation head before plan-only closure is `6c2b17edf83f3ea72401b1b2291c48748b8977cd`; schema remains 36.
+- `RuntimeSupervisor` owns/reconciles one API, worker and scheduler for one installation/root/release/endpoint manifest. Each managed role uses an OS-backed lock plus installation/root/release/PID/process-creation identity and a fresh heartbeat. A second supervisor converges on the verified existing supervisor/children rather than spawning duplicates.
+- Actual subprocess evidence kills the supervisor process while its three children remain alive, then starts a replacement supervisor and asserts exact child PID reconciliation. Repeated launch likewise retains the same three child PIDs, giving one verified owner per required role.
+- Startup preflights all roles before spawning missing siblings. A stale, ambiguous or verified unmanaged component blocks managed startup rather than causing a partial new child set. No path treats stale metadata as permission to kill or take over a process.
+- Child crash recovery is per-role and bounded. A missing owned child restarts with capped exponential backoff; healthy siblings keep their PIDs. After the configured retry cap, status becomes `restart_exhausted` rather than looping forever.
+- Stop/restart requests are written only for verified `supervisor_managed` owners and bind the target PID plus process-creation token. Shutdown stops scheduler/worker first, waits for a bounded drain, then stops API cooperatively through Uvicorn's exit flag. An unmanaged/ambiguous role is reported, not terminated. A busy managed writer that exceeds the deadline is reported as remaining rather than force-killed.
+- Normal managed migration ownership moves to the supervisor only when all three component locks are free. A replacement supervisor reconciling active same-release children performs no migration write. Advanced/direct commands remain available and are marked unmanaged relative to supervisor authority.
+- The existing 120-second running-job lease had a demonstrated supervision risk: synchronous handlers did not renew it. AST-03 adds bounded periodic renewal while the same `worker_id` still owns the running Job. Renewal stops before durable completion; if ownership is lost, the original worker does not write a competing terminal outcome.
+- Long-work/cancellation evidence uses a one-second lease with a handler running beyond the original expiry. Recovery does not create a second attempt while renewal is active; cancellation remains durable and the worker does not overwrite it. No paid provider is invoked, so uncertain paid work is not synthetically retried or relabeled.
+- Lifecycle state evidence: `healthy` → reuse verified owner; `missing` → start/restart within bounds; `stale`/`ambiguous`/`unmanaged` → degraded/no duplicate/no kill; supervisor loss with healthy children → reconcile exact owners; restart cap reached → `restart_exhausted`; drain deadline with active writer → report remaining role and keep API up rather than force termination.
+- Local isolated command `python -m pytest -q tests/test_runtime_supervisor.py tests/test_worker_lease.py tests/test_phase07_jobs.py tests/test_phase16_deployment.py` passed 20/20. `python -m compileall -q newsroom tests` passed. A broader local full-pytest attempt exceeded the container execution window and local Ruff was unavailable, so neither is misreported as a local pass.
+- Hosted GitHub Actions run `34088867948` at implementation head `6c2b17edf83f3ea72401b1b2291c48748b8977cd` completed successfully: full backend pytest PASS, Ruff PASS, frontend `npm ci`/lint/typecheck/production build PASS.
+- Draft PR #3 is open, draft, mergeable, stacked on `astra/AST-02-instance-preflight`, and unmerged. Plan-only closure reconciles NEXT/CURRENT_STATE/DECISIONS/STARTUP_AND_RUNTIME/TASKS; final closure-head CI is tracked on the PR rather than inferred from the implementation run.
+- Remaining qualification is explicit: clean installed-Windows lifecycle, Task Scheduler migration, sign-in/reboot/lock/wake behavior and owner-facing controls remain AST-04/05/19. This task does not claim those gates complete.
+- All tests used temporary isolated roots and fixture/ephemeral endpoints. The active `phase29-trial/prod` runtime, its data/processes/provider/budget and port `8127` were not contacted or modified. No paid call was made.
 
 **Prompt:** [AST-03](prompts/AST-03.md).
 
 ## AST-04 — Expose honest component status and recovery controls
 
 - **ID:** AST-04
-- **Status:** NOT_STARTED
+- **Status:** READY
 - **Priority:** P0
 - **Milestone:** M1
 - **Dependencies:** AST-03
@@ -780,4 +796,3 @@ Execution state after AST-02. Allowed statuses: NOT_STARTED, READY, IN_PROGRESS,
 **Completion evidence:** Not yet executed. Required: Authorized pilot brief and actual participant findings, kept appropriately private. Record actual HEAD/artifact, changed files, commands with exit results, manual checks and remaining limitations here upon completion.
 
 **Prompt:** [AST-22](prompts/AST-22.md).
-
