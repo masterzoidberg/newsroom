@@ -139,6 +139,9 @@ class RuntimeSupervisor:
             port=self.port,
             allow_release_update=not active_components,
         )
+        # Only the supervisor performs normal managed migrations, and only when
+        # every managed writer role is stopped. Reconciliation of an existing
+        # same-release child set deliberately skips migration writes.
         if not active_components:
             apply_migrations(self.config.database_path)
 
