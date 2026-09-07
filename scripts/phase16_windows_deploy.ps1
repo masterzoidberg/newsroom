@@ -153,6 +153,7 @@ if (-not `$ready) {
 if (-not `$NoBrowser) {
     Start-Process 'http://127.0.0.1:$ListenPort/' | Out-Null
 }
+exit 0
 "@
     Set-Content -LiteralPath $PathValue -Value $content -Encoding utf8
 }
