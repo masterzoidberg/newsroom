@@ -1,11 +1,11 @@
 # Canonical task ledger
 
-Audit-only initial state. Allowed statuses: NOT_STARTED, READY, IN_PROGRESS, BLOCKED, DONE, DEFERRED. No implementation task is DONE. A dependency means verified DONE unless a recorded decision explicitly narrows it. Promote the next eligible task to READY when updating NEXT; never treat elapsed time as paid authorization or human scoring.
+Execution state after AST-01. Allowed statuses: NOT_STARTED, READY, IN_PROGRESS, BLOCKED, DONE, DEFERRED. A dependency means verified DONE unless a recorded decision explicitly narrows it. Promote the next eligible task to READY when updating NEXT; never treat elapsed time as paid authorization or human scoring.
 
 | ID | Title | Status | Priority | Milestone | Dependencies | Size |
 |---|---|---|---|---|---|---|
-| AST-01 | Freeze the execution baseline and isolate development from observation | READY | P0 | M0 | None | M |
-| AST-02 | Identify application instances and diagnose port conflicts | NOT_STARTED | P0 | M1 | AST-01 | M |
+| AST-01 | Freeze the execution baseline and isolate development from observation | DONE | P0 | M0 | None | M |
+| AST-02 | Identify application instances and diagnose port conflicts | READY | P0 | M1 | AST-01 | M |
 | AST-03 | Supervise existing runtime components safely | NOT_STARTED | P0 | M1 | AST-02 | M |
 | AST-04 | Expose honest component status and recovery controls | NOT_STARTED | P0 | M1 | AST-03 | M |
 | AST-05 | Ship one Start Newsroom entry point | NOT_STARTED | P0 | M1 | AST-04 | M |
@@ -30,7 +30,7 @@ Audit-only initial state. Allowed statuses: NOT_STARTED, READY, IN_PROGRESS, BLO
 ## AST-01 — Freeze the execution baseline and isolate development from observation
 
 - **ID:** AST-01
-- **Status:** READY
+- **Status:** DONE
 - **Priority:** P0
 - **Milestone:** M0
 - **Dependencies:** None
@@ -42,7 +42,7 @@ Audit-only initial state. Allowed statuses: NOT_STARTED, READY, IN_PROGRESS, BLO
 
 **Why now:** Current local tests pass, but Linux CI's backend job encounters an npm.cmd build test and lacks frontend dependency setup; active trial must remain frozen.
 
-**Files/subsystems:** README.md; .github/workflows/ci.yml; tests/test_phase12_frontend.py; frontend/package.json; docs/reviews/PHASE_29_BASELINE_ACCEPTANCE.md; docs/DOGFOOD_CONTRACT.md.
+**Files/subsystems:** README.md; .github/workflows/ci.yml; tests/test_phase12_frontend.py; tests/test_phase13_frontend.py; tests/test_phase14_frontend.py; docs/reviews/ASTRA_EXECUTION_BASELINE.md. Inspected without changing frontend/package.json, docs/reviews/PHASE_29_BASELINE_ACCEPTANCE.md, docs/DOGFOOD_CONTRACT.md, newsroom/config.py and tests/test_runtime_config.py.
 
 **Implementation approach:** Record current HEAD/worktree and trial boundary; establish explicit outside-repo dev/test roots and separate configured endpoint. Make the frontend build test portable and ensure its invoking CI job has required Node/frontend dependencies, or move the build responsibility cleanly to the existing frontend CI job without losing coverage. Update current authority pointers only; preserve historical claims as dated records.
 
@@ -52,18 +52,30 @@ Audit-only initial state. Allowed statuses: NOT_STARTED, READY, IN_PROGRESS, BLO
 
 **Acceptance criteria:**
 
-- [ ] Reproducible baseline is recorded with exact HEAD and check results
-- [ ] CI no longer depends on Windows-only npm.cmd in its Linux backend path or missing frontend installation
-- [ ] Safe explicit dev/test root and port are documented; active trial and unrelated files unchanged
+- [x] Reproducible baseline is recorded with exact HEAD and check results
+- [x] CI no longer depends on Windows-only npm.cmd in its Linux backend path or missing frontend installation
+- [x] Safe explicit dev/test root and port are documented; active trial and unrelated files unchanged
 
-**Completion evidence:** Not yet executed. Required: Baseline evidence, portable CI/test diff, commands/results and root-safety proof. Record actual HEAD/artifact, changed files, commands with exit results, manual checks and remaining limitations here upon completion.
+**Completion evidence:**
+
+- Started from remote `main` HEAD `3d7f9cfe91b34feeaa5602a5febd9077e1d87b7f` and created `astra/AST-01-baseline` directly from that commit. Schema remains 36; no migration or runtime behavior changed.
+- Frozen observation boundary remains `2026-09-06T21:20:48Z` with earliest four-week boundary `2026-10-04T21:20:48Z`. The logical trial `phase29-trial/prod`, its Watch/Sources/provider/budget/processes/data and port `8127` were not contacted or modified.
+- Astra development is explicitly isolated at `%LOCALAPPDATA%\Newsroom\astra-dev\dev` on `127.0.0.1:18127`; manual tests use per-run outside-repository roots ending in `dev`. Existing `RuntimeConfig` suffix/source-tree guards remain the single root authority.
+- Initial isolated reproduction: `python -m pytest -q tests/test_phase12_frontend.py tests/test_runtime_config.py` failed exactly on Windows-only `npm.cmd`; all five runtime-root tests passed. After the first refactor the same command passed 6/6.
+- The first draft-PR run `34076549706` at implementation commit `99aa49c3047f31ccc18b5e6f6a3869811e36abff` passed Ruff and the complete frontend job, then exposed two additional identical `npm.cmd` calls in `tests/test_phase13_frontend.py` and `tests/test_phase14_frontend.py`. The task stayed open rather than treating partial CI as success.
+- The supplied repository snapshot's Phase 13/14 test blobs exactly matched remote `main`; repository-wide test scanning found no other `npm.cmd` build invocations. After removing those duplicate build subprocesses, `python -m pytest -q tests/test_phase12_frontend.py tests/test_phase13_frontend.py tests/test_phase14_frontend.py tests/test_runtime_config.py` passed 8/8.
+- Offline eval checks passed: `python -m newsroom.evals validate` (46 valid cases), `python -m newsroom.evals lite-contract` (20-question contract valid; no comparative execution), and `python -m newsroom.evals baseline` (20 baseline/semantic cases executed; diagnostic only).
+- Clean Ubuntu draft-PR run `34076899509` at code commit `1d22282955c3dfa9057c0c765dd8b4988de58236` passed backend `python -m pytest -q`, Ruff, frontend `npm ci`, lint, typecheck and production Vite build. This is the authoritative full-suite/build evidence for the implementation code.
+- Local full pytest was not claimed: the bounded local container run exceeded its execution window. Local Ruff was unavailable, and the uploaded Windows-shaped `node_modules` lacked Rollup's Linux optional binary; hosted clean CI superseded those local limitations.
+- No paid provider call was made. No secrets, runtime DB/log/backup/content artifacts, private trial data or historical acceptance records were changed.
+- Detailed baseline/root/CI evidence is recorded in `docs/reviews/ASTRA_EXECUTION_BASELINE.md`. Draft PR #1 remains unmerged.
 
 **Prompt:** [AST-01](prompts/AST-01.md).
 
 ## AST-02 — Identify application instances and diagnose port conflicts
 
 - **ID:** AST-02
-- **Status:** NOT_STARTED
+- **Status:** READY
 - **Priority:** P0
 - **Milestone:** M1
 - **Dependencies:** AST-01
