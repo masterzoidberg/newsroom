@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { apiFetch, jsonBody } from "./lib/api";
+import { apiFetch, apiList, jsonBody } from "./lib/api";
 import type { ViewKey } from "./lib/types";
 import type { RuntimeControlAck, RuntimeControlAction, RuntimeStatus, ServiceState } from "./lib/runtime";
 import { AppShell } from "./components/AppShell";
@@ -55,6 +55,20 @@ export default function App() {
       .catch(() => setUsername(null))
       .finally(() => setAuthReady(true));
   }, []);
+
+  useEffect(() => {
+    if (!username) return;
+    let active = true;
+    apiList<{ id: string }>("/watches?page_size=1")
+      .then((result) => {
+        const count = result.total ?? result.items.length;
+        if (!active || count !== 0) return;
+        window.location.hash = "inbox";
+        setViewState("inbox");
+      })
+      .catch(() => undefined);
+    return () => { active = false; };
+  }, [username]);
 
   const applyRuntimeStatus = useCallback((status: RuntimeStatus) => {
     setRuntimeStatus(status);
