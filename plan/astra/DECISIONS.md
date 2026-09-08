@@ -1,27 +1,44 @@
-# Active decisions
+# Durable decisions
 
-All decisions dated 2026-09-06/07 audit; architecture choices below are recommended implementation contracts, not implemented features.
+Recorded 2026-09-07 against main `3d7f9cf` and local stack tip `cddad09`. Earlier decisions are preserved in DECISIONS_OLD; completion-specific rationale in history/AST-01-04_COMPLETION_RECORD. This file distinguishes current contracts from implementation.
 
-| ID | Decision | Basis / revisit condition |
-|---|---|---|
-| D01 | Astra is canonical completion ordering; preserve historical plans and product invariants | owner request; history remains evidence |
-| D02 | One per-user supervisor, existing three child processes | runtime already has durable queues; smallest way to remove topology from owner UX |
-| D03 | Explicit fixed endpoint; reuse only verified matching instance | current healthy Newsroom owns 8127; never kill foreign listener or silently choose another port |
-| D04 | Sign-in startup first, same Windows user for API/worker/credentials | simpler than service/S4U credential context; pre-login operation deferred |
-| D05 | SQLite metadata plus explicit approved OS keyring backend; no SQLite secret blob | full backups must not contain keys; same-user credential boundaries |
-| D06 | Versioned config resolver at operation boundaries | existing constructors capture environment; prevents cosmetic Settings integration |
-| D07 | Article Analysis is initial compatible-provider capability | ordinary Ask/research not remotely wired; broader capability claims are false today |
-| D08 | Durable shared budget is authoritative; test calls explicit | AIRouter counters are process-local; existing analysis reservations must be preserved |
-| D09 | Dark-only with semantic tokens for first completion milestone | already dark; confirmed phone grid defect, no need for alternate palette |
-| D10 | Preserve frozen trial and evaluation protocols; separate development runtime | approved Watch/observation already exist; no silent reset or source substitution |
-| D11 | Do not reopen A2 fixed defects or relax Story saturation | A3 code/tests fix entity bound and blocked usage; content-quality problem still needs measurement |
-| D12 | No broad Phase 30 or commercial platform without value verdict | provenance complexity must earn its place through unchanged decision rule |
-| D13 | Test CI portability explicitly; local green is not CI proof | Linux backend workflow meets hard-coded npm.cmd frontend build test |
+## Existing decisions retained
 
-## Deviations and discoveries
+D01 Astra owns current completion order. D02 one per-user supervisor retains three existing processes. D03 fixed endpoint and verified instance reuse; no unowned kill/alternate-port workaround. D04 sign-in/session ownership, pre-login out of scope. D05 OS vault outside SQLite backups. D06 immutable config generation per operation. D07 Article Analysis is initial managed compatible capability. D08 durable paid admission authority. D09 existing dark theme. D10 frozen trial/evaluation preserved. D11 do not reopen repaired A2 entity/accounting defects or weaken conservative Story rules. D12 no broad Phase30/commercial expansion without value evidence. D13 portable CI baseline; implemented on AST-01 stack, not main.
 
-- The first browser reconnaissance captured loading states after hash navigation. It was repeated with an explicit busy-state wait; only the settled pass supports empty-state conclusions.
-- Settled mobile screenshot exposed internal Settings button/card overlap despite no page-width overflow. AST-13 includes component-boundary acceptance.
-- Current test count is 844, not the older acceptance record's 838. Both refer to different commits; preserve historical records.
+## Superseded ordering and claims
 
-Future updates must add date, task, evidence, rationale, compatibility/data impact and any change to dependencies. Do not overwrite historical decisions to conceal changed assumptions.
+- Old “no AST task DONE / AST-01 next” is superseded by branch evidence: AST-01–04 DONE unmerged; AST-05 qualification open. Archived prompts preserve their original contents.
+- Old linear provider-settings-before-any-onboarding dependency is superseded. Basic local setup uses existing zero-paid services first (AST-23–27); added AI capabilities still require AST-06–11.
+- AST-12–15 and AST-19 were too broad for economical execution and are SUPERSEDED, not completed. TASKS maps replacements; IDs are never recycled.
+- Old full-future prompt inventory is inactive. Six current horizon prompts are authoritative; other uncompleted originals live in prompts/superseded, not completed archive.
+- Previous live-process/port observations are historical only. This rebaseline did not contact the trial or infer its current health.
+
+## New decisions
+
+R01 **One Watch vocabulary.** Watch is user intent; Source Monitor is the collection mechanism. Retain Topic/Subject/Story/Question distinctions behind named selectors. No new competing objective model.
+
+R02 **Save setup paused.** Start is explicit and requires an approved usable Source. Basic setup needs category/topic/policy composition, retry identity and rollback, not a remote language model. A new event can start as descriptive Topic; never fabricate an evidence-bearing Story.
+
+R03 **Assistance stays advisory.** Vocabulary and source recommendations show rationale/provenance, require review, preserve rejection, and retain manual/local fallback. Existing deterministic initialisms are not semantic synonym understanding. No UAP hardcoding.
+
+R04 **Candidate discovery before collection.** AST-30 freezes the exact bounded provider/validation contract; AST-31 cannot choose a new vendor or redesign acquisition. Candidate URLs do not become evidence or automatically attached Sources. Exhaustive web search is not promised.
+
+R05 **One evidence path.** Add contextual navigation rather than another evidence projection. Known-at/retrieved/published dates remain distinct; source quotation is not truth; syndication is not independent corroboration. Never recreate removed Coverage/Blind Spot state.
+
+R06 **Separate cadences.** Watch collection schedule, living-report revisions and periodic briefing schedule are distinct. Briefing schedule requires a bounded new durable record/job slice; immediate reports continue using current accepted-evidence triggers.
+
+R07 **Return state is not now().** Store/query an explicit owner review boundary and show successful acquisition freshness separately. Reading Home does not silently acknowledge every item.
+
+R08 **Qualification is layered.** Recorded hosted runs count as historical evidence; missing installed/browser/human checks remain open. Main versus unmerged implementation stays explicit throughout. Code present alone cannot archive AST-05 as completed.
+
+R09 **No aesthetic cleanup milestone.** Keep framework/dependencies, hash routes and dark layout. Decompose provider/lifecycle/transaction work where needed; Tier 2 executes most UX work, Tier 3 bounded concurrency/security, Astra only unsettled architecture/evidence.
+
+## Unresolved decisions and who resolves them
+
+- Source recommendation provider/transport and whether genuine external search is required: technical/product contract review AST-30, using representative empty-corpus examples. Owner input only if it requires a new paid service/vendor commitment. No commitment or paid call now.
+- Geographic/time narrowing: AST-50 design and AST-51 implementation must distinguish soft terminology guidance from hard filtering; an unanticipated schema requirement triggers a smaller approved design task. Do not label free-text tags as strict filters.
+- Sustained intelligence usefulness and retained commercial/paid-Ask scope: actual human scoring and owner value judgment under the unchanged AST-16–18 protocol. This audit cannot settle it.
+- Specific supported physical phone/browser release matrix: select and record at AST-48 qualification from the owner's actual devices. No untested platform promise.
+
+No unresolved human choice blocks completion of this planning pass or the six-task local execution horizon. No user approval has been inferred for paid execution, trial modification, merge, deployment or commercial contact.

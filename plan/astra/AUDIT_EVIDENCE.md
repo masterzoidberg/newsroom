@@ -1,65 +1,46 @@
-# Audit evidence and limits
+# Rebaseline evidence register
 
-## Repository identity
+## Scope, instructions and safety
 
-- HEAD: `aad7d17ec91b56b68e1252c70bdf6521060c0bd1` (`Sync current planning and review artifacts`), branch main.
-- Audit began 2026-09-06 local; UTC had crossed into September 7. No commits or application changes made.
-- Initial untracked state: `.kilo/`, `Newsroom -v2.zip`. `plan/astra` existed and was empty. Those unrelated files were untouched.
-- Recent sequence: baseline `e0d626c`; approved Watch `6fefa65`; A3 repairs/rehearsal `9dea309`; frozen protocol `8a3caab`; short checkpoint `1c24e9d`; current artifact sync `aad7d17`.
-- Current migration baseline: 36. Fresh temporary test databases exercise it; the live production database was not opened/migrated by this audit.
+Read the owner attachment and supplied AGENTS instructions; inspected repository README, Astra authority/execution rules, local skill guidance, .github CI and .kilo configuration inventory. No repository/ancestor AGENTS.md was found at the inspected root/ancestors. No hidden instruction text was treated as higher authority than the task. The planning-and-task-breakdown skill was applied for bounded tasks; its pre-implementation approval checkpoint does not require approval to write this explicitly authorized plan. No implementation begins here. The orient skill's narrow read-and-stop workflow was inspected but not applied to this comprehensive request.
 
-## Checks executed
+Material conflicts resolved: main's stale AST statuses versus completed branch records; old root README/phase ordering versus current implementation; old “autonomous discovery” wording versus corpus-only code; old provider-first-onboarding sequence versus local-capable services; prior live status observations versus no runtime access in this task. Old arbitrary documentation is evidence, not executable instruction. Narrow files retain explicit current-authority headers; superseded canonical documents were preserved as _OLD.
 
-| Check | Result | Limit |
+Before changes: branch `main`; HEAD `3d7f9cfe91b34feeaa5602a5febd9077e1d87b7f`; no staged changes, no modified/deleted tracked files. Untracked `.kilo/`, `Newsroom -v2.zip`, `plan/astra/astra.zip` preserved. Five Astra branches inspected via local git show/log/diff. Main is exact merge-base of AST-05. Stack diff from main: 35 files, 4,646 insertions and 266 deletions (inspection-time statistic). No remote fetch, branch checkout, merge or history operation.
+
+## Source anchors inspected
+
+| Area | Concrete anchor | Finding / test evidence |
 |---|---|---|
-| `python -m pytest -q` | PASS exit 0; full suite, 46 HTTPX deprecation warnings | quiet configuration suppresses count summary; separate collection confirmed 844 |
-| `python -m pytest --collect-only -q -o addopts=` | 844 tests collected | collection is count confirmation, not execution evidence by itself |
-| `ruff check newsroom tests` | PASS | configured E4/E7/E9 rules, not full security review |
-| `python -m compileall -q newsroom tests` | PASS | syntax compilation only |
-| `npm run build` in frontend | PASS, tsc no-emit and Vite 6.4.3, 42 modules | no standalone frontend lint rules; no clean dependency reinstall |
-| `python -m newsroom.evals validate` | PASS, 46 cases | schema/corpus validity only |
-| `python -m newsroom.evals lite-contract` | PASS, 20 questions | explicitly results not run |
-| `python -m newsroom.evals baseline` | PASS exit 0, 20 cases | non-perfect baseline metrics; not Full-vs-Lite verdict |
-| `git diff --check` | PASS during audit; final plan validation repeated | does not validate untracked Markdown semantics by itself |
-| Read-only listener/process query | 8127 → Python API PID 48036; matching trial worker/scheduler present | process presence is not heartbeat/job-progress qualification |
-| Public `/api/v1/health` on 8127 | HTTP success; Newsroom/ok/0.1.0-dev | liveness only; no authenticated production operations |
-| Scheduled task query `Newsroom*` | no matching tasks returned | no claim that all hosts/accounts have no installations |
-| Isolated Playwright Chromium | 16 settled routes × 2 widths, no page exceptions/error panels/page overflow | empty-state audit only; internal Settings overlap observed visually |
+| Shell/auth | frontend/src/App.tsx:initialView/renderView; components/AppShell.tsx SIMPLE_NAV_ITEMS; AuthView.tsx | setup toggle then Inbox; hidden routes retained; phase12/13 frontend tests are partly source assertions |
+| Watch setup | frontend/src/views/WatchManagementView.tsx:createPolicy/createWatch; newsroom/intelligent_monitoring.py:WatchService.create | target ID and policy required; Topic name alone is not scope (monitoring._scope_for_target reads topic_terms); Watch can be paused; seeded UAP name; tests/test_phase24_intelligent_monitoring.py lifecycle/concurrency |
+| Taxonomy | newsroom/domain.py:CoreService.create_topic/create_subject | Topic needs Category; distinguish Subject from extracted entities; no-ID setup needs composition |
+| Terms | newsroom/intelligent_monitoring.py:_deterministic_terms/suggest_vocabulary/query_plan/_refresh_scopes; newsroom/ai.py:LocalVocabularyProvider | reviewed persisted terms/initialisms; local semantic output empty; immutable pinned scopes and rejection memory |
+| Discovery | newsroom/intelligent_monitoring.py:discover_sources/_discovery_proposals/review_source_candidate | no network; existing source/lineage/syndicated-origin proposals; empty-corpus success; candidate review attaches source Monitors |
+| Production routing | newsroom/domain_api.py WatchService construction; newsroom/runtime.py:build_worker_handlers/build_worker_queue | local capability bundle; canonical durable acquisition/relevance/analysis/story/report/alert pipeline |
+| Collection | newsroom/acquisition.py transport/extractor; newsroom/monitoring.py:MonitorExecutionService/RelevanceCascade; content_artifacts.py; document_processing.py | bounded source HTTP/feed, dedupe and pinned scope processing; direct non-source Monitor unsupported |
+| Article/Claims | newsroom/ai.py:LocalArticleAnalysisProvider; article_analysis.py; evidence_promotion.py | bounded structured output, paid invocation identity, exact unique text promotion; tests/test_phase22_3_trust_boundary.py |
+| Story/replay | newsroom/automatic_story_resolution.py; story_evolution.py; story_corrections.py; temporal.py | conservative assignment, correction history and knowledge-time semantics; tests/test_phase23e_compatibility.py and test_phase296_story_time_semantics.py |
+| Reports/briefings | newsroom/reports.py:LivingReportService/BriefingService; report_automation.py; frontend/src/views/ReportsView.tsx and InboxView.tsx | living revision chain real; UI target IDs and manual daily generation; no durable briefing schedule found in runtime/jobs/scheduler registry |
+| Alerts/return | newsroom/reports.py:AlertService; alert_automation.py; attention.py; frontend/src/views/AlertsView.tsx/InboxView.tsx | 0.85 list vs 0.5 rule threshold, read-time attention, render timestamp mislabeled Last checked; no persisted visit summary found |
+| Research/Ask | newsroom/research_questions.py; research_prioritization.py; hypotheses.py; ask.py; AdminViews/AskView | gaps/pursuit exist; local planner empty; hypothesis separation and grounded refusal; tests/test_phase25_autonomous_research.py |
+| Tags/search | newsroom/knowledge.py:deterministic_tags/start_backfill; workbench.py; WorkbenchView/ReviewViews | deterministic namespaced tags, notes, FTS and bounded retrieval; not broad AI topic tagging |
+| Main lifecycle | newsroom/runtime.py; worker.py; config.py; paths.py; scripts/phase16_windows_deploy.ps1 | separate children; explicit external runtime roots; installation/recovery machinery exists |
+| Unmerged lifecycle | git show AST-05 branch: newsroom/runtime_identity.py/runtime_managed.py/runtime_supervisor.py/runtime_status.py/job_lease.py, scripts/astra05_windows_smoke.ps1 | actual lock/supervisor/status/launcher code and tests; AST-01–04 closure records retained; AST-05 has no completed evidence record |
+| Security/operations | newsroom/auth.py; app.py auth/CSRF/session middleware; security.py; operations.py; release.py; docs/THREAT_MODEL.md and recovery/operations references | private session protections and backup/export/artifact tooling; OS-vault/settings work still planned |
+| Responsive/offline | frontend/src/styles.css; components/ViewPrimitives.tsx/PwaStatus.tsx; frontend/public/sw.js | shared states/breakpoints; fixed shell cache and HTML fallback need qualification; no fresh browser claim |
+| Trial/value | docs/DOGFOOD_CONTRACT.md; reviews/PHASE_29_* protocols/checkpoint referenced by Astra | approved Watch and frozen dates exist; no runtime or new observation read; human/comparison gates remain pending |
 
-Browser audit used a fresh external temporary dev root, separate explicit port 18127, synthetic login and no worker/scheduler/network acquisition. Provider environment was forced local. Only that audit API was terminated afterward. The first pass was loading-state reconnaissance and was repeated with explicit `aria-busy` completion before settled assertions.
+This is a repository-wide architectural/product audit by entrypoints, connected services, tests and history—not a claim of line-by-line proof of every source file or complete security verification. Source paths/symbols allow reproduction against the recorded SHA; branch-only paths must be read with git show rather than assumed present on main.
 
-Final screenshots were produced outside the repository under `%TEMP%/newsroom-astra-audit-mzk6jiog`; temporary files are not durable release evidence. Findings are preserved here and in UX_AND_APPEARANCE. Login, desktop Watches and phone Settings were visually inspected. No source/private production content was copied into the plan.
+## Fresh checks on main
 
-## Inspection map
+`python -m pytest -q tests/test_phase24_intelligent_monitoring.py tests/test_phase25_autonomous_research.py tests/test_phase23e_compatibility.py tests/test_phase22_3_trust_boundary.py tests/test_phase296_story_time_semantics.py` — exit 0, 79 tests passed; four httpx app-shortcut deprecation warnings. These selected tests use temporary databases and deterministic/local doubles; no real paid provider calls or active trial runtime startup.
 
-This was a cross-subsystem audit with targeted execution-path inspection, not a claim that every line of every historical file received manual review. Concrete findings reference actual symbols below; unresolved real-world behavior remains explicitly unknown.
+`npm.cmd run typecheck` in frontend — exit 0. No new application build or browser session was required for documentation edits. Earlier full-suite/build/browser counts in _OLD or branch history remain historical, not fresh results.
 
-| Area | Inspected evidence |
-|---|---|
-| Product/history | README; product spec/master/completion plan structure and relevant sections; phases-v2 README, Phase 28.5/29/29.6, architecture reconciliation memo; phases-old index; current git history |
-| Acceptance | baseline acceptance, dogfood contract, trial readiness, A3 pipeline rehearsal, observation checkpoint, evaluation protocol/decision rule; prospective experiment authority |
-| Runtime/deploy | full runtime/config/worker/scheduler; release manifest helpers; deployment task/launcher paths; operations/recovery runbooks |
-| API/auth | create_app/middleware/health/readiness; domain router construction/settings/Ask routes; AuthService/security interfaces and authentication tests |
-| Schema/ops | migration application/version/history handling; storage-backed jobs/metadata; operations backup/restore/export allowlist and recovery procedures |
-| AI | capability bundle/local article provider/router execution; AnalysisProviderConfig/compatible adapter/reservation/route/persistence; Ask construction and injected synthesis; production router construction |
-| Core chain | acquisition interface/security/body handling, document-processing transaction and promotion path; evidence-promotion/resolution/stage service interfaces and regression suites; monitoring/source discovery/research planner construction |
-| UX | App, AppShell, auth, primitives, AdminViews, WatchManagement, Ask, CSS/manifest/service worker; all view inventory and settled browser routes |
-| Tests/tooling | test inventory/conftest, frontend source/build tests and browser harness; CI, pyproject/frontend package; eval commands; recent repair regressions |
-| Simplification | legacy/compatibility searches, removed-projection plan, tag bridge, budget history, missing-artifact compatibility, phase-specific runtime comments/scripts |
+Not performed: full suite/lint/build, installed Windows smoke, current online CI/PR query, fresh browser/physical phone, source network requests, active port/process/runtime observation, provider validation, paid comparisons, human scoring, deployment or merge. Python/TypeScript/source evidence cannot establish these claims. The legacy browser smoke targets 8127 and was deliberately not run.
 
-## Highest-confidence findings
+## Governance and final checks
 
-- `runtime.py:_run_api` blindly binds; current listener independently identified as Newsroom. No ownership/reuse authority exists.
-- `domain_api.py` constructs local Watch router; runtime local research router; `AskView.tsx` explicitly chooses local. The only normal real provider adapter is Article Analysis.
-- `ArticleAnalysisService` holds configuration set at construction; `_resolve_route` can raise when paid is disabled, so default fallback behavior needs deliberate implementation.
-- `domain.py:set_setting/list_settings` is not secret storage; secret-like keys are rejected/filtered and normal values are returned. Full backups include database state, making a secret SQLite column unsuitable.
-- `ai.py:LocalArticleAnalysisProvider` now caps entity candidates at 100; A3 fixed the prior 444-entity error. Do not report that bug as current.
-- A3 full-page Story deferral and metadata-only downstream positive path are explicitly documented; checkpoint proves no post-boundary value yet, not pipeline absence.
-- `frontend/src/styles.css` lacks generic `.content-grid` mobile collapse; settled phone Settings screenshot confirms internal overlap.
-- Ubuntu backend CI plus hard-coded `npm.cmd` in backend-collected test is a concrete configuration mismatch. No remote Actions run was queried, so this is a source-supported CI defect rather than an observed current hosted-run result.
-
-## Not performed / not claimed
-
-No paid-provider calls, live acquisition, production data inspection/mutation, process restarts, scheduled-task changes, installs/upgrades/restores, physical-phone test, full accessibility audit, populated browser journey, external market comparison, human usefulness scoring, four-week observation completion or release publication. Public health GET may generate ordinary service telemetry, but no application data/configuration was changed. No local secrets or full process command lines were printed.
-
-Technical external verification was limited to Microsoft credential/DPAPI/task logon documentation and Python keyring documentation, linked next to the relevant architecture claims. Commercial scores are explicitly hypotheses/judgments rather than external market evidence.
+The change manifest records preserved originals, updated/new files and prompt moves. Completed AST-01–04 prompts retain filenames and byte content; uncompleted originals are in prompts/superseded. New IDs continue at 23 through 55. Six current prompts include the required sections. A local plan validator checks dependency existence/acyclicity, one READY, prompt headings and relative markdown links; final Git diff review checks only plan/astra changed and untracked inputs remain. Final outcomes are recorded in REBASELINE_REVIEW.md.

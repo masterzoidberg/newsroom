@@ -1,80 +1,41 @@
-# Verified current state
+# Current state at the rebaseline
 
-Baseline and checks: [AUDIT_EVIDENCE.md](AUDIT_EVIDENCE.md). Status describes the subsystem at this HEAD, not a blanket release certification. DONE means production-usable within the stated narrow contract; MOSTLY DONE means substantial implementation with qualification gaps; PARTIAL means an important user/operational path is absent; UNKNOWN / NEEDS REAL-WORLD VERIFICATION means code/test evidence cannot settle the claim.
+## Baseline and branch distinction
 
-## Runtime and operations
+Main is `3d7f9cfe91b34feeaa5602a5febd9077e1d87b7f`; merge-base with the AST-05 branch is exactly that SHA. The five Astra branches form a descendant stack, not five alternative implementations. Local refs were inspected; no fetch, checkout, merge or runtime contact occurred.
 
-| Subsystem | Status | Evidence and remaining boundary |
-|---|---|---|
-| API | MOSTLY DONE | `app.py:create_app`, `runtime.py:_run_api`; authenticated same-origin workspace, public liveness; live 8127 health returned Newsroom/ok; no ownership-aware reuse |
-| Worker | MOSTLY DONE | `runtime.py:build_worker_handlers`, `worker.py`; complete production handler registry and durable outcomes; whole-process health/singleton missing |
-| Scheduler | MOSTLY DONE | `scheduler.py`, `jobs.py:SchedulerService`; persisted ticks/coalescing and due research; heartbeat is not a full service supervisor |
-| Jobs/retry/leases | MOSTLY DONE | `jobs.py`, coalescing/research worker tests; bounded recovery and reservations; test long handlers vs 120-second job lease before adding restart behavior |
-| Process lifecycle | PARTIAL | `_stop_event` supports cooperative worker/scheduler exit; no aggregate ownership/stop handshake |
-| Startup/port handling | PARTIAL | direct Uvicorn bind, no listener diagnosis or root identity |
-| Shutdown/restart | PARTIAL | per-process signals and runbook Task commands; no application-level drain/control |
-| Health | PARTIAL | `/health` liveness and `/readiness` DB integrity; UI polls on mount/network changes, not continuous component health |
-| Runtime roots | DONE | `config.py`, `paths.py`, `test_runtime_config.py`; explicit dev/prod, root outside repository, root suffix checks |
-| Windows install | MOSTLY DONE | `phase16_windows_deploy.ps1`, `release.py`; artifact identity and separate install/runtime roots, operator ceremony remains |
-| Task Scheduler | PARTIAL | three fixed-name tasks, AtStartup/S4U, IgnoreNew per task; cannot prevent manually launched duplicates; no matching tasks returned during audit |
-| Upgrade/migrations | MOSTLY DONE | `migrations.py`, `operations.py`, `cli.py`; contiguous schema 36, integrity checks, rehearsal tools; coordinated writer shutdown is manual |
-| Backup/restore | MOSTLY DONE | `operations.py`, `storage.py`, phase15 tests; verified SQLite backup/restore, not effortless owner UX |
-| Logical export/import | MOSTLY DONE | explicit `_EXPORT_COLUMNS`, round-trip/integrity tests; bounded logical reconstruction is not full database recovery |
-| Logs/telemetry | MOSTLY DONE | rotating runtime logs, `telemetry.py`, AI telemetry; no cohesive user diagnostics/recovery screen |
-| Release identity | MOSTLY DONE | manifest hash verification in `release.py`; dirty worktree is recorded, not automatically a distributable release |
-| Tests | MOSTLY DONE | broad offline regression suite, trust-boundary/coalescing/temporal coverage; browser source checks do not replace journey tests |
-| CI | PARTIAL | Linux backend and frontend jobs; backend test invokes `npm.cmd`, while backend job has no frontend npm install; Windows/runtime/keyring checks absent |
+| Work | Local branch tip | State relative to main | Evidence disposition |
+|---|---|---|---|
+| AST-01 baseline/CI | `astra/AST-01-baseline` `4dfc950` | implemented, unmerged | DONE under narrow recorded acceptance |
+| AST-02 identity/preflight | `astra/AST-02-instance-preflight` `db5d94b` | implemented, unmerged | DONE; installed lifecycle excluded from its contract |
+| AST-03 supervisor/lease renewal | `astra/AST-03-supervisor` `85f41e1` | implemented, unmerged | DONE; subprocess/hosted evidence recorded |
+| AST-04 status/recovery UI | `astra/AST-04-status-controls` `1000487` | implemented, unmerged | DONE; corrected browser artifact recorded |
+| AST-05 launcher | `astra/AST-05-start-newsroom` `cddad09` | implemented, unmerged, qualification incomplete | PARTIAL capability; only READY task, no DONE claim |
 
-## Core product
+The original main ledger incorrectly treats all four completed tasks as future. Their full completion sections are preserved in [history](history/AST-01-04_COMPLETION_RECORD.md). Hosted run/PR state is historical recorded evidence, not freshly queried online status. Later AST-05 launcher commits do not establish clean installed acceptance by themselves.
 
-| Subsystem | Status | Evidence and remaining boundary |
-|---|---|---|
-| Acquisition | MOSTLY DONE | `acquisition.py` bounded HTTP/feed parsing, redirect/peer checks, immutable artifacts; JS-heavy/blocked pages and broad homepages remain quality risks |
-| Sources | MOSTLY DONE | Source profiles, reviewed suggestions and Watch candidates; collection UI insufficient for first creation |
-| Watches/Monitors | MOSTLY DONE | `intelligent_monitoring.py`, `monitoring.py`; Watch targets create source Monitors; direct non-source Monitor execution reports unsupported_target |
-| Source discovery | PARTIAL | deterministic existing-source/document-link/feed-origin proposals with approval; not a general autonomous discovery engine |
-| Relevance | MOSTLY DONE | `RelevanceCascade`, `document_processing.py`; pinned scope, persisted decision, deterministic matching; semantic quality on broad content unproven |
-| Article Analysis | MOSTLY DONE | local and OpenAI-compatible structured route; real-page entity bound fixed; quality differs substantially by route |
-| Evidence promotion | DONE | `evidence_promotion.py`, phase22 trust tests; exact unique matches, full provenance, atomic immutable evidence/Claim proposals; no truth guarantee |
-| Claims | MOSTLY DONE | `evidence.py`, `story_automation.py`; acceptance and evidence histories; operator explanation of supported vs true needs care |
-| Story resolution/evolution | MOSTLY DONE | `automatic_story_resolution.py`, `story_evolution.py`, `story_corrections.py`; conservative deferral/correction/time semantics; representative yield unknown |
-| Reports | MOSTLY DONE | `reports.py`, `report_automation.py`; evidence-bound revisions and correction propagation; real user usefulness pending |
-| Alerts | MOSTLY DONE | `alert_automation.py`, report causes and in-app delivery/dedupe; optional browser delivery is not OS push while app is closed |
-| Research Questions | MOSTLY DONE | `research_questions.py`, durable pursuit/reassessment, hypotheses/gaps; manual ID-heavy UI and sparse real-use evidence |
-| Autonomous research | PARTIAL | bounded candidate/retrieval workflows and budgets exist; local planner is intentionally empty, external discovery is constrained |
-| Ask | PARTIAL | `ask.py`, `AskView.tsx`; evidence-grounded local answers/refusal and historical contracts; normal UI explicitly sends provider_mode=local |
-| Workbench | MOSTLY DONE | `workbench.py`, `WorkbenchView.tsx`; notes/tags/search/compare/diagnostics; dense advanced surface |
-| Search/knowledge | MOSTLY DONE | `knowledge.py`, `workbench.py`, phase26 tests/benchmark; FTS and bounded retrieval; large real corpus performance needs qualification |
-| Notifications | PARTIAL | in-app authoritative, browser permission/preferences implemented; no general background push delivery proof |
-| Daily intelligence value | UNKNOWN / NEEDS REAL-WORLD VERIFICATION | A3 repaired full body → Claims, broad-page Story deferral; metadata positive chain; short checkpoint insufficient |
+## Actual current architecture
 
-## AI configuration
+FastAPI/session authentication serves a same-origin React hash-route workspace. SQLite WAL owns domain data, immutable provenance and a durable job queue. Source acquisition creates immutable content artifacts and DocumentVersions; changed versions enqueue processing with pinned information-need scope. Relevant material receives structured analysis; exact excerpt verification produces pending Claims/Evidence; conservative automatic Story resolution/acceptance feeds immutable reports, exact-cause alerts and in-app delivery. Durable completion hooks and replay identities protect downstream convergence. Schema is 36 on main and the inspected stack.
 
-| Subsystem | Status | Evidence and remaining boundary |
-|---|---|---|
-| Local route | MOSTLY DONE | `ai.py:CapabilityBundle.local_defaults`; heuristic embedding/ranking/entailment/extraction/synthesis; not an installed local LLM |
-| Remote route | MOSTLY DONE | `OpenAICompatibleArticleAnalysisProvider`; JSON-schema chat completions required, bounded SDK; endpoint compatibility must be tested |
-| Provider selection | PARTIAL | `AnalysisProviderConfig.from_env`; selection is analysis-specific, not coherent product settings |
-| Credential persistence/UI | NOT STARTED | no OS credential-store implementation or provider management UI found; ordinary settings reject sensitive key names |
-| Budgets | MOSTLY DONE | `BudgetService` durable analysis reservations plus router-local counters; extend shared durable enforcement before adding paid capabilities |
-| AI telemetry | MOSTLY DONE | `SQLiteTelemetrySink`, invocation identity, token usage; provider billing cost unavailable and estimated cost must remain labeled |
-| Model identity | MOSTLY DONE | analysis identity includes model/config/prompt inputs; effective configuration should be surfaced per capability and generation |
-| Capability coverage | PARTIAL | remote Article Analysis only in ordinary production; Watch vocabulary and research routers local; normal Ask local; eval remote synthesis is not product integration |
-| Failure handling | MOSTLY DONE | safe codes, validation/timeouts, uncertain invocation handling; disabling current remote route can currently raise AIDisabled rather than transparently choose local |
-| Dynamic reload | NOT STARTED | analysis service captures config at construction; no shared versioned reload authority |
+Watches are durable user intent referencing a Topic, Subject, Story, Source or Research Question. A Watch attaches Sources via per-Watch source Monitors. **Only source Monitors execute acquisition**; direct topic/subject/story/question Monitors are unsupported. This does not mean those Watch targets are unsupported. Do not build parallel Topic acquisition adapters merely to hide this distinction.
 
-## Frontend
+Main still launches API/worker/scheduler separately and labels API health as Service online/Synced. The stack adds ownership locks, PID creation identity, bounded supervisor recovery, renewing worker leases, truthful whole-runtime UI and a single launcher. None is present in main yet.
 
-| Subsystem | Status | Evidence and remaining boundary |
-|---|---|---|
-| Navigation | MOSTLY DONE | five Simple destinations plus Settings; Advanced adds Documents/Research/Workbench/Alerts; other hash routes retained |
-| Settings | PARTIAL | experience and notifications editable; raw settings/budget display, no provider or lifecycle controls |
-| Dark appearance | MOSTLY DONE | CSS tokens plus many literals, color-scheme:dark, dark manifest; contrast and populated-state audit still required |
-| Responsive/mobile | MOSTLY DONE | breakpoints, wrapping/table containers; isolated desktop/390px empty route checks; physical phone unqualified |
-| PWA | PARTIAL | manifest/service worker/install event present; fixed shell cache version and unconditional HTML fallback need update/error verification |
-| Offline | PARTIAL | API excluded from service-worker cache; shell only, auth bootstrap may return to login; not an offline evidence reader |
-| Onboarding | PARTIAL | setup/login available; no complete first-Watch journey without IDs |
-| Loading/empty/error | MOSTLY DONE | shared accessible primitives; generic error text and retry coverage vary, operational recovery still weak |
-| Light/System preference | NOT STARTED | not required for first milestone; keep dark-only with coherent theme tokens |
+## Product maturity
 
-Historical removed coverage/blind-spot/fragility projections: **LEGACY / SHOULD RETIRE** applies to stale documentation and obsolete normal-user script entry points, not to retained migration/history evidence. Do not recreate those projections.
+Substantial evidence-intelligence engine; incomplete owner-facing application. Narrow exact-span verification is complete within its tested trust contract. Acquisition, analysis, Story evolution/corrections, reports, research gaps, search, tags, authentication and backup machinery are implemented with meaningful tests. Their normal-user integration and real-world qualification remain partial. All 30 capability ratings and precise boundaries are in [FEATURE_GAP_ANALYSIS](FEATURE_GAP_ANALYSIS.md).
+
+Setup/login exists; first login lands in Inbox/Home without first-Watch guidance. Watch setup requires target ID and a separately created policy. Source collection is mainly inspection. Report/Ask workflows still expose IDs. Home briefing is manually generated; its Last checked uses render time rather than acquisition success. Alerts request only importance ≥0.85 while rule creation uses 0.5, hiding some matching alerts. Source-reviewed aliases and deterministic initialisms exist, but LocalVocabularyProvider returns an empty semantic suggestion list. Discovery reads only an existing corpus; fresh-install recommendations are absent. Local research planning is similarly empty; bounded deterministic pursuit still exists. Smart tags are persisted deterministic classifications/backfills, not general learned topical tagging.
+
+## Planned, blocked and deferred
+
+Planned: no-ID Watch setup, assisted terminology and source discovery, understandable cadence and first value, connected evidence/report/alert/research workspace, return-since-visit summary, owner recovery and release qualification. These are task contracts, not code changes in this pass.
+
+Blocked external acceptance: unchanged Phase 29 observation sufficiency, eligible frozen Full-vs-Lite inputs, explicit paid execution authorization and actual human scoring. No live state or observation progress was read. The repository records boundary `2026-09-06T21:20:48Z` and earliest four-week point `2026-10-04T21:20:48Z`; time alone does not satisfy the protocol.
+
+Deferred: paid Ask, commercial pilot, speculative broad autonomy, light/system appearance, OS push while closed, pre-login/cloud operation. Backup/logical export exist but are different promises: full SQLite backup contains content artifacts; bounded logical export intentionally excludes article bodies and is not full recovery.
+
+## Fresh evidence and limits
+
+79 focused offline tests passed on main across Watch/research/full-chain/evidence trust/Story time semantics; frontend typecheck passed. Four httpx deprecation warnings were emitted. No full suite, production build, fresh browser, installed Windows, physical phone, online CI, real provider or real-use value qualification was performed. UX observations are source-grounded; historical screenshots/CI artifacts are not relabeled as new visual evidence. See [AUDIT_EVIDENCE](AUDIT_EVIDENCE.md).

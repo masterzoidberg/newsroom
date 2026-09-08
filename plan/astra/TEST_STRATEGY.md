@@ -1,3 +1,5 @@
+> Rebaseline 2026-09-07: retained narrow reference. TASKS.md, NEXT.md and COMPLETION_ROADMAP.md supersede any task order/status in this document. AST-01–04 are DONE on an unmerged stack; AST-05 qualification is the sole READY task. Old AST-12–15/19 scopes are replaced per TASKS; no trial continuation, paid call or cleanup is authorized by this reference. Historical counts/observations below are dated records, not fresh verification.
+
 # Verification strategy
 
 ## Existing evidence
@@ -27,12 +29,12 @@ No need for another broad test framework or hundreds of phase-labeled tests. Add
 | Reload | long-lived worker sees next generation, in-flight pinned generation, disable race and no env resurrection | AST-09 |
 | Fallback | disabled/deleted/no budget chooses labeled local for new work; local failure remains failure; uncertain paid not silently retried | AST-09 |
 | Settings UX | complete Add AI Provider journey with real local worker + fake remote transport, no returned key, safe stale-edit errors | AST-11 |
-| Onboarding | fresh empty DB → first named Watch/source → due fixture → useful inspection, scoped Ask/refusal; no raw IDs | AST-12 |
-| Theme/mobile | component bounds as well as document overflow, Settings two-column overlap regression, contrast/focus/zoom, all user states | AST-13 |
-| Backup/update | verified round trip, corrupted backup rejection, disk/write failure, stopped writers, compatible rollback, secret exclusion | AST-14/19 |
-| Real-use chain | body vs metadata quality, broad navigation, blocked access, unchanged/saturation/refusal, qualifying downstream output and replay | AST-15 |
+| Onboarding | fresh empty DB → first named Watch/source → due fixture → useful inspection, scoped Ask/refusal; no raw IDs | AST-23–27,54 |
+| Theme/mobile | component bounds as well as document overflow, Settings two-column overlap regression, contrast/focus/zoom, all user states | AST-45 |
+| Backup/update | verified round trip, corrupted backup rejection, disk/write failure, stopped writers, compatible rollback, secret exclusion | AST-43–44/19 |
+| Real-use chain | body vs metadata quality, broad navigation, blocked access, unchanged/saturation/refusal, qualifying downstream output and replay | AST-47 |
 | Evidence value | real owner usefulness entries, active interval/denominators, unchanged comparison protocol and blinded human scoring | AST-16–18 |
-| PWA | first load vs cached load, offline API, missing asset, upgrade from old shell, recovery from failed response, supported physical phone | AST-19 |
+| PWA | first load vs cached load, offline API, missing asset, upgrade from old shell, recovery from failed response, supported physical phone | AST-46,48 |
 
 ## Commands and execution discipline
 
@@ -49,7 +51,7 @@ git diff --check
 
 From `frontend`: `npm run build`. For focused implementation run the affected existing test modules first. Full paid comparisons/live_test_b are not included. Corpus validate and lite-contract verify definitions, not superiority. Baseline's non-perfect results are diagnostic, not an accepted product verdict.
 
-AST-01 must fix the concrete CI portability/setup gap: `tests/test_phase12_frontend.py` executes `npm.cmd`, while backend CI runs Ubuntu and installs only Python dependencies. Do not infer a remote CI failure result from this source inspection; verify the corrected workflow on its target platform. Ruff's narrow configured rule set is not a complete security/style audit.
+Main retains the original CI portability/setup gap; AST-01 already fixes it on the unmerged stack: `tests/test_phase12_frontend.py` executes `npm.cmd`, while backend CI runs Ubuntu and installs only Python dependencies. Do not infer a remote CI failure result from this source inspection; verify the corrected workflow on its target platform. Ruff's narrow configured rule set is not a complete security/style audit.
 
 ## Evidence standards
 

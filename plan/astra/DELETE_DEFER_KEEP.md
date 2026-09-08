@@ -1,3 +1,5 @@
+> Rebaseline 2026-09-07: retained narrow reference. TASKS.md, NEXT.md and COMPLETION_ROADMAP.md supersede any task order/status in this document. AST-01–04 are DONE on an unmerged stack; AST-05 qualification is the sole READY task. Old AST-12–15/19 scopes are replaced per TASKS; no trial continuation, paid call or cleanup is authorized by this reference. Historical counts/observations below are dated records, not fresh verification.
+
 # Delete, defer, keep
 
 No application code or historical document is deleted by this audit. “Delete candidate” requires caller/data/compatibility proof in AST-20; phase-named files are not automatically dead.
@@ -23,7 +25,7 @@ No application code or historical document is deleted by this audit. “Delete c
 | Coverage/Blind Spot/fragility/evidence-family runtime projections | DO NOT REINTRODUCE | Phase 28.5–28.875 intentionally removed these; source dependencies computed on demand, Research Gaps canonical |
 | Hidden Topics/Subjects/Sources/Runs/Saved/History hash routes | KEEP access, contextualize | routes remain reachable and may support deep links; absence from primary nav does not prove unused |
 | Simple/Advanced | KEEP presentation-only | `experience.py`, AppShell; never fork data/routing/provenance based on UI density |
-| Raw IDs/JSON in normal Settings/Watch/Ask | REMOVE from normal UX | AST-11/12 typed controls; identifiers remain Advanced diagnostics |
+| Raw IDs/JSON in normal Settings/Watch/Ask | REMOVE from normal UX | AST-11/23–27/54 typed controls; identifiers remain Advanced diagnostics |
 | Historical comments claiming promotion never occurs in processing | CORRECT narrowly | `document_processing.py` module prose predates its current `ArticleAnalysisPromotionService` call; runtime behavior authoritative |
 | `plan/phases-old`, old master/phase authority statements | PRESERVE historical | Astra README is new ordering; do not rewrite old approvals or pretend old “next phase” is current |
 | Light/System appearance | DEFER | complete dark and fix measured mobile issue first |

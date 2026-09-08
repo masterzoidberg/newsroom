@@ -1,3 +1,5 @@
+> Rebaseline 2026-09-07: retained narrow reference. TASKS.md, NEXT.md and COMPLETION_ROADMAP.md supersede any task order/status in this document. AST-01–04 are DONE on an unmerged stack; AST-05 qualification is the sole READY task. Old AST-12–15/19 scopes are replaced per TASKS; no trial continuation, paid call or cleanup is authorized by this reference. Historical counts/observations below are dated records, not fresh verification.
+
 # AI provider settings architecture
 
 ## Existing execution map

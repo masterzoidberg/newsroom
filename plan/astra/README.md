@@ -1,28 +1,25 @@
-# Astra completion plan
+# Astra completion authority
 
-Audit baseline: `aad7d17ec91b56b68e1252c70bdf6521060c0bd1`, branch `main`, 2026-09-06 America/New_York (work continued after midnight UTC). Scope: audit and planning only. No application implementation is included.
+Rebaseline: 2026-09-07. Inspected checkout: `main`, `3d7f9cfe91b34feeaa5602a5febd9077e1d87b7f`. This is an audit and completion plan, not product implementation or release certification.
 
-This directory is the canonical new completion layer requested by the owner. It supersedes historical task ordering, not evidence/provenance invariants, migration history, or frozen trial protocols. `plan/astra` existed but was empty when inspected. Unrelated `.kilo/` and `Newsroom -v2.zip` were preserved.
+Read [CURRENT_STATE](CURRENT_STATE.md), [PRODUCT_VISION](PRODUCT_VISION.md), [UX_AND_ONBOARDING](UX_AND_ONBOARDING.md), then [NEXT](NEXT.md) and [TASKS](TASKS.md). **AST-05 is the only READY task**, with a revised qualification prompt. Its code is already on an unmerged stack; do not reimplement it on main.
 
-## Start here
-
-1. Read [EXECUTIVE_AUDIT.md](EXECUTIVE_AUDIT.md) and [CURRENT_STATE.md](CURRENT_STATE.md).
-2. Read [CODEX_EXECUTION_RULES.md](CODEX_EXECUTION_RULES.md), [DECISIONS.md](DECISIONS.md), and [NEXT.md](NEXT.md).
-3. Execute the first READY task in [TASKS.md](TASKS.md), using its matching [prompt](prompts/README.md). Revalidate dependencies and current HEAD first.
-4. Record evidence, update task status and the immediate queue, and stop after the primary task. No task is DONE merely because its code exists.
-
-## Planning map
-
-| Document | Purpose |
+| Authority | Purpose |
 |---|---|
-| [MASTER_PLAN.md](MASTER_PLAN.md) | Milestones, dependency order, fastest reliable path |
-| [STARTUP_AND_RUNTIME.md](STARTUP_AND_RUNTIME.md) | Port 8127 finding, launcher, lifecycle, installation |
-| [AI_PROVIDER_SETTINGS.md](AI_PROVIDER_SETTINGS.md) | Configuration authority, credential boundary, routing contracts |
-| [UX_AND_APPEARANCE.md](UX_AND_APPEARANCE.md) | Per-surface review, onboarding, dark theme, mobile |
-| [PRODUCT_READINESS.md](PRODUCT_READINESS.md) | Daily-use and commercial-pilot acceptance |
-| [COMMERCIAL_THESIS.md](COMMERCIAL_THESIS.md) | Product thesis, scores, hypotheses, falsification |
-| [TEST_STRATEGY.md](TEST_STRATEGY.md) | Existing coverage and minimal additional verification |
-| [DELETE_DEFER_KEEP.md](DELETE_DEFER_KEEP.md) | Safe simplification decisions |
-| [AUDIT_EVIDENCE.md](AUDIT_EVIDENCE.md) | Checks, limitations, source map, current observations |
+| [FEATURE_GAP_ANALYSIS](FEATURE_GAP_ANALYSIS.md) | All 30 completion capabilities, evidence and task coverage |
+| [COMPLETION_ROADMAP](COMPLETION_ROADMAP.md) | Dependency-ordered product milestones and gates |
+| [TASKS](TASKS.md) | Sole status authority; completed IDs retained; bounded future contracts |
+| [NEXT](NEXT.md) | One primary task and five queued tasks |
+| [DECISIONS](DECISIONS.md) | Durable choices, supersessions and unresolved choices |
+| [MODEL_AND_PROMPT_STRATEGY](MODEL_AND_PROMPT_STRATEGY.md) | Model classes and escalation rules |
+| [AUDIT_EVIDENCE](AUDIT_EVIDENCE.md) | Git state, code anchors, checks and limitations |
+| [JOURNEY_VALIDATION](JOURNEY_VALIDATION.md) | Six simulated finished journeys and missing links |
+| [PRODUCT_READINESS](PRODUCT_READINESS.md) | Release acceptance gates |
+| [prompts/README](prompts/README.md) | Six current execution prompts |
+| [AI_PROVIDER_SETTINGS](AI_PROVIDER_SETTINGS.md), [STARTUP_AND_RUNTIME](STARTUP_AND_RUNTIME.md), [TEST_STRATEGY](TEST_STRATEGY.md), [CODEX_EXECUTION_RULES](CODEX_EXECUTION_RULES.md) | Narrow technical constraints; ledger owns order |
 
-Future-session instruction: **Read plan/astra and execute the current READY task.** This audit itself does not authorize paid calls, changing the frozen trial, publishing a release, or beginning implementation during the audit session.
+`*_OLD.md`, `history/`, and `prompts/archive/` are historical evidence and never execution instructions. `prompts/superseded/` contains uncompleted older prompt contracts retained for traceability; being moved there does not mean DONE. COMMERCIAL_THESIS and DELETE_DEFER_KEEP remain narrow references, not completion scope authorities. Legacy MASTER_PLAN, EXECUTIVE_AUDIT and UX_AND_APPEARANCE canonical files now route to this rebaseline.
+
+Execution: validate branch and dependencies; change READY → IN_PROGRESS only when explicitly executing; record commands, artifact/branch, browser evidence and unresolved gates; mark DONE only when all acceptance is established. DONE on an unmerged branch does not mean shipped on main. Promote exactly one eligible successor in TASKS/NEXT/prompts together. Failed qualification remains IN_PROGRESS or BLOCKED with its missing evidence. Stop after one task. No merge is implicit.
+
+Astra owns architecture, product synthesis and conflicting evidence. Tier 2 implementation models execute most slices; Tier 1 handles mechanical documentation; Tier 3 handles bounded transaction/lifecycle interactions. See the strategy. Neither this plan nor a prompt authorizes paid calls, trial access, deployments, runtime promotion or automatic continuation.
