@@ -32,11 +32,16 @@ def test_physical_lifecycle_qualification_is_explicit_and_isolated() -> None:
     assert "Refusing to infer cleanup or verification targets" in smoke
     assert "Do not manually start Newsroom after sign-in" in smoke
     assert "the actual Windows sign-in action restored the managed runtime" in smoke
+    assert "function Build-PhysicalFrontendArtifact" in smoke
+    assert "npm.cmd" in smoke
+    assert "npm ci failed" in smoke
+    assert "npm run build failed" in smoke
 
     prepare = smoke[smoke.index("function Invoke-PhysicalPrepare"): smoke.index("function Invoke-PhysicalVerifyWake")]
     assert "-RegisterTasks" in prepare
     assert "-MigrateLegacyTasks" not in prepare
     assert "8127" not in prepare
+    assert prepare.index("Build-PhysicalFrontendArtifact") < prepare.index("& powershell.exe")
     assert prepare.index("Write-PhysicalState $state") < prepare.index("$launch = Invoke-StartLauncher")
 
     cleanup = smoke[smoke.index("function Invoke-PhysicalCleanup"): smoke.index("if ($LifecycleMode -ne 'Hosted')")]
