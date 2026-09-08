@@ -37,6 +37,7 @@ def test_physical_lifecycle_qualification_is_explicit_and_isolated() -> None:
     assert "-RegisterTasks" in prepare
     assert "-MigrateLegacyTasks" not in prepare
     assert "8127" not in prepare
+    assert prepare.index("Write-PhysicalState $state") < prepare.index("$launch = Invoke-StartLauncher")
 
     cleanup = smoke[smoke.index("function Invoke-PhysicalCleanup"): smoke.index("if ($LifecycleMode -ne 'Hosted')")]
     assert "Read-PhysicalState" in cleanup
