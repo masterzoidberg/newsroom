@@ -19,10 +19,22 @@ import { AskView } from "./views/AskView";
 const HEALTHY_POLL_MS = 5_000;
 const FAILURE_POLL_MIN_MS = 3_000;
 const FAILURE_POLL_MAX_MS = 30_000;
+const WATCH_SETUP_DRAFT_KEY = "newsroom.watch-setup.v1";
 
 function initialView(): ViewKey {
   const value = window.location.hash.replace(/^#/, "") as ViewKey;
   return ["inbox", "stories", "documents", "reports", "saved", "history", "workbench", "ask", "topics", "subjects", "sources", "monitors", "questions", "runs", "alerts", "settings"].includes(value) ? value : "inbox";
+}
+
+function hasResumableWatchSetupDraft(): boolean {
+  try {
+    const raw = window.localStorage.getItem(WATCH_SETUP_DRAFT_KEY);
+    if (!raw) return false;
+    const draft = JSON.parse(raw) as { request_id?: unknown; interest?: unknown };
+    return typeof draft.request_id === "string" && draft.request_id.length > 0 && typeof draft.interest === "string" && draft.interest.trim().length > 0;
+  } catch {
+    return false;
+  }
 }
 
 export default function App() {
@@ -63,8 +75,9 @@ export default function App() {
       .then((result) => {
         const count = result.total ?? result.items.length;
         if (!active || count !== 0) return;
-        window.location.hash = "inbox";
-        setViewState("inbox");
+        const nextView: ViewKey = hasResumableWatchSetupDraft() ? "monitors" : "inbox";
+        window.location.hash = nextView;
+        setViewState(nextView);
       })
       .catch(() => undefined);
     return () => { active = false; };
