@@ -72,6 +72,9 @@ function Invoke-StartLauncher([string]$Launcher) {
     try {
         $process = Start-Process -FilePath 'powershell.exe' -ArgumentList $arguments -PassThru -WindowStyle Hidden `
             -RedirectStandardOutput $stdoutPath -RedirectStandardError $stderrPath
+        # Windows PowerShell can lose the real ExitCode for redirected Start-Process
+        # children unless the native process handle is materialized before waiting.
+        $null = $process.Handle
         if (-not $process.WaitForExit(40000)) {
             Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
             throw 'Start Newsroom launcher did not exit within the smoke-test deadline.'
