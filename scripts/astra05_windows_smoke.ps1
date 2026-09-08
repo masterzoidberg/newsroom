@@ -326,15 +326,9 @@ function Invoke-PhysicalPrepare {
     Assert-True ($taskName -match '^Newsroom-[0-9a-fA-F-]{12}-Start$') 'Physical qualification task is not installation-namespaced.'
     Assert-True ($null -ne (Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue)) 'Physical qualification Start task is not registered.'
 
-    $launcherPath = Join-Path $InstallRoot 'start-newsroom.ps1'
-    $launch = Invoke-StartLauncher $launcherPath
-    Assert-True ($launch.ExitCode -eq 0) "Physical qualification first launch failed: $($launch.Output)"
-    $initial = Wait-Healthy 60
-
-    $shortcutPath = Join-Path $ShortcutRoot 'Start Newsroom.lnk'
-    Assert-True (Test-Path -LiteralPath $shortcutPath -PathType Leaf) 'Physical qualification Start Newsroom shortcut is missing.'
-    Start-Process -FilePath $shortcutPath | Out-Null
-
+    # Persist the exact cleanup authority before launching anything persistent.
+    # If startup or browser opening fails, PhysicalCleanup can still target only
+    # this recorded isolated installation and its namespaced task.
     $state = [ordered]@{
         format_version = 1
         physical_root = $tempRoot
@@ -349,12 +343,8 @@ function Invoke-PhysicalPrepare {
         current_user = $CurrentUser
         current_user_sid = $CurrentUserSid
         prepared_at = [DateTime]::UtcNow.ToString('o')
-        initial_pids = [ordered]@{
-            supervisor = $initial.supervisor.pid
-            api = $initial.api.pid
-            worker = $initial.worker.pid
-            scheduler = $initial.scheduler.pid
-        }
+        prepare_status = 'installed'
+        initial_pids = $null
         browser_opened_confirmed = $false
         lock_wake_exercised = $false
         wake_verified_at = $null
@@ -369,6 +359,25 @@ function Invoke-PhysicalPrepare {
         trial_contacted = $false
         paid_calls = 0
     }
+    Write-PhysicalState $state
+
+    $launcherPath = Join-Path $InstallRoot 'start-newsroom.ps1'
+    $launch = Invoke-StartLauncher $launcherPath
+    Assert-True ($launch.ExitCode -eq 0) "Physical qualification first launch failed: $($launch.Output)"
+    $initial = Wait-Healthy 60
+    $state.prepare_status = 'healthy'
+    $state.initial_pids = [ordered]@{
+        supervisor = $initial.supervisor.pid
+        api = $initial.api.pid
+        worker = $initial.worker.pid
+        scheduler = $initial.scheduler.pid
+    }
+    Write-PhysicalState $state
+
+    $shortcutPath = Join-Path $ShortcutRoot 'Start Newsroom.lnk'
+    Assert-True (Test-Path -LiteralPath $shortcutPath -PathType Leaf) 'Physical qualification Start Newsroom shortcut is missing.'
+    Start-Process -FilePath $shortcutPath | Out-Null
+    $state.prepare_status = 'awaiting_wake'
     Write-PhysicalState $state
 
     Write-Host "AST-05 physical qualification prepared at: $tempRoot"
