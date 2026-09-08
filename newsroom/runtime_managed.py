@@ -17,6 +17,8 @@ from .runtime_identity import ExclusiveFileLock, process_creation_token
 RUNTIME_ROLES = ("api", "worker", "scheduler")
 MANAGED_ROLES = ("supervisor", *RUNTIME_ROLES)
 _MAX_STATE_BYTES = 16 * 1024
+_STATE_REPLACE_RETRIES = 5
+_STATE_REPLACE_RETRY_SECONDS = 0.02
 
 
 class SupervisorError(RuntimeError):
@@ -127,7 +129,16 @@ def _write_json_atomic(path: Path, payload: Mapping) -> None:
             handle.write("\n")
             handle.flush()
             os.fsync(handle.fileno())
-        os.replace(temp, path)
+        for attempt in range(_STATE_REPLACE_RETRIES):
+            try:
+                os.replace(temp, path)
+                break
+            except PermissionError:
+                if attempt + 1 >= _STATE_REPLACE_RETRIES:
+                    raise
+                # Windows readers can briefly hold a sharing mode that blocks
+                # atomic replacement. Keep the write bounded, then retry.
+                time.sleep(_STATE_REPLACE_RETRY_SECONDS * (attempt + 1))
     finally:
         try:
             temp.unlink()
@@ -341,7 +352,13 @@ class ManagedRoleContext:
 
     def _heartbeat_loop(self) -> None:
         while not self._thread_stop.wait(self.heartbeat_interval_seconds):
-            self._write_heartbeat()
+            try:
+                self._write_heartbeat()
+            except PermissionError:
+                # A Windows reader can outlive the bounded replace retries.
+                # Keep the heartbeat thread alive so a later interval can heal
+                # the state instead of permanently stranding a live process.
+                continue
             control = _read_json(component_control_path(self.config, self.role))
             if control is None or self.owner is None:
                 continue
