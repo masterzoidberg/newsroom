@@ -460,16 +460,29 @@ def verify_api_owner(
     return True, "verified"
 
 
+def _endpoint_bind_available(host: str, port: int) -> bool:
+    """Prove a loopback endpoint is bindable without taking lasting ownership."""
+    family = socket.AF_INET6 if ":" in host else socket.AF_INET
+    probe = socket.socket(family, socket.SOCK_STREAM)
+    try:
+        if os.name == "nt" and hasattr(socket, "SO_EXCLUSIVEADDRUSE"):
+            probe.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
+        probe.bind((host, port))
+    except OSError:
+        return False
+    finally:
+        probe.close()
+    return True
+
+
 def _endpoint_connect_state(host: str, port: int, timeout_seconds: float) -> str:
     try:
         with socket.create_connection((host, port), timeout=timeout_seconds):
             return "open"
     except ConnectionRefusedError:
         return "closed"
-    except (TimeoutError, socket.timeout):
-        return "unknown"
-    except OSError:
-        return "unknown"
+    except (TimeoutError, socket.timeout, OSError):
+        return "closed" if _endpoint_bind_available(host, port) else "unknown"
 
 
 def _http_json(host: str, port: int, path: str, timeout_seconds: float) -> tuple[int, dict[str, Any] | None] | None:
@@ -501,6 +514,13 @@ def diagnose_endpoint(
     timeout_seconds: float = 0.35,
 ) -> EndpointDiagnosis:
     """Classify the configured endpoint without killing or changing anything."""
+    # Prove a free loopback endpoint by binding before any client connect.
+    # This avoids TCP self-connect on Windows when a configured server port is
+    # inside the dynamic client range and would otherwise be chosen as the
+    # source port for the probe itself.
+    if _endpoint_bind_available(host, port):
+        return EndpointDiagnosis(EndpointStatus.AVAILABLE, "configured endpoint is available")
+
     connect_state = _endpoint_connect_state(host, port, timeout_seconds)
     if connect_state == "closed":
         return EndpointDiagnosis(EndpointStatus.AVAILABLE, "configured endpoint is available")
