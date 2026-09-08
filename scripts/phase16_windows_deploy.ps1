@@ -123,29 +123,40 @@ param([switch]`$NoBrowser)
 `$env:PYTHONPATH = $installLiteral
 `$expectedInstallationId = $installationLiteral
 `$runtimeRoot = $runtimeLiteral
-`$startInfo = New-Object System.Diagnostics.ProcessStartInfo
-`$startInfo.FileName = $pythonLiteral
-`$startInfo.Arguments = '-m newsroom.runtime supervisor --environment prod --root "' + `$runtimeRoot + '" --host 127.0.0.1 --port $ListenPort'
-`$startInfo.WorkingDirectory = $installLiteral
-`$startInfo.UseShellExecute = `$false
-`$startInfo.CreateNoWindow = `$true
-`$process = [System.Diagnostics.Process]::Start(`$startInfo)
 `$identityUri = 'http://127.0.0.1:$ListenPort/api/v1/runtime/identity'
 `$ready = `$false
-for (`$attempt = 0; `$attempt -lt 60; `$attempt++) {
-    try {
-        `$identity = Invoke-RestMethod -Uri `$identityUri -Method Get -TimeoutSec 1
-        if (`$identity.service -eq 'newsroom' -and `$identity.managed -eq `$true -and `$identity.installation_id -eq `$expectedInstallationId) {
-            `$ready = `$true
-            break
+try {
+    `$identity = Invoke-RestMethod -Uri `$identityUri -Method Get -TimeoutSec 1
+    if (`$identity.service -eq 'newsroom' -and `$identity.managed -eq `$true -and `$identity.installation_id -eq `$expectedInstallationId) {
+        `$ready = `$true
+    }
+}
+catch {
+}
+`$process = `$null
+if (-not `$ready) {
+    `$startInfo = New-Object System.Diagnostics.ProcessStartInfo
+    `$startInfo.FileName = $pythonLiteral
+    `$startInfo.Arguments = '-m newsroom.runtime supervisor --environment prod --root "' + `$runtimeRoot + '" --host 127.0.0.1 --port $ListenPort'
+    `$startInfo.WorkingDirectory = $installLiteral
+    `$startInfo.UseShellExecute = `$false
+    `$startInfo.CreateNoWindow = `$true
+    `$process = [System.Diagnostics.Process]::Start(`$startInfo)
+    for (`$attempt = 0; `$attempt -lt 60; `$attempt++) {
+        try {
+            `$identity = Invoke-RestMethod -Uri `$identityUri -Method Get -TimeoutSec 1
+            if (`$identity.service -eq 'newsroom' -and `$identity.managed -eq `$true -and `$identity.installation_id -eq `$expectedInstallationId) {
+                `$ready = `$true
+                break
+            }
         }
+        catch {
+        }
+        if (`$process.HasExited -and `$process.ExitCode -ne 0) {
+            throw "Newsroom could not start on its configured endpoint. No process was killed and no alternate port was selected. Review the Newsroom runtime logs, resolve the reported owner or port conflict, then use Start Newsroom again."
+        }
+        Start-Sleep -Milliseconds 500
     }
-    catch {
-    }
-    if (`$process.HasExited -and `$process.ExitCode -ne 0) {
-        throw "Newsroom could not start on its configured endpoint. No process was killed and no alternate port was selected. Review the Newsroom runtime logs, resolve the reported owner or port conflict, then use Start Newsroom again."
-    }
-    Start-Sleep -Milliseconds 500
 }
 if (-not `$ready) {
     throw "Newsroom did not become available on its configured endpoint within the startup deadline. No alternate port was selected. Review the Newsroom runtime logs and retry."
