@@ -104,7 +104,10 @@ def _normalized_root(path: str | Path) -> str:
 def _read_json(path: Path) -> dict | None:
     try:
         raw = path.read_bytes()
-    except FileNotFoundError:
+    except (FileNotFoundError, PermissionError):
+        # On Windows, readers can briefly lose access while another process
+        # atomically replaces a runtime state file. Treat that transient state
+        # as unavailable so callers degrade safely instead of crashing.
         return None
     if len(raw) > _MAX_STATE_BYTES:
         return None
