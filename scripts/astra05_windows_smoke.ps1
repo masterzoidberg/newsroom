@@ -1,7 +1,7 @@
 [CmdletBinding()]
 param(
-    [string]$SourceRoot = (Join-Path $PSScriptRoot '..'),
-    [string]$OutputDirectory = (Join-Path $SourceRoot '.artifacts\astra05-windows'),
+    [string]$SourceRoot = '',
+    [string]$OutputDirectory = '',
     [string]$PythonExe = 'python',
     [ValidateSet('Hosted', 'PhysicalPrepare', 'PhysicalVerifyWake', 'PhysicalVerifySignIn', 'PhysicalCleanup')]
     [string]$LifecycleMode = 'Hosted',
@@ -14,7 +14,13 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+if ([string]::IsNullOrWhiteSpace($SourceRoot)) {
+    $SourceRoot = Join-Path $PSScriptRoot '..'
+}
 $SourceRoot = [IO.Path]::GetFullPath($SourceRoot)
+if ([string]::IsNullOrWhiteSpace($OutputDirectory)) {
+    $OutputDirectory = Join-Path $SourceRoot '.artifacts\astra05-windows'
+}
 $OutputDirectory = [IO.Path]::GetFullPath($OutputDirectory)
 $currentIdentity = [System.Security.Principal.WindowsIdentity]::GetCurrent()
 $CurrentUser = $currentIdentity.Name
@@ -59,6 +65,29 @@ function Assert-True([bool]$Condition, [string]$Message) {
     if (-not $Condition) {
         throw $Message
     }
+}
+
+function Read-JsonShared([string]$Path) {
+    $share = [System.IO.FileShare]::ReadWrite -bor [System.IO.FileShare]::Delete
+    $stream = [System.IO.File]::Open(
+        $Path,
+        [System.IO.FileMode]::Open,
+        [System.IO.FileAccess]::Read,
+        $share
+    )
+    try {
+        $reader = New-Object System.IO.StreamReader($stream, [System.Text.Encoding]::UTF8, $true)
+        try {
+            $text = $reader.ReadToEnd()
+        }
+        finally {
+            $reader.Dispose()
+        }
+    }
+    finally {
+        $stream.Dispose()
+    }
+    return $text | ConvertFrom-Json
 }
 
 function Resolve-AccountSid([string]$Account) {
@@ -136,7 +165,7 @@ function Get-RoleSnapshot([string]$Role) {
     }
 
     try {
-        $owner = Get-Content -LiteralPath $ownerPath -Raw | ConvertFrom-Json
+        $owner = Read-JsonShared $ownerPath
         $process = Get-Process -Id ([int]$owner.pid) -ErrorAction Stop
         if ($null -eq $process) {
             return [pscustomobject]@{ status = 'missing'; pid = $null }
@@ -144,7 +173,7 @@ function Get-RoleSnapshot([string]$Role) {
         if (-not (Test-Path -LiteralPath $heartbeatPath -PathType Leaf)) {
             return [pscustomobject]@{ status = 'stale'; pid = [int]$owner.pid }
         }
-        $heartbeat = Get-Content -LiteralPath $heartbeatPath -Raw | ConvertFrom-Json
+        $heartbeat = Read-JsonShared $heartbeatPath
         if ([int]$heartbeat.pid -ne [int]$owner.pid -or [string]$heartbeat.process_creation_token -ne [string]$owner.process_creation_token) {
             return [pscustomobject]@{ status = 'stale'; pid = [int]$owner.pid }
         }
@@ -200,7 +229,8 @@ function Wait-Healthy([int]$TimeoutSeconds = 30) {
         }
         Start-Sleep -Milliseconds 500
     } while ([DateTime]::UtcNow -lt $deadline)
-    throw 'Managed runtime did not reach four healthy roles within the smoke-test deadline.'
+    $snapshotJson = $snapshot | ConvertTo-Json -Depth 4 -Compress
+    throw "Managed runtime did not reach four healthy roles within the smoke-test deadline. Snapshot=$snapshotJson"
 }
 
 function Request-SupervisorStop {
@@ -419,7 +449,7 @@ function Invoke-PhysicalPrepare {
     Write-Host "AST-05 physical qualification prepared at: $tempRoot"
     Write-Host 'The isolated Start Newsroom shortcut was opened. Confirm the product opened, then close the browser.'
     Write-Host 'Lock or sleep Windows, return to the same user session, then run:'
-    Write-Host "powershell.exe -NoProfile -ExecutionPolicy Bypass -File `"$PSCommandPath`" -LifecycleMode PhysicalVerifyWake -PhysicalRoot `"$tempRoot`" -ConfirmBrowserOpened -ConfirmLockWake"
+    Write-Host "powershell.exe -NoProfile -ExecutionPolicy Bypass -File `"$PSCommandPath`" -SourceRoot `"$SourceRoot`" -OutputDirectory `"$OutputDirectory`" -LifecycleMode PhysicalVerifyWake -PhysicalRoot `"$tempRoot`" -ConfirmBrowserOpened -ConfirmLockWake"
 }
 
 function Invoke-PhysicalVerifyWake {
@@ -451,8 +481,8 @@ function Invoke-PhysicalVerifyWake {
     Write-Host 'AST-05 physical lock/wake checkpoint PASS.'
     Write-Host 'Now reboot Windows or sign out and back in. Do not manually start Newsroom after sign-in.'
     Write-Host 'After the same user session is ready, run one of:'
-    Write-Host "powershell.exe -NoProfile -ExecutionPolicy Bypass -File `"$PSCommandPath`" -LifecycleMode PhysicalVerifySignIn -PhysicalRoot `"$tempRoot`" -ConfirmSignIn -SignInMethod Reboot"
-    Write-Host "powershell.exe -NoProfile -ExecutionPolicy Bypass -File `"$PSCommandPath`" -LifecycleMode PhysicalVerifySignIn -PhysicalRoot `"$tempRoot`" -ConfirmSignIn -SignInMethod SignOut"
+    Write-Host "powershell.exe -NoProfile -ExecutionPolicy Bypass -File `"$PSCommandPath`" -SourceRoot `"$SourceRoot`" -OutputDirectory `"$OutputDirectory`" -LifecycleMode PhysicalVerifySignIn -PhysicalRoot `"$tempRoot`" -ConfirmSignIn -SignInMethod Reboot"
+    Write-Host "powershell.exe -NoProfile -ExecutionPolicy Bypass -File `"$PSCommandPath`" -SourceRoot `"$SourceRoot`" -OutputDirectory `"$OutputDirectory`" -LifecycleMode PhysicalVerifySignIn -PhysicalRoot `"$tempRoot`" -ConfirmSignIn -SignInMethod SignOut"
 }
 
 function Invoke-PhysicalVerifySignIn {
@@ -522,7 +552,7 @@ function Invoke-PhysicalVerifySignIn {
 
     Write-Host "AST-05 physical lifecycle qualification PASS. Evidence: $physicalEvidencePath"
     Write-Host 'Cleanup is explicit so evidence remains available. Run:'
-    Write-Host "powershell.exe -NoProfile -ExecutionPolicy Bypass -File `"$PSCommandPath`" -LifecycleMode PhysicalCleanup -PhysicalRoot `"$tempRoot`""
+    Write-Host "powershell.exe -NoProfile -ExecutionPolicy Bypass -File `"$PSCommandPath`" -SourceRoot `"$SourceRoot`" -OutputDirectory `"$OutputDirectory`" -LifecycleMode PhysicalCleanup -PhysicalRoot `"$tempRoot`""
 }
 
 function Invoke-PhysicalCleanup {
