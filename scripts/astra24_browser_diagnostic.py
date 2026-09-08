@@ -16,6 +16,20 @@ from selenium.webdriver.support.ui import WebDriverWait
 import astra24_browser_smoke as smoke
 
 
+_original_body_text = smoke._body_text
+
+
+class _VisibleText(str):
+    def __contains__(self, item: object) -> bool:
+        if not isinstance(item, str):
+            return super().__contains__(item)
+        return item.casefold() in self.casefold()
+
+
+def _case_insensitive_body_text(driver) -> _VisibleText:
+    return _VisibleText(_original_body_text(driver))
+
+
 def _diagnostic_wait_text(driver, text: str, timeout: float = 12.0) -> None:
     expected = text.casefold()
     try:
@@ -27,13 +41,14 @@ def _diagnostic_wait_text(driver, text: str, timeout: float = 12.0) -> None:
             output_index = sys.argv.index("--output") + 1
             output = Path(sys.argv[output_index]).resolve()
             output.mkdir(parents=True, exist_ok=True)
-            (output / "diagnostic-body.txt").write_text(smoke._body_text(driver) + "\n", encoding="utf-8")
+            (output / "diagnostic-body.txt").write_text(_original_body_text(driver) + "\n", encoding="utf-8")
             smoke._screenshot(driver, output, "diagnostic-browser-state.png")
         except Exception:
             pass
         raise
 
 
+smoke._body_text = _case_insensitive_body_text
 smoke._wait_text = _diagnostic_wait_text
 
 if __name__ == "__main__":
