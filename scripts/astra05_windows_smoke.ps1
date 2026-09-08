@@ -250,6 +250,41 @@ function Remove-TaskIfPresent([string]$Name) {
     }
 }
 
+function Build-PhysicalFrontendArtifact {
+    $git = Get-Command 'git.exe' -ErrorAction SilentlyContinue
+    if ($null -eq $git -or [string]::IsNullOrWhiteSpace($git.Source)) {
+        throw 'Physical AST-05 qualification requires Git so the isolated source checkout can be verified clean before building.'
+    }
+    $dirty = @(& $git.Source -C $SourceRoot status --porcelain --untracked-files=all)
+    if ($LASTEXITCODE -ne 0) {
+        throw 'Physical AST-05 qualification could not verify the isolated source checkout with Git.'
+    }
+    if ($dirty.Count -ne 0) {
+        throw "Physical AST-05 qualification requires a clean isolated source checkout. Dirty entries: $($dirty -join '; ')"
+    }
+
+    $npm = Get-Command 'npm.cmd' -ErrorAction SilentlyContinue
+    if ($null -eq $npm -or [string]::IsNullOrWhiteSpace($npm.Source)) {
+        throw 'Physical AST-05 qualification requires Node/npm to build the current ignored frontend/dist artifact in the isolated checkout.'
+    }
+    $frontendRoot = Join-Path $SourceRoot 'frontend'
+    Push-Location $frontendRoot
+    try {
+        & $npm.Source ci
+        if ($LASTEXITCODE -ne 0) {
+            throw "Physical AST-05 npm ci failed with exit code $LASTEXITCODE"
+        }
+        & $npm.Source run build
+        if ($LASTEXITCODE -ne 0) {
+            throw "Physical AST-05 npm run build failed with exit code $LASTEXITCODE"
+        }
+    }
+    finally {
+        Pop-Location
+    }
+    Assert-True (Test-Path -LiteralPath (Join-Path $frontendRoot 'dist\index.html') -PathType Leaf) 'Physical AST-05 frontend build did not produce dist/index.html.'
+}
+
 function Read-PhysicalState {
     $statePath = Join-Path $tempRoot 'physical-state.json'
     if (-not (Test-Path -LiteralPath $statePath -PathType Leaf)) {
@@ -300,6 +335,7 @@ function Invoke-PhysicalPrepare {
         throw "Physical qualification refuses to alter legacy Newsroom task name(s): $($preexisting -join ', '). Review the real installation separately before qualification."
     }
 
+    Build-PhysicalFrontendArtifact
     New-Item -ItemType Directory -Path $tempRoot, $OutputDirectory -Force | Out-Null
     $script:Port = Get-FreeLoopbackPort
     $deploy = Join-Path $SourceRoot 'scripts\phase16_windows_deploy.ps1'
