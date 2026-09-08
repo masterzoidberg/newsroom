@@ -3,6 +3,7 @@ from __future__ import annotations
 import sqlite3
 import json
 from concurrent.futures import ThreadPoolExecutor
+from uuid import uuid4
 
 import pytest
 from fastapi.testclient import TestClient
@@ -14,6 +15,7 @@ from newsroom.config import RuntimeConfig
 from newsroom.domain import CoreService, DomainConflict, DomainNotFound, DomainValidation
 from newsroom.evidence_promotion import ArticleAnalysisPromotionService
 from newsroom.integrity import check_database
+import newsroom.intelligent_monitoring as intelligent_monitoring
 from newsroom.intelligent_monitoring import WatchMaintenanceService, WatchService
 from newsroom.jobs import BudgetService, SchedulerService
 from newsroom import migrations
@@ -58,6 +60,275 @@ def _watch(watches, topic, policy, name="UAP disclosure"):
             "policy_id": policy["id"],
         }
     )
+
+
+def _paused_setup_payload(**overrides):
+    payload = {
+        "request_id": str(uuid4()),
+        "interest": "unidentified aerial phenomena and official reporting",
+        "name": "Aerial phenomena",
+        "primary_terms": ["UAP", "official reporting"],
+    }
+    payload.update(overrides)
+    return payload
+
+
+def test_paused_watch_setup_composes_exact_local_draft_without_monitors_or_jobs(tmp_db):
+    apply_migrations(tmp_db)
+    watches = WatchService(tmp_db)
+
+    result = watches.create_paused_setup(_paused_setup_payload())
+
+    assert result["draft_type"] == "paused_watch"
+    assert result["version"] == 1
+    assert result["resumed"] is False
+    assert result["status"] == "paused"
+    assert result["target_type"] == "topic"
+    assert result["discovery_enabled"] is False
+    assert result["priority"] == "normal"
+    assert result["next_action"] == "add_sources"
+    assert result["watch_id"] == result["watch"]["id"]
+    assert result["topic_id"] == result["topic"]["id"]
+    assert result["policy_id"] == result["policy"]["id"]
+    assert result["category_id"] == result["topic"]["category_id"]
+    assert result["interest"] == "unidentified aerial phenomena and official reporting"
+    assert result["primary_terms"] == ["UAP", "official reporting"]
+    assert [term["term"] for term in result["topic_terms"]] == result["primary_terms"]
+    assert result["policy"]["base_cadence_seconds"] == 3600
+    assert result["policy"]["paid_budget_usd"] == 0.0
+    assert result["policy"]["escalation_rules"] == {}
+    assert result["policy"]["query_budget"] == 12
+    assert result["policy"]["local_model_budget"] == 100
+    assert result["policy"]["watch_scope"] == "private"
+
+    conn = storage.connect(tmp_db)
+    try:
+        assert conn.execute("SELECT COUNT(*) FROM monitors").fetchone()[0] == 0
+        assert conn.execute("SELECT COUNT(*) FROM jobs").fetchone()[0] == 0
+        assert conn.execute("SELECT COUNT(*) FROM watch_vocabulary").fetchone()[0] == 0
+        assert conn.execute("SELECT COUNT(*) FROM watches").fetchone()[0] == 1
+        assert conn.execute("SELECT COUNT(*) FROM topics").fetchone()[0] == 1
+        assert conn.execute("SELECT COUNT(*) FROM topic_terms").fetchone()[0] == 2
+        assert conn.execute("SELECT COUNT(*) FROM monitoring_policies").fetchone()[0] == 1
+        assert conn.execute("SELECT COUNT(*) FROM categories").fetchone()[0] == 1
+        assert conn.execute(
+            "SELECT COUNT(*) FROM watches WHERE policy_id = ?", (result["policy_id"],)
+        ).fetchone()[0] == 1
+    finally:
+        conn.close()
+
+
+def test_paused_watch_setup_reuses_category_and_identical_retry_returns_same_ids(tmp_db):
+    apply_migrations(tmp_db)
+    watches = WatchService(tmp_db)
+    payload = _paused_setup_payload()
+
+    first = watches.create_paused_setup(payload)
+    second = watches.create_paused_setup(payload)
+
+    assert second["resumed"] is True
+    assert second["category_id"] == first["category_id"]
+    assert second["topic_id"] == first["topic_id"]
+    assert second["policy_id"] == first["policy_id"]
+    assert second["watch_id"] == first["watch_id"]
+    assert second["primary_terms"] == first["primary_terms"]
+
+    fresh = watches.create_paused_setup(
+        _paused_setup_payload(
+            request_id=str(uuid4()),
+            interest="civil aviation safety",
+            name="Aviation safety",
+            primary_terms=["civil aviation safety"],
+        )
+    )
+    assert fresh["category_id"] == first["category_id"]
+    assert fresh["topic_id"] != first["topic_id"]
+    assert fresh["policy_id"] != first["policy_id"]
+    assert fresh["watch_id"] != first["watch_id"]
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        {"name": "Different name"},
+        {"interest": "different interest"},
+        {"primary_terms": ["different term"]},
+    ],
+)
+def test_paused_watch_setup_changed_material_retry_conflicts(tmp_db, change):
+    apply_migrations(tmp_db)
+    watches = WatchService(tmp_db)
+    payload = _paused_setup_payload()
+    watches.create_paused_setup(payload)
+
+    with pytest.raises(DomainConflict):
+        watches.create_paused_setup({**payload, **change})
+
+
+def test_paused_watch_setup_concurrent_identical_retries_converge(tmp_db):
+    apply_migrations(tmp_db)
+    watches = WatchService(tmp_db)
+    payload = _paused_setup_payload()
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        results = list(pool.map(lambda _item: watches.create_paused_setup(payload), range(2)))
+
+    assert len({result["watch_id"] for result in results}) == 1
+    assert len({result["topic_id"] for result in results}) == 1
+    assert len({result["policy_id"] for result in results}) == 1
+    assert {result["resumed"] for result in results} == {False, True}
+    conn = storage.connect(tmp_db)
+    try:
+        assert conn.execute("SELECT COUNT(*) FROM categories").fetchone()[0] == 1
+        assert conn.execute("SELECT COUNT(*) FROM topics").fetchone()[0] == 1
+        assert conn.execute("SELECT COUNT(*) FROM topic_terms").fetchone()[0] == 2
+        assert conn.execute("SELECT COUNT(*) FROM monitoring_policies").fetchone()[0] == 1
+        assert conn.execute("SELECT COUNT(*) FROM watches").fetchone()[0] == 1
+    finally:
+        conn.close()
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"interest": "   "},
+        {"interest": "x" * 2001},
+        {"primary_terms": []},
+        {"primary_terms": ["x" * 301]},
+        {"request_id": "not-a-uuid"},
+    ],
+)
+def test_paused_watch_setup_rejects_unbounded_or_empty_input(tmp_db, payload):
+    apply_migrations(tmp_db)
+    watches = WatchService(tmp_db)
+
+    with pytest.raises(DomainValidation):
+        watches.create_paused_setup({**_paused_setup_payload(), **payload})
+
+
+def test_paused_watch_setup_deduplicates_normalized_terms_preserving_first_value(tmp_db):
+    apply_migrations(tmp_db)
+    watches = WatchService(tmp_db)
+
+    result = watches.create_paused_setup(
+        _paused_setup_payload(primary_terms=[" UAP ", "uap", "Official reporting"])
+    )
+
+    assert result["primary_terms"] == ["UAP", "Official reporting"]
+    assert [term["term"] for term in result["topic_terms"]] == [
+        "UAP",
+        "Official reporting",
+    ]
+
+
+def test_paused_watch_setup_rolls_back_all_new_rows_on_mid_transaction_failure(tmp_db, monkeypatch):
+    apply_migrations(tmp_db)
+    core = CoreService(tmp_db)
+    unrelated_category = core.create_category({"slug": "existing", "name": "Existing"})
+    unrelated_topic = core.create_topic(
+        {
+            "category_id": unrelated_category["id"],
+            "slug": "existing-topic",
+            "name": "Existing topic",
+        }
+    )
+    watches = WatchService(tmp_db)
+    original_new_id = intelligent_monitoring.new_id
+
+    def fail_policy_id(prefix):
+        if prefix == "pol":
+            raise RuntimeError("injected setup failure")
+        return original_new_id(prefix)
+
+    monkeypatch.setattr(intelligent_monitoring, "new_id", fail_policy_id)
+    with pytest.raises(RuntimeError, match="injected setup failure"):
+        watches.create_paused_setup(_paused_setup_payload())
+
+    conn = storage.connect(tmp_db)
+    try:
+        assert conn.execute("SELECT COUNT(*) FROM categories").fetchone()[0] == 1
+        assert conn.execute("SELECT COUNT(*) FROM topics").fetchone()[0] == 1
+        assert conn.execute("SELECT COUNT(*) FROM topic_terms").fetchone()[0] == 0
+        assert conn.execute("SELECT COUNT(*) FROM monitoring_policies").fetchone()[0] == 0
+        assert conn.execute("SELECT COUNT(*) FROM watches").fetchone()[0] == 0
+        assert conn.execute("SELECT id FROM categories").fetchone()[0] == unrelated_category["id"]
+        assert conn.execute("SELECT id FROM topics").fetchone()[0] == unrelated_topic["id"]
+    finally:
+        conn.close()
+
+
+def test_paused_watch_setup_api_requires_auth_and_csrf_and_returns_typed_draft(tmp_path):
+    config = RuntimeConfig.for_environment("dev", root=tmp_path / "dev")
+    app = create_app(config=config, frontend_dist=tmp_path / "missing-dist")
+    payload = _paused_setup_payload()
+
+    with TestClient(app) as client:
+        assert client.post("/api/v1/watches/setup", json=payload).status_code == 401
+        assert client.post(
+            "/api/v1/auth/setup",
+            json={"username": "admin", "password": "a-long-test-password-12345"},
+        ).status_code == 201
+        assert client.post(
+            "/api/v1/auth/login",
+            json={"username": "admin", "password": "a-long-test-password-12345"},
+        ).status_code == 200
+        assert client.post("/api/v1/watches/setup", json=payload).status_code == 403
+
+        csrf = {"X-CSRF-Token": client.cookies.get("newsroom_csrf")}
+        created = client.post("/api/v1/watches/setup", json=payload, headers=csrf)
+        assert created.status_code == 201
+        body = created.json()
+        assert body["draft_type"] == "paused_watch"
+        assert body["status"] == "paused"
+        assert body["watch_id"]
+        assert body["topic_id"]
+        assert body["policy_id"]
+        assert body["category_id"]
+        assert body["primary_terms"] == ["UAP", "official reporting"]
+
+        retry = client.post("/api/v1/watches/setup", json=payload, headers=csrf)
+        assert retry.status_code == 200
+        assert retry.json()["resumed"] is True
+        assert retry.json()["watch_id"] == body["watch_id"]
+
+        conflict = client.post(
+            "/api/v1/watches/setup",
+            json={**payload, "name": "Changed name"},
+            headers=csrf,
+        )
+        assert conflict.status_code == 409
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        {"interest": "   "},
+        {"interest": "x" * 2001},
+        {"primary_terms": []},
+        {"primary_terms": ["x" * 301]},
+    ],
+)
+def test_paused_watch_setup_api_rejects_invalid_input(tmp_path, change):
+    config = RuntimeConfig.for_environment("dev", root=tmp_path / "dev")
+    app = create_app(config=config, frontend_dist=tmp_path / "missing-dist")
+    with TestClient(app) as client:
+        assert client.post(
+            "/api/v1/auth/setup",
+            json={"username": "admin", "password": "a-long-test-password-12345"},
+        ).status_code == 201
+        assert client.post(
+            "/api/v1/auth/login",
+            json={"username": "admin", "password": "a-long-test-password-12345"},
+        ).status_code == 200
+        csrf = {"X-CSRF-Token": client.cookies.get("newsroom_csrf")}
+
+        response = client.post(
+            "/api/v1/watches/setup",
+            json={**_paused_setup_payload(), **change},
+            headers=csrf,
+        )
+
+        assert response.status_code == 422
 
 
 def test_watch_lifecycle_vocabulary_review_and_source_approval(tmp_db):

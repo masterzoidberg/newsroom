@@ -19,6 +19,7 @@ from __future__ import annotations
 import ipaddress
 import json
 import sqlite3
+import uuid
 from pathlib import Path
 from typing import Any, Callable, Mapping, Sequence
 from urllib.parse import urlparse
@@ -89,6 +90,16 @@ MAX_CANDIDATES_PER_RUN = 25
 MAX_QUERY_VARIANTS = 12
 MAX_ACTIVE_QUERY_TERMS = 100
 MAX_PAGE_SIZE = 100
+MAX_SETUP_INTEREST_LENGTH = 2_000
+
+WATCH_SETUP_CATEGORY_SLUG = "watch-setup"
+WATCH_SETUP_CATEGORY_NAME = "Watch setup"
+WATCH_SETUP_POLICY_NAME = "Watch setup"
+WATCH_SETUP_BASE_CADENCE_SECONDS = 3_600
+WATCH_SETUP_MIN_CADENCE_SECONDS = 900
+WATCH_SETUP_MAX_CADENCE_SECONDS = 86_400
+WATCH_SETUP_QUERY_BUDGET = MAX_QUERY_VARIANTS
+WATCH_SETUP_LOCAL_MODEL_BUDGET = 100
 
 # A Watch target of 'source' is pure acquisition: 'source' is not a valid
 # monitor information-need type, so such a Watch produces acquisition-only
@@ -233,6 +244,340 @@ class WatchService:
         finally:
             conn.close()
         return self.get(identifier)
+
+    @staticmethod
+    def _validated_paused_setup(data: Mapping[str, Any]) -> tuple[str, str, str, list[str]]:
+        request_id = data.get("request_id")
+        if not isinstance(request_id, str) or not request_id.strip():
+            raise DomainValidation("request_id must be a UUID")
+        try:
+            canonical_request_id = str(uuid.UUID(request_id.strip()))
+        except (ValueError, AttributeError) as exc:
+            raise DomainValidation("request_id must be a UUID") from exc
+
+        interest = data.get("interest")
+        if not isinstance(interest, str):
+            raise DomainValidation("interest must be a string")
+        interest = interest.strip()
+        if not interest or len(interest) > MAX_SETUP_INTEREST_LENGTH:
+            raise DomainValidation(
+                f"interest must be between 1 and {MAX_SETUP_INTEREST_LENGTH} characters"
+            )
+
+        name = data.get("name")
+        if not isinstance(name, str):
+            raise DomainValidation("watch name must be a string")
+        name = name.strip()
+        if not name or len(name) > 200:
+            raise DomainValidation("watch name must be between 1 and 200 characters")
+
+        raw_terms = data.get("primary_terms")
+        if not isinstance(raw_terms, Sequence) or isinstance(raw_terms, (str, bytes)):
+            raise DomainValidation("primary_terms must be an array")
+        if not raw_terms or len(raw_terms) > MAX_ACTIVE_QUERY_TERMS:
+            raise DomainValidation(
+                f"primary_terms must contain between 1 and {MAX_ACTIVE_QUERY_TERMS} terms"
+            )
+        terms: list[str] = []
+        seen: set[str] = set()
+        for raw_term in raw_terms:
+            if not isinstance(raw_term, str):
+                raise DomainValidation("primary_terms must contain strings")
+            term = raw_term.strip()
+            if not term or len(term) > MAX_TERM_LENGTH:
+                raise DomainValidation(
+                    f"each primary term must be between 1 and {MAX_TERM_LENGTH} characters"
+                )
+            identity = normalized_text(term)
+            if identity in seen:
+                continue
+            seen.add(identity)
+            terms.append(term)
+        if not terms:
+            raise DomainValidation("at least one primary term is required")
+        return canonical_request_id, interest, name, terms
+
+    @staticmethod
+    def _setup_topic_slug(request_id: str) -> str:
+        return f"watch-{request_id.replace('-', '')}"
+
+    @staticmethod
+    def _decoded_setup_policy(row: sqlite3.Row) -> dict[str, Any]:
+        policy = _row(row)
+        for field in ("allowed_channels", "escalation_rules", "backoff_rules", "retirement_criteria"):
+            default: Any = [] if field == "allowed_channels" else {}
+            policy[field] = json.loads(policy[field]) if policy[field] is not None else default
+        policy["watch_scope"] = "private"
+        return policy
+
+    @classmethod
+    def _setup_response(
+        cls,
+        conn: sqlite3.Connection,
+        *,
+        request_id: str,
+        category: sqlite3.Row,
+        topic: sqlite3.Row,
+        terms: Sequence[sqlite3.Row],
+        policy: sqlite3.Row,
+        watch: sqlite3.Row,
+        resumed: bool,
+    ) -> dict[str, Any]:
+        term_payload = [_row(term) for term in terms]
+        policy_payload = cls._decoded_setup_policy(policy)
+        monitor_count = conn.execute(
+            "SELECT COUNT(*) FROM watch_sources WHERE watch_id = ?", (watch["id"],)
+        ).fetchone()[0]
+        job_count = conn.execute(
+            """
+            SELECT COUNT(*) FROM jobs
+            WHERE monitor_id IN (
+                SELECT monitor_id FROM watch_sources WHERE watch_id = ?
+            )
+            """,
+            (watch["id"],),
+        ).fetchone()[0]
+        watch_payload = _row(watch)
+        topic_payload = _row(topic)
+        category_payload = _row(category)
+        return {
+            "draft_type": "paused_watch",
+            "version": 1,
+            "resumed": resumed,
+            "request_id": request_id,
+            "category_id": category["id"],
+            "topic_id": topic["id"],
+            "policy_id": policy["id"],
+            "watch_id": watch["id"],
+            "name": watch["name"],
+            "interest": topic["description"],
+            "primary_terms": [term["term"] for term in terms],
+            "status": watch["status"],
+            "target_type": watch["target_type"],
+            "discovery_enabled": bool(watch["discovery_enabled"]),
+            "priority": watch["priority"],
+            "next_action": "add_sources",
+            "paid_budget_usd": float(policy["paid_budget_usd"] or 0.0),
+            "paid_escalation_enabled": False,
+            "monitor_count": int(monitor_count),
+            "job_count": int(job_count),
+            "category": category_payload,
+            "topic": topic_payload,
+            "topic_terms": term_payload,
+            "policy": policy_payload,
+            "watch": watch_payload,
+        }
+
+    @classmethod
+    def _existing_paused_setup(
+        cls,
+        conn: sqlite3.Connection,
+        *,
+        request_id: str,
+        interest: str,
+        name: str,
+        terms: Sequence[str],
+    ) -> dict[str, Any] | None:
+        watch = conn.execute("SELECT * FROM watches WHERE id = ?", (request_id,)).fetchone()
+        if watch is None:
+            return None
+        if (
+            watch["target_type"] != "topic"
+            or watch["status"] != "paused"
+            or watch["priority"] != "normal"
+            or watch["discovery_enabled"] != 0
+            or watch["name"] != name
+        ):
+            raise DomainConflict("request identity is already used by another Watch")
+        topic = conn.execute("SELECT * FROM topics WHERE id = ?", (watch["target_id"],)).fetchone()
+        if topic is None or topic["deleted_at"] is not None or topic["category_id"] is None:
+            raise DomainConflict("request identity is already used by another Watch")
+        category = conn.execute("SELECT * FROM categories WHERE id = ?", (topic["category_id"],)).fetchone()
+        if (
+            category is None
+            or category["deleted_at"] is not None
+            or category["slug"] != WATCH_SETUP_CATEGORY_SLUG
+        ):
+            raise DomainConflict("request identity is already used by another Watch")
+        if (
+            topic["name"] != name
+            or topic["description"] != interest
+            or topic["slug"] != cls._setup_topic_slug(request_id)
+        ):
+            raise DomainConflict("request identity is already used by another Watch")
+        term_rows = conn.execute(
+            "SELECT * FROM topic_terms WHERE topic_id = ? ORDER BY rowid", (topic["id"],)
+        ).fetchall()
+        if len(term_rows) != len(terms) or any(
+            row["term_type"] != "include"
+            or row["concept_kind"] != "term"
+            or row["term_normalized"] != normalized_text(term)
+            for row, term in zip(term_rows, terms)
+        ):
+            raise DomainConflict("request identity is already used by another Watch")
+        policy = conn.execute(
+            "SELECT * FROM monitoring_policies WHERE id = ?", (watch["policy_id"],)
+        ).fetchone()
+        if policy is None:
+            raise DomainConflict("request identity is already used by another Watch")
+        expected_channels = ["rss", "atom", "direct_http", "page"]
+        if (
+            policy["name"] != WATCH_SETUP_POLICY_NAME
+            or json.loads(policy["allowed_channels"] or "[]") != expected_channels
+            or policy["base_cadence_seconds"] != WATCH_SETUP_BASE_CADENCE_SECONDS
+            or policy["min_cadence_seconds"] != WATCH_SETUP_MIN_CADENCE_SECONDS
+            or policy["max_cadence_seconds"] != WATCH_SETUP_MAX_CADENCE_SECONDS
+            or policy["priority"] != "normal"
+            or policy["query_budget"] != WATCH_SETUP_QUERY_BUDGET
+            or float(policy["paid_budget_usd"] or 0.0) != 0.0
+            or policy["local_model_budget"] != WATCH_SETUP_LOCAL_MODEL_BUDGET
+            or json.loads(policy["escalation_rules"] or "{}") != {}
+            or json.loads(policy["backoff_rules"] or "{}") != {}
+            or json.loads(policy["retirement_criteria"] or "{}") != {}
+        ):
+            raise DomainConflict("request identity is already used by another Watch")
+        return cls._setup_response(
+            conn,
+            request_id=request_id,
+            category=category,
+            topic=topic,
+            terms=term_rows,
+            policy=policy,
+            watch=watch,
+            resumed=True,
+        )
+
+    def create_paused_setup(self, data: Mapping[str, Any]) -> dict[str, Any]:
+        """Atomically create or resume the bounded first-run Watch draft."""
+        request_id, interest, name, terms = self._validated_paused_setup(data)
+        now = utc_now()
+        conn = storage.connect(self.db_path)
+        try:
+            with storage.write_tx(conn):
+                existing = self._existing_paused_setup(
+                    conn,
+                    request_id=request_id,
+                    interest=interest,
+                    name=name,
+                    terms=terms,
+                )
+                if existing is not None:
+                    return existing
+
+                category = conn.execute(
+                    "SELECT * FROM categories WHERE slug = ?", (WATCH_SETUP_CATEGORY_SLUG,)
+                ).fetchone()
+                if category is None:
+                    category_id = new_id("cat")
+                    conn.execute(
+                        """
+                        INSERT INTO categories(
+                            id, slug, name, description, display_order, enabled, priority,
+                            max_stories_per_run, created_at, updated_at
+                        ) VALUES (?, ?, ?, ?, 0, 1, 'normal', NULL, ?, ?)
+                        """,
+                        (
+                            category_id,
+                            WATCH_SETUP_CATEGORY_SLUG,
+                            WATCH_SETUP_CATEGORY_NAME,
+                            "Neutral category for Watch setup drafts",
+                            now,
+                            now,
+                        ),
+                    )
+                    category = conn.execute(
+                        "SELECT * FROM categories WHERE id = ?", (category_id,)
+                    ).fetchone()
+                elif category["deleted_at"] is not None:
+                    raise DomainConflict("dedicated Watch setup category is deleted")
+
+                topic_id = new_id("top")
+                conn.execute(
+                    """
+                    INSERT INTO topics(
+                        id, category_id, slug, name, description, enabled, priority,
+                        max_queries_per_run, max_stories_per_run, created_at, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, 1, 'normal', NULL, NULL, ?, ?)
+                    """,
+                    (
+                        topic_id,
+                        category["id"],
+                        self._setup_topic_slug(request_id),
+                        name,
+                        interest,
+                        now,
+                        now,
+                    ),
+                )
+                for term in terms:
+                    conn.execute(
+                        """
+                        INSERT INTO topic_terms(
+                            id, topic_id, term, term_normalized, term_type, weight,
+                            created_at, concept_kind
+                        ) VALUES (?, ?, ?, ?, 'include', 1.0, ?, 'term')
+                        """,
+                        (new_id("term"), topic_id, term, normalized_text(term), now),
+                    )
+
+                policy_id = new_id("pol")
+                allowed_channels = ["rss", "atom", "direct_http", "page"]
+                conn.execute(
+                    """
+                    INSERT INTO monitoring_policies(
+                        id, name, allowed_channels, base_cadence_seconds,
+                        min_cadence_seconds, max_cadence_seconds, priority, query_budget,
+                        paid_budget_usd, local_model_budget, escalation_rules, backoff_rules,
+                        retirement_criteria, created_at, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, 'normal', ?, 0.0, ?, '{}', '{}', '{}', ?, ?)
+                    """,
+                    (
+                        policy_id,
+                        WATCH_SETUP_POLICY_NAME,
+                        json.dumps(allowed_channels, separators=(",", ":")),
+                        WATCH_SETUP_BASE_CADENCE_SECONDS,
+                        WATCH_SETUP_MIN_CADENCE_SECONDS,
+                        WATCH_SETUP_MAX_CADENCE_SECONDS,
+                        WATCH_SETUP_QUERY_BUDGET,
+                        WATCH_SETUP_LOCAL_MODEL_BUDGET,
+                        now,
+                        now,
+                    ),
+                )
+                conn.execute(
+                    """
+                    INSERT INTO watches(
+                        id, name, target_type, target_id, policy_id, status, priority,
+                        discovery_enabled, created_at, updated_at
+                    ) VALUES (?, ?, 'topic', ?, ?, 'paused', 'normal', 0, ?, ?)
+                    """,
+                    (request_id, name, topic_id, policy_id, now, now),
+                )
+                watch = conn.execute("SELECT * FROM watches WHERE id = ?", (request_id,)).fetchone()
+                topic = conn.execute("SELECT * FROM topics WHERE id = ?", (topic_id,)).fetchone()
+                category = conn.execute(
+                    "SELECT * FROM categories WHERE id = ?", (category["id"],)
+                ).fetchone()
+                term_rows = conn.execute(
+                    "SELECT * FROM topic_terms WHERE topic_id = ? ORDER BY rowid", (topic_id,)
+                ).fetchall()
+                policy = conn.execute(
+                    "SELECT * FROM monitoring_policies WHERE id = ?", (policy_id,)
+                ).fetchone()
+                return self._setup_response(
+                    conn,
+                    request_id=request_id,
+                    category=category,
+                    topic=topic,
+                    terms=term_rows,
+                    policy=policy,
+                    watch=watch,
+                    resumed=False,
+                )
+        except sqlite3.IntegrityError as exc:
+            raise DomainConflict("paused Watch setup already exists") from exc
+        finally:
+            conn.close()
 
     def get(self, watch_id: str) -> dict[str, Any]:
         conn = storage.connect(self.db_path)
