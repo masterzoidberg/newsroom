@@ -49,3 +49,21 @@ def test_physical_lifecycle_qualification_is_explicit_and_isolated() -> None:
     assert "Remove-TaskIfPresent $taskName" in cleanup
     assert "Request-SupervisorStop" in cleanup
     assert "Stop-Process" not in cleanup
+
+
+def test_physical_smoke_defaults_are_windows_powershell_safe_and_reads_do_not_block_replace() -> None:
+    smoke = SMOKE.read_text(encoding="utf-8")
+    param_block = smoke[: smoke.index(")\n\n$ErrorActionPreference")]
+
+    assert "[string]$SourceRoot = ''" in param_block
+    assert "[string]$OutputDirectory = ''" in param_block
+    assert "$PSScriptRoot" not in param_block
+    assert "if ([string]::IsNullOrWhiteSpace($SourceRoot))" in smoke
+    assert "$SourceRoot = Join-Path $PSScriptRoot '..'" in smoke
+    assert "function Read-JsonShared" in smoke
+    assert "[System.IO.FileShare]::Delete" in smoke
+
+    snapshot = smoke[smoke.index("function Get-RoleSnapshot"): smoke.index("function Get-ManagedSnapshot")]
+    assert "$owner = Read-JsonShared $ownerPath" in snapshot
+    assert "$heartbeat = Read-JsonShared $heartbeatPath" in snapshot
+    assert "Snapshot=$snapshotJson" in smoke
