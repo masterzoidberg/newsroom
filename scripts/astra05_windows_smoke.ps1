@@ -330,6 +330,7 @@ try {
     Request-SupervisorStop
     Wait-Stopped
     $listener = New-Object System.Net.Sockets.TcpListener([System.Net.IPAddress]::Loopback, $Port)
+    $listener.Server.ExclusiveAddressUse = $true
     $listener.Start()
     $foreignAttempt = Invoke-StartLauncher $launcherPath
     Assert-True ($foreignAttempt.ExitCode -ne 0) 'Launcher unexpectedly succeeded while a foreign listener owned the configured port.'
