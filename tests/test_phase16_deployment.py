@@ -35,6 +35,17 @@ def test_windows_install_uses_one_namespaced_sign_in_authority():
     assert "Register-ProcessTask" not in script
 
 
+def test_start_launcher_reuses_verified_runtime_before_spawning_supervisor():
+    script = SCRIPT.read_text(encoding="utf-8")
+
+    identity_probe = "`$identity = Invoke-RestMethod -Uri `$identityUri -Method Get -TimeoutSec 1"
+    supervisor_spawn = "`$process = [System.Diagnostics.Process]::Start(`$startInfo)"
+
+    assert script.count(identity_probe) >= 2
+    assert script.index(identity_probe) < script.index(supervisor_spawn)
+    assert "if (-not `$ready) {" in script
+
+
 def test_windows_install_requires_explicit_reviewed_legacy_task_migration_before_writes():
     script = SCRIPT.read_text(encoding="utf-8")
 
