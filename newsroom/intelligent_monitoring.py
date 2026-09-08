@@ -94,6 +94,7 @@ MAX_SETUP_INTEREST_LENGTH = 2_000
 
 WATCH_SETUP_CATEGORY_SLUG = "watch-setup"
 WATCH_SETUP_CATEGORY_NAME = "Watch setup"
+WATCH_SETUP_CATEGORY_DESCRIPTION = "Neutral category for Watch setup drafts"
 WATCH_SETUP_POLICY_NAME = "Watch setup"
 WATCH_SETUP_BASE_CADENCE_SECONDS = 3_600
 WATCH_SETUP_MIN_CADENCE_SECONDS = 900
@@ -302,6 +303,25 @@ class WatchService:
         return f"watch-{request_id.replace('-', '')}"
 
     @staticmethod
+    def _require_canonical_setup_category(category: sqlite3.Row | None) -> sqlite3.Row:
+        expected = {
+            "slug": WATCH_SETUP_CATEGORY_SLUG,
+            "name": WATCH_SETUP_CATEGORY_NAME,
+            "description": WATCH_SETUP_CATEGORY_DESCRIPTION,
+            "enabled": 1,
+            "priority": "normal",
+            "display_order": 0,
+            "max_stories_per_run": None,
+            "deleted_at": None,
+        }
+        if category is None or any(category[field] != value for field, value in expected.items()):
+            raise DomainConflict(
+                "Category slug 'watch-setup' is not the canonical Watch setup Category; "
+                "no changes were made. Resolve the conflicting Category before retrying."
+            )
+        return category
+
+    @staticmethod
     def _decoded_setup_policy(row: sqlite3.Row) -> dict[str, Any]:
         policy = _row(row)
         for field in ("allowed_channels", "escalation_rules", "backoff_rules", "retirement_criteria"):
@@ -393,12 +413,7 @@ class WatchService:
         if topic is None or topic["deleted_at"] is not None or topic["category_id"] is None:
             raise DomainConflict("request identity is already used by another Watch")
         category = conn.execute("SELECT * FROM categories WHERE id = ?", (topic["category_id"],)).fetchone()
-        if (
-            category is None
-            or category["deleted_at"] is not None
-            or category["slug"] != WATCH_SETUP_CATEGORY_SLUG
-        ):
-            raise DomainConflict("request identity is already used by another Watch")
+        category = cls._require_canonical_setup_category(category)
         if (
             topic["name"] != name
             or topic["description"] != interest
@@ -480,7 +495,7 @@ class WatchService:
                             category_id,
                             WATCH_SETUP_CATEGORY_SLUG,
                             WATCH_SETUP_CATEGORY_NAME,
-                            "Neutral category for Watch setup drafts",
+                            WATCH_SETUP_CATEGORY_DESCRIPTION,
                             now,
                             now,
                         ),
@@ -488,8 +503,7 @@ class WatchService:
                     category = conn.execute(
                         "SELECT * FROM categories WHERE id = ?", (category_id,)
                     ).fetchone()
-                elif category["deleted_at"] is not None:
-                    raise DomainConflict("dedicated Watch setup category is deleted")
+                category = self._require_canonical_setup_category(category)
 
                 topic_id = new_id("top")
                 conn.execute(

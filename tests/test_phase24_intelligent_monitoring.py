@@ -147,6 +147,93 @@ def test_paused_watch_setup_reuses_category_and_identical_retry_returns_same_ids
     assert fresh["watch_id"] != first["watch_id"]
 
 
+def test_paused_watch_setup_reuses_preexisting_canonical_category(tmp_db):
+    apply_migrations(tmp_db)
+    core = CoreService(tmp_db)
+    category = core.create_category(
+        {
+            "slug": "watch-setup",
+            "name": "Watch setup",
+            "description": "Neutral category for Watch setup drafts",
+            "display_order": 0,
+            "enabled": True,
+            "priority": "normal",
+            "max_stories_per_run": None,
+        }
+    )
+
+    result = WatchService(tmp_db).create_paused_setup(_paused_setup_payload())
+
+    assert result["category_id"] == category["id"]
+    assert result["category"] == category
+
+
+def test_paused_watch_setup_rejects_noncanonical_setup_slug_category(tmp_db):
+    apply_migrations(tmp_db)
+    category = CoreService(tmp_db).create_category(
+        {"slug": "watch-setup", "name": "User category"}
+    )
+
+    with pytest.raises(DomainConflict, match="canonical Watch setup"):
+        WatchService(tmp_db).create_paused_setup(_paused_setup_payload())
+
+    assert CoreService(tmp_db).get_category(category["id"])["name"] == "User category"
+
+
+def test_paused_watch_setup_rejects_disabled_setup_slug_category(tmp_db):
+    apply_migrations(tmp_db)
+    CoreService(tmp_db).create_category(
+        {
+            "slug": "watch-setup",
+            "name": "Watch setup",
+            "description": "Neutral category for Watch setup drafts",
+            "enabled": False,
+        }
+    )
+
+    with pytest.raises(DomainConflict, match="canonical Watch setup"):
+        WatchService(tmp_db).create_paused_setup(_paused_setup_payload())
+
+
+def test_paused_watch_setup_retry_conflicts_if_category_is_modified(tmp_db):
+    apply_migrations(tmp_db)
+    core = CoreService(tmp_db)
+    watches = WatchService(tmp_db)
+    payload = _paused_setup_payload()
+
+    first = watches.create_paused_setup(payload)
+    core.update_category(first["category_id"], {"description": "User modified"})
+
+    with pytest.raises(DomainConflict, match="canonical Watch setup"):
+        watches.create_paused_setup(payload)
+
+
+def test_paused_watch_setup_category_conflict_rolls_back_composition(tmp_db):
+    apply_migrations(tmp_db)
+    core = CoreService(tmp_db)
+    unrelated_category = core.create_category(
+        {"slug": "watch-setup", "name": "User category", "description": "Owned by user"}
+    )
+    watches = WatchService(tmp_db)
+
+    with pytest.raises(DomainConflict, match="canonical Watch setup"):
+        watches.create_paused_setup(_paused_setup_payload())
+
+    conn = storage.connect(tmp_db)
+    try:
+        assert conn.execute("SELECT COUNT(*) FROM topics").fetchone()[0] == 0
+        assert conn.execute("SELECT COUNT(*) FROM topic_terms").fetchone()[0] == 0
+        assert conn.execute("SELECT COUNT(*) FROM monitoring_policies").fetchone()[0] == 0
+        assert conn.execute("SELECT COUNT(*) FROM watches").fetchone()[0] == 0
+        preserved = conn.execute(
+            "SELECT * FROM categories WHERE id = ?", (unrelated_category["id"],)
+        ).fetchone()
+        assert preserved["name"] == "User category"
+        assert preserved["description"] == "Owned by user"
+    finally:
+        conn.close()
+
+
 @pytest.mark.parametrize(
     "change",
     [
