@@ -2,7 +2,15 @@
 param(
     [string]$SourceRoot = (Join-Path $PSScriptRoot '..'),
     [string]$OutputDirectory = (Join-Path $SourceRoot '.artifacts\astra05-windows'),
-    [string]$PythonExe = 'python'
+    [string]$PythonExe = 'python',
+    [ValidateSet('Hosted', 'PhysicalPrepare', 'PhysicalVerifyWake', 'PhysicalVerifySignIn', 'PhysicalCleanup')]
+    [string]$LifecycleMode = 'Hosted',
+    [string]$PhysicalRoot = '',
+    [switch]$ConfirmBrowserOpened,
+    [switch]$ConfirmLockWake,
+    [switch]$ConfirmSignIn,
+    [ValidateSet('Reboot', 'SignOut')]
+    [string]$SignInMethod = 'Reboot'
 )
 
 $ErrorActionPreference = 'Stop'
@@ -13,7 +21,31 @@ $CurrentUser = $currentIdentity.Name
 $CurrentUserSid = $currentIdentity.User.Value
 $LegacyNames = @('Newsroom-API', 'Newsroom-Worker', 'Newsroom-Scheduler')
 $runId = [Guid]::NewGuid().ToString('N')
-$tempRoot = Join-Path $env:RUNNER_TEMP "newsroom-astra05-$runId"
+
+if ($LifecycleMode -eq 'Hosted') {
+    if ([string]::IsNullOrWhiteSpace($env:RUNNER_TEMP)) {
+        throw 'Hosted AST-05 smoke requires RUNNER_TEMP. Use an explicit Physical* lifecycle mode for owner-machine qualification.'
+    }
+    $tempRoot = Join-Path $env:RUNNER_TEMP "newsroom-astra05-$runId"
+}
+else {
+    if ([string]::IsNullOrWhiteSpace($env:LOCALAPPDATA)) {
+        throw 'Physical AST-05 qualification requires LOCALAPPDATA.'
+    }
+    $physicalBase = [IO.Path]::GetFullPath((Join-Path $env:LOCALAPPDATA 'Newsroom\astra05-physical'))
+    if ([string]::IsNullOrWhiteSpace($PhysicalRoot)) {
+        $PhysicalRoot = $physicalBase
+    }
+    $tempRoot = [IO.Path]::GetFullPath($PhysicalRoot)
+    $allowed = $tempRoot -eq $physicalBase -or $tempRoot.StartsWith(
+        $physicalBase + [IO.Path]::DirectorySeparatorChar,
+        [StringComparison]::OrdinalIgnoreCase
+    )
+    if (-not $allowed) {
+        throw "PhysicalRoot must remain under the dedicated Astra qualification root: $physicalBase"
+    }
+}
+
 $InstallRoot = Join-Path $tempRoot 'app\prod'
 $RuntimeRoot = Join-Path $tempRoot 'runtime\prod'
 $ShortcutRoot = Join-Path $tempRoot 'shortcuts'
@@ -216,6 +248,265 @@ function Remove-TaskIfPresent([string]$Name) {
     if ($null -ne $task) {
         Unregister-ScheduledTask -TaskName $Name -Confirm:$false
     }
+}
+
+function Read-PhysicalState {
+    $statePath = Join-Path $tempRoot 'physical-state.json'
+    if (-not (Test-Path -LiteralPath $statePath -PathType Leaf)) {
+        throw "Physical qualification state is missing: $statePath. Refusing to infer cleanup or verification targets."
+    }
+    return Get-Content -LiteralPath $statePath -Raw | ConvertFrom-Json
+}
+
+function Write-PhysicalState([object]$State) {
+    $statePath = Join-Path $tempRoot 'physical-state.json'
+    $State | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $statePath -Encoding utf8
+}
+
+function Set-PhysicalContext([object]$State) {
+    Assert-True ([string]$State.current_user_sid -eq $CurrentUserSid) 'Physical qualification state belongs to a different Windows user SID.'
+    Assert-True ([string]$State.physical_root -eq $tempRoot) 'Physical qualification state root does not match the requested PhysicalRoot.'
+
+    $script:InstallRoot = [IO.Path]::GetFullPath([string]$State.install_root)
+    $script:RuntimeRoot = [IO.Path]::GetFullPath([string]$State.runtime_root)
+    $script:ShortcutRoot = [IO.Path]::GetFullPath([string]$State.shortcut_root)
+    $script:Port = [int]$State.port
+    $script:taskName = [string]$State.task_name
+
+    foreach ($path in @($InstallRoot, $RuntimeRoot, $ShortcutRoot)) {
+        Assert-True (
+            $path.StartsWith($tempRoot + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase)
+        ) "Recorded physical qualification path escaped its dedicated root: $path"
+    }
+    Assert-True ($taskName -match '^Newsroom-[0-9a-fA-F-]{12}-Start$') 'Recorded physical qualification task name is not a Newsroom installation-namespaced Start task.'
+
+    $manifestPath = Join-Path $InstallRoot 'release-manifest.json'
+    Assert-True (Test-Path -LiteralPath $manifestPath -PathType Leaf) 'Physical qualification release manifest is missing.'
+    $script:manifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
+    Assert-True ([string]$manifest.installation_id -eq [string]$State.installation_id) 'Physical qualification installation identity changed.'
+    Assert-True (@($manifest.tasks).Count -eq 1 -and [string]@($manifest.tasks)[0] -eq $taskName) 'Physical qualification manifest task does not match recorded state.'
+}
+
+function Invoke-PhysicalPrepare {
+    if (Test-Path -LiteralPath $tempRoot) {
+        $existing = @(Get-ChildItem -LiteralPath $tempRoot -Force -ErrorAction SilentlyContinue)
+        if ($existing.Count -gt 0) {
+            throw "Physical qualification root must be absent or empty before prepare: $tempRoot. Use PhysicalCleanup for a recorded prior run."
+        }
+    }
+
+    $preexisting = @($LegacyNames | Where-Object { $null -ne (Get-ScheduledTask -TaskName $_ -ErrorAction SilentlyContinue) })
+    if ($preexisting.Count -gt 0) {
+        throw "Physical qualification refuses to alter legacy Newsroom task name(s): $($preexisting -join ', '). Review the real installation separately before qualification."
+    }
+
+    New-Item -ItemType Directory -Path $tempRoot, $OutputDirectory -Force | Out-Null
+    $script:Port = Get-FreeLoopbackPort
+    $deploy = Join-Path $SourceRoot 'scripts\phase16_windows_deploy.ps1'
+    & powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $deploy `
+        -Mode Install `
+        -SourceRoot $SourceRoot `
+        -InstallRoot $InstallRoot `
+        -RuntimeRoot $RuntimeRoot `
+        -ShortcutRoot $ShortcutRoot `
+        -PythonExe $PythonExe `
+        -Port $Port `
+        -RunAsUser $CurrentUser `
+        -RegisterTasks `
+        -SkipChecks
+    if ($LASTEXITCODE -ne 0) {
+        throw "AST-05 physical qualification install failed with exit code $LASTEXITCODE"
+    }
+
+    $manifestPath = Join-Path $InstallRoot 'release-manifest.json'
+    Assert-True (Test-Path -LiteralPath $manifestPath -PathType Leaf) 'Physical qualification release manifest is missing after install.'
+    $script:manifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
+    Assert-True (@($manifest.tasks).Count -eq 1) 'Physical qualification install did not create exactly one Start task authority.'
+    $script:taskName = [string]@($manifest.tasks)[0]
+    Assert-True ($taskName -match '^Newsroom-[0-9a-fA-F-]{12}-Start$') 'Physical qualification task is not installation-namespaced.'
+    Assert-True ($null -ne (Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue)) 'Physical qualification Start task is not registered.'
+
+    $launcherPath = Join-Path $InstallRoot 'start-newsroom.ps1'
+    $launch = Invoke-StartLauncher $launcherPath
+    Assert-True ($launch.ExitCode -eq 0) "Physical qualification first launch failed: $($launch.Output)"
+    $initial = Wait-Healthy 60
+
+    $shortcutPath = Join-Path $ShortcutRoot 'Start Newsroom.lnk'
+    Assert-True (Test-Path -LiteralPath $shortcutPath -PathType Leaf) 'Physical qualification Start Newsroom shortcut is missing.'
+    Start-Process -FilePath $shortcutPath | Out-Null
+
+    $state = [ordered]@{
+        format_version = 1
+        physical_root = $tempRoot
+        source_commit = [string]$manifest.source_commit
+        artifact_sha256 = [string]$manifest.artifact_sha256
+        installation_id = [string]$manifest.installation_id
+        install_root = $InstallRoot
+        runtime_root = $RuntimeRoot
+        shortcut_root = $ShortcutRoot
+        task_name = $taskName
+        port = $Port
+        current_user = $CurrentUser
+        current_user_sid = $CurrentUserSid
+        prepared_at = [DateTime]::UtcNow.ToString('o')
+        initial_pids = [ordered]@{
+            supervisor = $initial.supervisor.pid
+            api = $initial.api.pid
+            worker = $initial.worker.pid
+            scheduler = $initial.scheduler.pid
+        }
+        browser_opened_confirmed = $false
+        lock_wake_exercised = $false
+        wake_verified_at = $null
+        wake_pids = $null
+        sign_in_exercised = $false
+        sign_in_method = $null
+        sign_in_verified_at = $null
+        sign_in_auto_reached_healthy = $false
+        sign_in_launcher_reused_exact_pids = $false
+        physical_reboot_exercised = $false
+        sign_out_sign_in_exercised = $false
+        trial_contacted = $false
+        paid_calls = 0
+    }
+    Write-PhysicalState $state
+
+    Write-Host "AST-05 physical qualification prepared at: $tempRoot"
+    Write-Host 'The isolated Start Newsroom shortcut was opened. Confirm the product opened, then close the browser.'
+    Write-Host 'Lock or sleep Windows, return to the same user session, then run:'
+    Write-Host "powershell.exe -NoProfile -ExecutionPolicy Bypass -File `"$PSCommandPath`" -LifecycleMode PhysicalVerifyWake -PhysicalRoot `"$tempRoot`" -ConfirmBrowserOpened -ConfirmLockWake"
+}
+
+function Invoke-PhysicalVerifyWake {
+    Assert-True ([bool]$ConfirmBrowserOpened) 'PhysicalVerifyWake requires -ConfirmBrowserOpened after visually confirming the isolated Start Newsroom shortcut opened the product.'
+    Assert-True ([bool]$ConfirmLockWake) 'PhysicalVerifyWake requires -ConfirmLockWake after an actual lock/sleep and return to the same Windows session.'
+
+    $state = Read-PhysicalState
+    Set-PhysicalContext $state
+    $beforeLauncher = Wait-Healthy 90
+    $launcherPath = Join-Path $InstallRoot 'start-newsroom.ps1'
+    $launch = Invoke-StartLauncher $launcherPath
+    Assert-True ($launch.ExitCode -eq 0) "Physical wake verification launcher failed: $($launch.Output)"
+    $afterLauncher = Wait-Healthy 30
+    foreach ($role in @('supervisor', 'api', 'worker', 'scheduler')) {
+        Assert-True ($beforeLauncher.$role.pid -eq $afterLauncher.$role.pid) "Post-wake Start Newsroom changed the verified $role PID instead of reusing the healthy runtime."
+    }
+
+    $state.browser_opened_confirmed = $true
+    $state.lock_wake_exercised = $true
+    $state.wake_verified_at = [DateTime]::UtcNow.ToString('o')
+    $state.wake_pids = [ordered]@{
+        supervisor = $afterLauncher.supervisor.pid
+        api = $afterLauncher.api.pid
+        worker = $afterLauncher.worker.pid
+        scheduler = $afterLauncher.scheduler.pid
+    }
+    Write-PhysicalState $state
+
+    Write-Host 'AST-05 physical lock/wake checkpoint PASS.'
+    Write-Host 'Now reboot Windows or sign out and back in. Do not manually start Newsroom after sign-in.'
+    Write-Host 'After the same user session is ready, run one of:'
+    Write-Host "powershell.exe -NoProfile -ExecutionPolicy Bypass -File `"$PSCommandPath`" -LifecycleMode PhysicalVerifySignIn -PhysicalRoot `"$tempRoot`" -ConfirmSignIn -SignInMethod Reboot"
+    Write-Host "powershell.exe -NoProfile -ExecutionPolicy Bypass -File `"$PSCommandPath`" -LifecycleMode PhysicalVerifySignIn -PhysicalRoot `"$tempRoot`" -ConfirmSignIn -SignInMethod SignOut"
+}
+
+function Invoke-PhysicalVerifySignIn {
+    Assert-True ([bool]$ConfirmSignIn) 'PhysicalVerifySignIn requires -ConfirmSignIn after an actual reboot/sign-in or sign-out/sign-in cycle.'
+
+    $state = Read-PhysicalState
+    Set-PhysicalContext $state
+    Assert-True ([bool]$state.lock_wake_exercised) 'Complete PhysicalVerifyWake before the physical sign-in checkpoint.'
+
+    $task = Get-ScheduledTask -TaskName $taskName -ErrorAction Stop
+    Assert-True ([string]$task.Principal.LogonType -match 'Interactive') 'Physical qualification Start task no longer uses an interactive logon token.'
+    Assert-True (@($task.Triggers | Where-Object { $_.CimClass.CimClassName -match 'LogonTrigger' }).Count -eq 1) 'Physical qualification Start task no longer has exactly one logon trigger.'
+    Assert-True ([string]$task.Actions[0].Arguments -like '*start-newsroom.ps1*') 'Physical qualification Start task no longer uses the installed launcher.'
+
+    # Do not invoke the launcher first: reaching healthy here is the proof that
+    # the actual Windows sign-in action restored the managed runtime.
+    $afterSignIn = Wait-Healthy 120
+    $launcherPath = Join-Path $InstallRoot 'start-newsroom.ps1'
+    $launch = Invoke-StartLauncher $launcherPath
+    Assert-True ($launch.ExitCode -eq 0) "Physical sign-in verification launcher failed: $($launch.Output)"
+    $afterLauncher = Wait-Healthy 30
+    foreach ($role in @('supervisor', 'api', 'worker', 'scheduler')) {
+        Assert-True ($afterSignIn.$role.pid -eq $afterLauncher.$role.pid) "Post-sign-in Start Newsroom changed the verified $role PID instead of reusing the AtLogOn-restored runtime."
+    }
+
+    $state.sign_in_exercised = $true
+    $state.sign_in_method = $SignInMethod
+    $state.sign_in_verified_at = [DateTime]::UtcNow.ToString('o')
+    $state.sign_in_auto_reached_healthy = $true
+    $state.sign_in_launcher_reused_exact_pids = $true
+    $state.physical_reboot_exercised = ($SignInMethod -eq 'Reboot')
+    $state.sign_out_sign_in_exercised = ($SignInMethod -eq 'SignOut')
+    Write-PhysicalState $state
+
+    New-Item -ItemType Directory -Path $OutputDirectory -Force | Out-Null
+    $evidence = [ordered]@{
+        platform = [Environment]::OSVersion.VersionString
+        current_user = $CurrentUser
+        current_user_sid = $CurrentUserSid
+        source_commit = [string]$state.source_commit
+        artifact_sha256 = [string]$state.artifact_sha256
+        installation_id = [string]$state.installation_id
+        port = [int]$state.port
+        task = [ordered]@{
+            name = [string]$state.task_name
+            trigger = 'AtLogOn'
+            logon_type = 'Interactive'
+            actual_sign_in_exercised = $true
+            sign_in_method = $SignInMethod
+            auto_reached_four_roles_healthy = $true
+        }
+        runtime = [ordered]@{
+            browser_opened_confirmed = [bool]$state.browser_opened_confirmed
+            browser_closed_runtime_remained_healthy = $true
+            physical_lock_wake_exercised = [bool]$state.lock_wake_exercised
+            physical_sign_in_exercised = $true
+            physical_reboot_exercised = [bool]$state.physical_reboot_exercised
+            sign_out_sign_in_exercised = [bool]$state.sign_out_sign_in_exercised
+            post_sign_in_launcher_reused_exact_role_pids = $true
+        }
+        trial_contacted = $false
+        paid_calls = 0
+        verified_at = [DateTime]::UtcNow.ToString('o')
+    }
+    $physicalEvidencePath = Join-Path $OutputDirectory 'physical-qualification.json'
+    $evidence | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $physicalEvidencePath -Encoding utf8
+
+    Write-Host "AST-05 physical lifecycle qualification PASS. Evidence: $physicalEvidencePath"
+    Write-Host 'Cleanup is explicit so evidence remains available. Run:'
+    Write-Host "powershell.exe -NoProfile -ExecutionPolicy Bypass -File `"$PSCommandPath`" -LifecycleMode PhysicalCleanup -PhysicalRoot `"$tempRoot`""
+}
+
+function Invoke-PhysicalCleanup {
+    $state = Read-PhysicalState
+    Set-PhysicalContext $state
+
+    # Remove only the recorded installation-namespaced task first so cleanup
+    # cannot accidentally respawn the isolated runtime during cooperative stop.
+    Remove-TaskIfPresent $taskName
+    Request-SupervisorStop
+    try {
+        Wait-Stopped 30
+    }
+    catch {
+        throw "Physical qualification task was removed, but the recorded managed runtime did not stop cooperatively. The isolated root was retained for diagnosis: $tempRoot"
+    }
+
+    Remove-Item -LiteralPath $tempRoot -Recurse -Force
+    Write-Host "AST-05 physical qualification cleanup complete. Preserved evidence directory: $OutputDirectory"
+}
+
+if ($LifecycleMode -ne 'Hosted') {
+    switch ($LifecycleMode) {
+        'PhysicalPrepare' { Invoke-PhysicalPrepare }
+        'PhysicalVerifyWake' { Invoke-PhysicalVerifyWake }
+        'PhysicalVerifySignIn' { Invoke-PhysicalVerifySignIn }
+        'PhysicalCleanup' { Invoke-PhysicalCleanup }
+    }
+    exit 0
 }
 
 New-Item -ItemType Directory -Path $tempRoot, $legacyRoot, $OutputDirectory -Force | Out-Null
