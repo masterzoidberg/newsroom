@@ -232,7 +232,7 @@ class FixtureHandler(SimpleHTTPRequestHandler):
             self._json({"error": {"message": "retry request identity changed"}}, 409)
             return
 
-        self.watch_exists = True
+        FixtureHandler.watch_exists = True
         self._json(
             {
                 "draft_type": "paused_watch",
