@@ -340,7 +340,7 @@ try {
     $foreignLogsJson = Get-RuntimeLogSummary | ConvertTo-Json -Depth 4 -Compress
     Write-Host "Foreign-port diagnostic: exit_code=$($foreignAttempt.ExitCode) listener_bound=$($listener.Server.IsBound) output=$($foreignAttempt.Output) snapshot=$foreignSnapshotJson logs=$foreignLogsJson"
     Assert-True ($foreignAttempt.ExitCode -ne 0) "Launcher unexpectedly succeeded while a foreign listener owned the configured port. ExitCode=$($foreignAttempt.ExitCode) Output=$($foreignAttempt.Output) Snapshot=$foreignSnapshotJson Logs=$foreignLogsJson"
-    Assert-True ($foreignAttempt.Output -like '*No process was killed and no alternate port was selected*') 'Foreign-port launcher failure did not preserve the fixed-port/no-kill contract.'
+    Assert-True ($foreignAttempt.Output -match '(?s)No process was killed and no alternate port\s+was selected') 'Foreign-port launcher failure did not preserve the fixed-port/no-kill contract.'
     Assert-True ($listener.Server.IsBound) 'Foreign listener was stopped or displaced by the launcher.'
     $listener.Stop()
     $listener = $null
