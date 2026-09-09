@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from dataclasses import asdict
-from typing import Any, Callable, Optional
+from typing import Any, Callable, Literal, Optional
 
 from fastapi import APIRouter, Query, Request, Response
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -204,6 +204,41 @@ class WatchCreate(StrictModel):
     policy_id: str = Field(min_length=1, max_length=200)
     priority: str = Field(default="normal", pattern="^(low|normal|high|urgent)$")
     discovery_enabled: bool = True
+
+
+class WatchSetupCreate(StrictModel):
+    request_id: str = Field(min_length=1, max_length=64)
+    interest: str = Field(min_length=1, max_length=2_000)
+    name: str = Field(min_length=1, max_length=200)
+    primary_terms: list[str] = Field(min_length=1, max_length=100)
+
+
+class PausedWatchDraft(StrictModel):
+    draft_type: Literal["paused_watch"]
+    version: Literal[1]
+    resumed: bool
+    request_id: str
+    category_id: str
+    topic_id: str
+    policy_id: str
+    watch_id: str
+    name: str
+    interest: str
+    primary_terms: list[str]
+    status: Literal["paused"]
+    target_type: Literal["topic"]
+    discovery_enabled: Literal[False]
+    priority: Literal["normal"]
+    next_action: Literal["add_sources"]
+    paid_budget_usd: float
+    paid_escalation_enabled: Literal[False]
+    monitor_count: int
+    job_count: int
+    category: dict[str, Any]
+    topic: dict[str, Any]
+    topic_terms: list[dict[str, Any]]
+    policy: dict[str, Any]
+    watch: dict[str, Any]
 
 
 class WatchPatch(StrictModel):
@@ -2358,6 +2393,16 @@ def create_domain_router(
     async def list_watches(request: Request, status: Optional[str] = None, page: int = Query(1, ge=1), page_size: int = Query(25, ge=1, le=100)):
         read_guard(request)
         return watches.list(status=status, page=page, page_size=page_size)
+
+    @router.post("/watches/setup", response_model=PausedWatchDraft, status_code=201)
+    async def setup_watch(request: Request, payload: WatchSetupCreate, response: Response):
+        write_guard(request)
+        result = watches.create_paused_setup(payload.model_dump())
+        if result["resumed"]:
+            response.status_code = 200
+        else:
+            response.status_code = 201
+        return result
 
     @router.post("/watches", status_code=201)
     async def create_watch(request: Request, payload: WatchCreate):

@@ -33,6 +33,9 @@ jobs:
         working-directory: frontend
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
       - uses: actions/setup-node@v4
         with:
           node-version: "20"
@@ -40,6 +43,8 @@ jobs:
           cache-dependency-path: frontend/package-lock.json
       - name: Install frontend dependencies
         run: npm ci
+      - name: Install browser qualification dependency
+        run: python -m pip install "selenium>=4.25,<5"
       - name: Frontend lint
         run: npm run lint
       - name: Frontend typecheck
@@ -47,12 +52,24 @@ jobs:
       - name: Frontend production build
         run: npm run build
       - name: AST-04 browser status smoke
-        run: python3 ../scripts/astra04_browser_smoke.py --frontend-dist dist --output ../.artifacts/astra04-browser-status
+        run: python ../scripts/astra04_browser_smoke.py --frontend-dist dist --output ../.artifacts/astra04-browser-status
       - name: Upload AST-04 browser status evidence
         uses: actions/upload-artifact@v4
         with:
           name: astra04-browser-status
           path: .artifacts/astra04-browser-status
+      - name: AST-24 onboarding browser qualification
+        run: >-
+          python ../scripts/astra24_browser_smoke.py
+          --frontend-dist dist
+          --output ../.artifacts/astra24-browser-onboarding
+          --source-commit "${{ github.sha }}"
+      - name: Upload AST-24 onboarding browser evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: astra24-browser-onboarding
+          path: .artifacts/astra24-browser-onboarding
 
   windows-start-newsroom:
     runs-on: windows-latest

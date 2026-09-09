@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { apiFetch, jsonBody } from "./lib/api";
+import { apiFetch, apiList, jsonBody } from "./lib/api";
 import type { ViewKey } from "./lib/types";
 import type { RuntimeControlAck, RuntimeControlAction, RuntimeStatus, ServiceState } from "./lib/runtime";
 import { AppShell } from "./components/AppShell";
@@ -19,10 +19,33 @@ import { AskView } from "./views/AskView";
 const HEALTHY_POLL_MS = 5_000;
 const FAILURE_POLL_MIN_MS = 3_000;
 const FAILURE_POLL_MAX_MS = 30_000;
+const WATCH_SETUP_DRAFT_KEY = "newsroom.watch-setup.v2";
+const WATCH_SETUP_PENDING_KEY = "newsroom.watch-setup.pending.v1";
 
 function initialView(): ViewKey {
   const value = window.location.hash.replace(/^#/, "") as ViewKey;
   return ["inbox", "stories", "documents", "reports", "saved", "history", "workbench", "ask", "topics", "subjects", "sources", "monitors", "questions", "runs", "alerts", "settings"].includes(value) ? value : "inbox";
+}
+
+function hasResumableWatchSetupDraft(): boolean {
+  try {
+    const pendingRaw = window.sessionStorage.getItem(WATCH_SETUP_PENDING_KEY);
+    if (pendingRaw) {
+      const pending = JSON.parse(pendingRaw) as { request_id?: unknown; interest?: unknown; name?: unknown; primary_terms?: unknown };
+      if (
+        typeof pending.request_id === "string" && pending.request_id.length > 0 &&
+        typeof pending.interest === "string" && pending.interest.trim().length > 0 &&
+        typeof pending.name === "string" && pending.name.trim().length > 0 &&
+        Array.isArray(pending.primary_terms) && pending.primary_terms.length > 0
+      ) return true;
+    }
+    const raw = window.sessionStorage.getItem(WATCH_SETUP_DRAFT_KEY);
+    if (!raw) return false;
+    const draft = JSON.parse(raw) as { request_id?: unknown; interest?: unknown };
+    return typeof draft.request_id === "string" && draft.request_id.length > 0 && typeof draft.interest === "string" && draft.interest.trim().length > 0;
+  } catch {
+    return false;
+  }
 }
 
 export default function App() {
@@ -55,6 +78,21 @@ export default function App() {
       .catch(() => setUsername(null))
       .finally(() => setAuthReady(true));
   }, []);
+
+  useEffect(() => {
+    if (!username) return;
+    let active = true;
+    apiList<{ id: string }>("/watches?page_size=1")
+      .then((result) => {
+        const count = result.total ?? result.items.length;
+        if (!active || count !== 0) return;
+        const nextView: ViewKey = hasResumableWatchSetupDraft() ? "monitors" : "inbox";
+        window.location.hash = nextView;
+        setViewState(nextView);
+      })
+      .catch(() => undefined);
+    return () => { active = false; };
+  }, [username]);
 
   const applyRuntimeStatus = useCallback((status: RuntimeStatus) => {
     setRuntimeStatus(status);

@@ -3,10 +3,13 @@ import { apiFetch, apiList, formatDate, jsonBody, shortId } from "../lib/api";
 import type { AttentionItem, Briefing, Report } from "../lib/types";
 import { Badge, EmptyState, ErrorState, LoadingState, PageHeader, SectionCard, Stat } from "../components/ViewPrimitives";
 
-export function InboxView({ openView }: { openView: (view: "alerts" | "reports" | "stories") => void }) {
+type InboxViewKey = "alerts" | "reports" | "stories" | "monitors";
+
+export function InboxView({ openView }: { openView: (view: InboxViewKey) => void }) {
   const [reports, setReports] = useState<Report[]>([]);
   const [briefing, setBriefing] = useState<Briefing | null>(null);
   const [attention, setAttention] = useState<AttentionItem[]>([]);
+  const [watchCount, setWatchCount] = useState(0);
   const [error, setError] = useState<unknown>(null);
   const [loading, setLoading] = useState(true);
   const [briefingWorking, setBriefingWorking] = useState(false);
@@ -14,8 +17,14 @@ export function InboxView({ openView }: { openView: (view: "alerts" | "reports" 
   const load = useCallback(async () => {
     setLoading(true); setError(null);
     try {
-      const [reportResponse, attentionResponse] = await Promise.all([apiList<Report>("/reports?page_size=50"), apiFetch<{ items: AttentionItem[] }>("/attention")]);
-      setReports(reportResponse.items); setAttention(attentionResponse.items);
+      const [reportResponse, attentionResponse, watchResponse] = await Promise.all([
+        apiList<Report>("/reports?page_size=50"),
+        apiFetch<{ items: AttentionItem[] }>("/attention"),
+        apiList<{ id: string }>("/watches?page_size=1"),
+      ]);
+      setReports(reportResponse.items);
+      setAttention(attentionResponse.items);
+      setWatchCount(watchResponse.total ?? watchResponse.items.length);
     } catch (caught) { setError(caught); } finally { setLoading(false); }
   }, []);
   useEffect(() => { void load(); }, [load]);
@@ -38,6 +47,34 @@ export function InboxView({ openView }: { openView: (view: "alerts" | "reports" 
 
   if (loading) return <><PageHeader eyebrow="Review" title="Inbox" description="Material changes, unresolved questions, and evidence-bound reports in one place." /><LoadingState />{error && <ErrorState error={error} />}</>;
   if (error) return <><PageHeader eyebrow="Review" title="Inbox" description="Material changes, unresolved questions, and evidence-bound reports in one place." /><ErrorState error={error} retry={() => void load()} /></>;
+
+  if (watchCount === 0) {
+    const hasExistingIntelligence = reports.length > 0 || attention.length > 0;
+    return <>
+      <PageHeader
+        eyebrow="Welcome"
+        title="Keep the signal in view."
+        description="Newsroom follows what you care about and shows what changed, with the sources behind each claim. Start by saving one Watch as a paused draft so you can review its scope before anything begins collecting."
+        action={<div className="button-row"><button className="primary-button" type="button" onClick={() => openView("monitors")}>Create your first Watch</button>{hasExistingIntelligence && <button className="secondary-button" type="button" onClick={() => openView("stories")}>Explore existing intelligence</button>}</div>}
+      />
+      <div className="content-grid">
+        <SectionCard title="1. Tell Newsroom what matters" description="Use ordinary language. You do not need Topic IDs, policy IDs, or any other internal identifier.">
+          <p className="muted">Enter an interest and a short editable Watch name. Newsroom creates the Topic and zero-paid hourly draft behind the scenes.</p>
+        </SectionCard>
+        <SectionCard title="2. Confirm the primary term" description="A Topic name alone is not enough monitoring scope.">
+          <p className="muted">Newsroom will visibly seed a primary-term field from your interest. Review it, edit it if needed, and explicitly confirm at least one term before saving.</p>
+        </SectionCard>
+      </div>
+      <SectionCard title="3. Save paused, then add Sources" description="Saving the setup does not start monitoring.">
+        <p className="muted">The first draft stays paused and makes no paid calls. Your next setup step is Add Sources, where you can choose what Newsroom is allowed to collect from.</p>
+        <div className="button-row"><button className="primary-button" type="button" onClick={() => openView("monitors")}>Create your first Watch</button></div>
+      </SectionCard>
+      {hasExistingIntelligence && <SectionCard title="Existing intelligence" description="Imported or previously created intelligence can still be reviewed without completing onboarding.">
+        <div className="button-row"><button className="secondary-button" type="button" onClick={() => openView("stories")}>Stories</button><button className="secondary-button" type="button" onClick={() => openView("reports")}>Reports</button>{attention.length > 0 && <button className="secondary-button" type="button" onClick={() => openView("alerts")}>Alerts</button>}</div>
+      </SectionCard>}
+    </>;
+  }
+
   return <>
     <PageHeader eyebrow="Review / today" title="Inbox" description="Start with what changed, then follow the evidence trail to the exact span." action={<button className="primary-button" type="button" onClick={() => void refreshBriefing()} disabled={briefingWorking}>{briefingWorking ? "Refreshing…" : "Refresh briefing"}</button>} />
     <div className="stat-grid"><Stat label="Attention items" value={attention.length} tone={attention.length ? "coral" : "mint"} /><Stat label="Living reports" value={reports.length} tone="mint" /><Stat label="Material queue" value={briefing?.items.length ?? "—"} /><Stat label="Last checked" value={formatDate(new Date().toISOString())} /></div>

@@ -55,6 +55,10 @@ export function apiList<T>(path: string, init?: RequestInit): Promise<ListRespon
   return apiFetch<ListResponse<T>>(path, init);
 }
 
+export function isApiUnavailable(error: unknown): boolean {
+  return error instanceof ApiError && error.status === 0;
+}
+
 export function jsonBody(value: unknown): string { return JSON.stringify(value); }
 
 export function formatDate(value?: string | null): string {
