@@ -34,6 +34,13 @@ type SetupDraft = {
   term_touched: boolean;
 };
 
+type SetupSubmission = {
+  request_id: string;
+  interest: string;
+  name: string;
+  primary_terms: string[];
+};
+
 type PausedWatchDraft = {
   resumed: boolean;
   watch_id: string;
@@ -44,7 +51,8 @@ type PausedWatchDraft = {
   primary_terms: string[];
 };
 
-const SETUP_DRAFT_KEY = "newsroom.watch-setup.v1";
+const SETUP_DRAFT_KEY = "newsroom.watch-setup.v2";
+const SETUP_PENDING_KEY = "newsroom.watch-setup.pending.v1";
 const SELECTED_WATCH_KEY = "newsroom.selected-watch.v1";
 const MAX_PRIMARY_TERMS = 100;
 const MAX_PRIMARY_TERM_LENGTH = 300;
@@ -62,19 +70,27 @@ function freshSetupDraft(): SetupDraft {
   };
 }
 
+function validPrimaryTerms(value: unknown): string[] | null {
+  if (!Array.isArray(value)) return null;
+  const terms = value.filter((item): item is string => typeof item === "string").slice(0, MAX_PRIMARY_TERMS);
+  if (terms.some((item) => item.length > MAX_PRIMARY_TERM_LENGTH)) return null;
+  return terms;
+}
+
 function loadStoredSetupDraft(): SetupDraft {
   try {
-    const raw = window.localStorage.getItem(SETUP_DRAFT_KEY);
+    const raw = window.sessionStorage.getItem(SETUP_DRAFT_KEY);
     if (!raw) return freshSetupDraft();
     const saved = JSON.parse(raw) as Partial<SetupDraft>;
     if (typeof saved.request_id !== "string" || typeof saved.interest !== "string" || typeof saved.name !== "string") return freshSetupDraft();
-    const primaryTerms = Array.isArray(saved.primary_terms) ? saved.primary_terms.filter((item): item is string => typeof item === "string").slice(0, MAX_PRIMARY_TERMS) : [];
+    const primaryTerms = validPrimaryTerms(saved.primary_terms);
+    if (primaryTerms === null) return freshSetupDraft();
     return {
       request_id: saved.request_id,
       interest: saved.interest,
       name: saved.name,
       primary_terms: primaryTerms,
-      term_draft: typeof saved.term_draft === "string" ? saved.term_draft : "",
+      term_draft: typeof saved.term_draft === "string" && saved.term_draft.length <= MAX_PRIMARY_TERM_LENGTH ? saved.term_draft : "",
       name_touched: saved.name_touched === true,
       term_touched: saved.term_touched === true,
     };
@@ -83,8 +99,47 @@ function loadStoredSetupDraft(): SetupDraft {
   }
 }
 
+function loadStoredPendingSubmission(): SetupSubmission | null {
+  try {
+    const raw = window.sessionStorage.getItem(SETUP_PENDING_KEY);
+    if (!raw) return null;
+    const saved = JSON.parse(raw) as Partial<SetupSubmission>;
+    const primaryTerms = validPrimaryTerms(saved.primary_terms);
+    if (
+      typeof saved.request_id !== "string" || !saved.request_id ||
+      typeof saved.interest !== "string" || !saved.interest.trim() ||
+      typeof saved.name !== "string" || !saved.name.trim() ||
+      primaryTerms === null || primaryTerms.length === 0
+    ) return null;
+    return {
+      request_id: saved.request_id,
+      interest: saved.interest,
+      name: saved.name,
+      primary_terms: primaryTerms,
+    };
+  } catch {
+    return null;
+  }
+}
+
+function persistPendingSubmission(submission: SetupSubmission | null) {
+  try {
+    if (submission) window.sessionStorage.setItem(SETUP_PENDING_KEY, JSON.stringify(submission));
+    else window.sessionStorage.removeItem(SETUP_PENDING_KEY);
+  } catch { /* Keep in-memory recovery when browser storage is unavailable. */ }
+}
+
 function normalizedTerm(value: string): string {
   return value.trim().replace(/\s+/g, " ").toLocaleLowerCase();
+}
+
+function submissionFromDraft(draft: SetupDraft): SetupSubmission {
+  return {
+    request_id: draft.request_id,
+    interest: draft.interest.trim(),
+    name: draft.name.trim(),
+    primary_terms: draft.primary_terms.map((item) => item.trim()),
+  };
 }
 
 export function WatchManagementView() {
@@ -94,6 +149,7 @@ export function WatchManagementView() {
   const [selected, setSelected] = useState<Watch | null>(null);
   const [health, setHealth] = useState<Health | null>(null);
   const [setupDraft, setSetupDraft] = useState<SetupDraft>(loadStoredSetupDraft);
+  const [pendingSubmission, setPendingSubmission] = useState<SetupSubmission | null>(loadStoredPendingSubmission);
   const [setupError, setSetupError] = useState<unknown>(null);
   const [setupValidation, setSetupValidation] = useState("");
   const [setupSaved, setSetupSaved] = useState("");
@@ -110,8 +166,10 @@ export function WatchManagementView() {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    try { window.localStorage.setItem(SETUP_DRAFT_KEY, JSON.stringify(setupDraft)); } catch { /* Browser storage may be unavailable. */ }
+    try { window.sessionStorage.setItem(SETUP_DRAFT_KEY, JSON.stringify(setupDraft)); } catch { /* Browser storage may be unavailable. */ }
   }, [setupDraft]);
+
+  useEffect(() => { persistPendingSubmission(pendingSubmission); }, [pendingSubmission]);
 
   const loadDetail = useCallback(async (id: string) => {
     const watch = await apiFetch<Watch>(`/watches/${id}`);
@@ -181,12 +239,18 @@ export function WatchManagementView() {
   }
 
   function updateInterest(value: string) {
-    setSetupError(null); setSetupValidation(""); setSetupSaved("");
+    const materialChange = normalizedTerm(setupDraft.interest) !== normalizedTerm(value);
+    const invalidatedApproval = materialChange && setupDraft.primary_terms.length > 0;
+    setSetupError(null);
+    setSetupSaved("");
+    setSetupValidation(invalidatedApproval ? "Interest changed. Reconfirm at least one primary term before saving." : "");
     setSetupDraft((current) => ({
       ...current,
       interest: value,
       name: current.name_touched ? current.name : value.slice(0, 200),
-      term_draft: current.term_touched || current.primary_terms.length ? current.term_draft : value.slice(0, MAX_PRIMARY_TERM_LENGTH),
+      primary_terms: materialChange ? [] : current.primary_terms,
+      term_draft: materialChange ? value.slice(0, MAX_PRIMARY_TERM_LENGTH) : current.term_draft,
+      term_touched: materialChange ? false : current.term_touched,
     }));
   }
 
@@ -208,26 +272,19 @@ export function WatchManagementView() {
     setSetupDraft((current) => ({ ...current, primary_terms: current.primary_terms.filter((_item, itemIndex) => itemIndex !== index), term_touched: true }));
   }
 
-  async function saveSetup() {
-    if (!setupDraft.interest.trim() || !setupDraft.name.trim() || setupDraft.primary_terms.length === 0) {
-      setSetupValidation("Enter an interest and name, then explicitly confirm at least one primary term.");
-      return;
-    }
+  async function attemptSetup(submission: SetupSubmission) {
     setWorking(true); setSetupError(null); setSetupValidation(""); setSetupSaved("");
     try {
       const result = await apiFetch<PausedWatchDraft>("/watches/setup", {
         method: "POST",
-        body: jsonBody({
-          request_id: setupDraft.request_id,
-          interest: setupDraft.interest.trim(),
-          name: setupDraft.name.trim(),
-          primary_terms: setupDraft.primary_terms,
-        }),
+        body: jsonBody(submission),
       });
       try {
         window.localStorage.setItem(SELECTED_WATCH_KEY, result.watch_id);
-        window.localStorage.removeItem(SETUP_DRAFT_KEY);
+        window.sessionStorage.removeItem(SETUP_DRAFT_KEY);
+        window.sessionStorage.removeItem(SETUP_PENDING_KEY);
       } catch { /* The server draft remains canonical even without browser storage. */ }
+      setPendingSubmission(null);
       setSelectedId(result.watch_id);
       setSetupSaved(result.resumed ? "Recovered the same saved paused Watch. Next: Add Sources." : "Setup saved as a paused Watch. Nothing is collecting yet. Next: Add Sources.");
       setSetupDraft(freshSetupDraft());
@@ -237,6 +294,26 @@ export function WatchManagementView() {
     } finally {
       setWorking(false);
     }
+  }
+
+  async function saveSetup() {
+    if (pendingSubmission) {
+      setSetupValidation("A previous save may already have reached Newsroom. Retry that exact submitted save before starting another.");
+      return;
+    }
+    if (!setupDraft.interest.trim() || !setupDraft.name.trim() || setupDraft.primary_terms.length === 0) {
+      setSetupValidation("Enter an interest and name, then explicitly confirm at least one primary term.");
+      return;
+    }
+    const submission = submissionFromDraft(setupDraft);
+    persistPendingSubmission(submission);
+    setPendingSubmission(submission);
+    await attemptSetup(submission);
+  }
+
+  async function retryPendingSetup() {
+    if (!pendingSubmission) return;
+    await attemptSetup(pendingSubmission);
   }
 
   async function submitSetup(event: FormEvent) {
@@ -293,6 +370,7 @@ export function WatchManagementView() {
 
   const setupTitle = watches.length ? "Create another Watch" : "What do you want Newsroom to watch?";
   const canDiscover = Boolean(selectedId && selected?.status === "active");
+  const canSubmitSetup = !working && !pendingSubmission && Boolean(setupDraft.interest.trim() && setupDraft.name.trim() && setupDraft.primary_terms.length > 0);
   return <>
     <PageHeader eyebrow="Configure / intelligent monitoring" title="Watches" description="Start with an interest in ordinary language. Newsroom saves the setup paused so you can review scope and Sources before collection begins." action={canDiscover ? <button className="secondary-button" type="button" onClick={() => void action("discover-sources", { limit: 25 })} disabled={working}>Discover Sources</button> : undefined} />
     {error && <ErrorState error={error} retry={() => void load(selectedId)} />}
@@ -309,9 +387,10 @@ export function WatchManagementView() {
         <div className="button-row"><button className="secondary-button" type="button" onClick={addPrimaryTerm} disabled={working || !setupDraft.term_draft.trim() || setupDraft.primary_terms.length >= MAX_PRIMARY_TERMS}>Confirm primary term</button></div>
         {setupDraft.primary_terms.length > 0 && <div className="resource-list" aria-label="Confirmed primary terms">{setupDraft.primary_terms.map((primaryTerm, index) => <div className="resource-row" key={`${normalizedTerm(primaryTerm)}-${index}`}><span><strong>{primaryTerm}</strong><small>Confirmed primary monitoring term</small></span><button className="quiet-button" type="button" onClick={() => removePrimaryTerm(index)} disabled={working} aria-label={`Remove primary term ${primaryTerm}`}>Remove</button></div>)}</div>}
         {setupValidation && <p className="status-note" role="alert">{setupValidation}</p>}
-        {setupError !== null && <div className="state-panel error-panel" role="alert"><strong>Could not save this Watch.</strong><p>{setupError instanceof Error ? setupError.message : "The request failed."}</p>{isApiUnavailable(setupError) && <p>Use your installed Start Newsroom launcher to start the local service, reload this page, and retry. Your draft and request identity are retained in this browser.</p>}<button className="secondary-button" type="button" onClick={() => void saveSetup()} disabled={working}>Retry the same save</button></div>}
+        {pendingSubmission && <div className="state-panel error-panel" role={setupError !== null ? "alert" : "status"}><strong>{setupError !== null ? "Could not confirm this save." : "A previous save still needs confirmation."}</strong>{setupError !== null && <p>{setupError instanceof Error ? setupError.message : "The request failed."}</p>}{isApiUnavailable(setupError) && <p>Use your installed Start Newsroom launcher to start the local service, reload this page, and retry. The exact submitted request is retained in this tab.</p>}<p>Retry will resend the original submitted Watch named <strong>{pendingSubmission.name}</strong> with the same approved scope. Later edits in this form are kept separate until that save is resolved.</p><button className="secondary-button" type="button" onClick={() => void retryPendingSetup()} disabled={working}>Retry the same save</button></div>}
+        {setupError !== null && !pendingSubmission && <div className="state-panel error-panel" role="alert"><strong>Could not save this Watch.</strong><p>{setupError instanceof Error ? setupError.message : "The request failed."}</p>{isApiUnavailable(setupError) && <p>Use your installed Start Newsroom launcher to start the local service, reload this page, and retry.</p>}</div>}
         {setupSaved && <p className="status-note" role="status"><strong>{setupSaved}</strong></p>}
-        <button className="primary-button" type="submit" disabled={working || !setupDraft.interest.trim() || !setupDraft.name.trim() || setupDraft.primary_terms.length === 0}>{working ? "Saving paused Watch…" : setupError ? "Retry save" : "Save paused Watch"}</button>
+        <button className="primary-button" type="submit" disabled={!canSubmitSetup}>{working ? "Saving paused Watch…" : pendingSubmission ? "Resolve previous save first" : "Save paused Watch"}</button>
       </form>
     </SectionCard>
 
