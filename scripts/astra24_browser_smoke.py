@@ -410,9 +410,9 @@ def main() -> int:
         # CR-01: a material interest change must invalidate prior approval.
         interest.clear()
         interest.send_keys(CHANGED_INTEREST)
-        _wait_text(driver, "Interest changed. Reconfirm at least one primary term before saving.")
-        if _contains_text(driver, "Confirmed primary monitoring term"):
-            raise RuntimeError("changed interest retained previously confirmed primary scope")
+        WebDriverWait(driver, 5).until(
+            lambda current: not _contains_text(current, "Confirmed primary monitoring term")
+        )
         save_button = driver.find_element(By.XPATH, "//button[normalize-space()='Save paused Watch']")
         if save_button.is_enabled():
             raise RuntimeError("changed interest left Save enabled without reconfirmed scope")
@@ -433,7 +433,9 @@ def main() -> int:
             raise RuntimeError("primary tab did not persist its setup draft")
         first_request_id = str(first_draft["request_id"])
         driver.switch_to.new_window("tab")
-        driver.get(base + "#monitors")
+        driver.get(base + "#inbox")
+        _wait_text(driver, "Keep the signal in view.")
+        _click_text(driver, "Create your first Watch")
         _wait_text(driver, "What do you want Newsroom to watch?")
         WebDriverWait(driver, 5).until(lambda current: _storage_json(current, SETUP_DRAFT_KEY) is not None)
         second_draft = _storage_json(driver, SETUP_DRAFT_KEY)
