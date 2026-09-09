@@ -27,11 +27,15 @@ from selenium.webdriver.support.ui import WebDriverWait
 INTEREST = "civil aviation safety reporting"
 WATCH_NAME = "Aviation safety"
 PRIMARY_TERM = "civil aviation safety"
+CHANGED_INTEREST = "ocean conservation"
+EDITED_AFTER_FAILURE_NAME = "Edited after ambiguous save"
 WATCH_ID = "11111111-2222-4333-8444-555555555555"
 TOPIC_ID = "top_astra24_fixture"
 POLICY_ID = "pol_astra24_fixture"
 CATEGORY_ID = "cat_astra24_fixture"
 CSRF_TOKEN = "astra24-fixture-csrf"
+SETUP_DRAFT_KEY = "newsroom.watch-setup.v2"
+SETUP_PENDING_KEY = "newsroom.watch-setup.pending.v1"
 
 
 class FixtureHandler(SimpleHTTPRequestHandler):
@@ -208,17 +212,6 @@ class FixtureHandler(SimpleHTTPRequestHandler):
             self.setup_attempts.append(payload)
             attempt = len(self.setup_attempts)
 
-        # First attempt deliberately drops only this API connection. The static
-        # fixture server remains alive, reproducing an unreachable API request
-        # without contacting or stopping any real Newsroom process.
-        if attempt == 1:
-            try:
-                self.connection.shutdown(socket.SHUT_RDWR)
-            except OSError:
-                pass
-            self.close_connection = True
-            return
-
         expected = {
             "interest": INTEREST,
             "name": WATCH_NAME,
@@ -228,16 +221,27 @@ class FixtureHandler(SimpleHTTPRequestHandler):
             if payload.get(key) != value:
                 self._json({"error": {"message": f"unexpected fixture payload field: {key}"}}, 409)
                 return
-        if payload.get("request_id") != self.setup_attempts[0].get("request_id"):
-            self._json({"error": {"message": "retry request identity changed"}}, 409)
+        if attempt > 1 and payload != self.setup_attempts[0]:
+            self._json({"error": {"message": "retry payload changed"}}, 409)
             return
 
-        FixtureHandler.watch_exists = True
+        # The first request commits one logical Watch and then loses its response.
+        # This exercises the ambiguous-completion path: reload sees the server
+        # record, while retry must still resend the immutable original payload.
+        if attempt == 1:
+            FixtureHandler.watch_exists = True
+            try:
+                self.connection.shutdown(socket.SHUT_RDWR)
+            except OSError:
+                pass
+            self.close_connection = True
+            return
+
         self._json(
             {
                 "draft_type": "paused_watch",
                 "version": 1,
-                "resumed": False,
+                "resumed": True,
                 "request_id": payload["request_id"],
                 "category_id": CATEGORY_ID,
                 "topic_id": TOPIC_ID,
@@ -261,7 +265,7 @@ class FixtureHandler(SimpleHTTPRequestHandler):
                 "policy": self._policy(),
                 "watch": self._watch(),
             },
-            201,
+            200,
         )
 
 
@@ -271,11 +275,18 @@ class ThreadingServer(socketserver.ThreadingTCPServer):
 
 
 def _wait_text(driver: webdriver.Chrome, text: str, timeout: float = 12.0) -> None:
-    WebDriverWait(driver, timeout).until(lambda current: text in current.find_element(By.TAG_NAME, "body").text)
+    expected = text.casefold()
+    WebDriverWait(driver, timeout).until(
+        lambda current: expected in current.find_element(By.TAG_NAME, "body").text.casefold()
+    )
 
 
 def _body_text(driver: webdriver.Chrome) -> str:
     return driver.find_element(By.TAG_NAME, "body").text
+
+
+def _contains_text(driver: webdriver.Chrome, text: str) -> bool:
+    return text.casefold() in _body_text(driver).casefold()
 
 
 def _screenshot(driver: webdriver.Chrome, output: Path, name: str) -> str:
@@ -297,6 +308,20 @@ def _assert_no_horizontal_overflow(driver: webdriver.Chrome, label: str) -> None
         raise RuntimeError(f"{label} has horizontal overflow: {result}")
 
 
+def _assert_element_within_viewport(driver: webdriver.Chrome, element, label: str) -> None:
+    driver.execute_script("arguments[0].scrollIntoView({block: 'center', inline: 'nearest'});", element)
+    time.sleep(0.05)
+    result = driver.execute_script(
+        "const r=arguments[0].getBoundingClientRect();"
+        "return {left:r.left,right:r.right,top:r.top,bottom:r.bottom,width:window.innerWidth,height:window.innerHeight};",
+        element,
+    )
+    if float(result["left"]) < -2 or float(result["right"]) > float(result["width"]) + 2:
+        raise RuntimeError(f"{label} escaped horizontal viewport: {result}")
+    if float(result["bottom"]) <= 0 or float(result["top"]) >= float(result["height"]):
+        raise RuntimeError(f"{label} was not visible after scrolling: {result}")
+
+
 def _keyboard_sequence(driver: webdriver.Chrome) -> list[str]:
     driver.execute_script("document.getElementById('main-content').focus()")
     sequence: list[str] = []
@@ -309,6 +334,11 @@ def _keyboard_sequence(driver: webdriver.Chrome) -> list[str]:
     if "watch-interest" not in sequence or "watch-setup-name" not in sequence:
         raise RuntimeError(f"keyboard traversal did not reach setup fields: {sequence}")
     return sequence
+
+
+def _storage_json(driver: webdriver.Chrome, key: str) -> dict[str, object] | None:
+    raw = driver.execute_script("return window.sessionStorage.getItem(arguments[0])", key)
+    return json.loads(raw) if raw else None
 
 
 def main() -> int:
@@ -344,13 +374,16 @@ def main() -> int:
     driver.set_page_load_timeout(20)
     screenshots: list[str] = []
     keyboard_focus: list[str] = []
+    mobile_metrics: dict[str, int] = {}
+    tab_isolation: dict[str, object] = {}
     zoom_before = 0
     zoom_after = 0
+    first_handle = ""
     try:
         base = f"http://127.0.0.1:{port}/"
         driver.get(base + "#inbox")
         _wait_text(driver, "Keep the signal in view.")
-        if "Create your first Watch" not in _body_text(driver):
+        if not _contains_text(driver, "Create your first Watch"):
             raise RuntimeError("empty workspace did not render the Welcome primary action")
         screenshots.append(_screenshot(driver, output, "01-welcome-desktop.png"))
 
@@ -374,78 +407,165 @@ def main() -> int:
         keyboard_focus = _keyboard_sequence(driver)
         screenshots.append(_screenshot(driver, output, "03-populated-setup.png"))
 
+        # CR-01: a material interest change must invalidate prior approval.
+        interest.clear()
+        interest.send_keys(CHANGED_INTEREST)
+        _wait_text(driver, "Interest changed. Reconfirm at least one primary term before saving.")
+        if _contains_text(driver, "Confirmed primary monitoring term"):
+            raise RuntimeError("changed interest retained previously confirmed primary scope")
+        save_button = driver.find_element(By.XPATH, "//button[normalize-space()='Save paused Watch']")
+        if save_button.is_enabled():
+            raise RuntimeError("changed interest left Save enabled without reconfirmed scope")
+        screenshots.append(_screenshot(driver, output, "04-interest-change-requires-reconfirm.png"))
+
+        interest.clear()
+        interest.send_keys(INTEREST)
+        primary = driver.find_element(By.ID, "watch-primary-term")
+        primary.clear()
+        primary.send_keys(PRIMARY_TERM)
+        _click_text(driver, "Confirm primary term")
+        _wait_text(driver, "Confirmed primary monitoring term")
+
+        # CR-03: a new tab receives its own session draft and request identity.
+        first_handle = driver.current_window_handle
+        first_draft = _storage_json(driver, SETUP_DRAFT_KEY)
+        if not first_draft or not first_draft.get("request_id"):
+            raise RuntimeError("primary tab did not persist its setup draft")
+        first_request_id = str(first_draft["request_id"])
+        driver.switch_to.new_window("tab")
+        driver.get(base + "#monitors")
+        _wait_text(driver, "What do you want Newsroom to watch?")
+        WebDriverWait(driver, 5).until(lambda current: _storage_json(current, SETUP_DRAFT_KEY) is not None)
+        second_draft = _storage_json(driver, SETUP_DRAFT_KEY)
+        if not second_draft or not second_draft.get("request_id"):
+            raise RuntimeError("second tab did not create an independent setup draft")
+        second_request_id = str(second_draft["request_id"])
+        if second_request_id == first_request_id:
+            raise RuntimeError("second tab inherited the first tab request identity")
+        second_interest = driver.find_element(By.ID, "watch-interest")
+        second_interest.send_keys(CHANGED_INTEREST)
+        second_draft_after_edit = _storage_json(driver, SETUP_DRAFT_KEY)
+        if not second_draft_after_edit or second_draft_after_edit.get("interest") != CHANGED_INTEREST:
+            raise RuntimeError("second tab did not persist its independent edit")
+        driver.close()
+        driver.switch_to.window(first_handle)
+        if driver.find_element(By.ID, "watch-interest").get_attribute("value") != INTEREST:
+            raise RuntimeError("second-tab edit overwrote the first tab form")
+        first_draft_after_second_tab = _storage_json(driver, SETUP_DRAFT_KEY)
+        if not first_draft_after_second_tab or first_draft_after_second_tab.get("request_id") != first_request_id:
+            raise RuntimeError("second-tab edit overwrote the first tab request identity")
+        tab_isolation = {
+            "independent_request_identity": True,
+            "first_tab_interest_preserved": True,
+        }
+
+        # CR-02: persist one immutable submitted snapshot before the ambiguous POST.
         _click_text(driver, "Save paused Watch")
-        _wait_text(driver, "Could not save this Watch.")
+        _wait_text(driver, "Could not confirm this save.")
         _wait_text(driver, "Start Newsroom")
-        draft_before_reload = driver.execute_script(
-            "return window.localStorage.getItem('newsroom.watch-setup.v1')"
-        )
-        if not draft_before_reload:
-            raise RuntimeError("failed save did not retain the setup draft")
-        saved_before = json.loads(draft_before_reload)
-        if saved_before.get("primary_terms") != [PRIMARY_TERM]:
-            raise RuntimeError("failed save did not retain confirmed primary terms")
-        screenshots.append(_screenshot(driver, output, "04-api-unreachable.png"))
+        draft_before_reload = _storage_json(driver, SETUP_DRAFT_KEY)
+        pending_before_reload = _storage_json(driver, SETUP_PENDING_KEY)
+        if not draft_before_reload or not pending_before_reload:
+            raise RuntimeError("failed save did not retain draft and immutable pending submission")
+        expected_submission = {
+            "request_id": pending_before_reload.get("request_id"),
+            "interest": INTEREST,
+            "name": WATCH_NAME,
+            "primary_terms": [PRIMARY_TERM],
+        }
+        if pending_before_reload != expected_submission:
+            raise RuntimeError(f"pending submission did not match original save: {pending_before_reload}")
+
+        # Later edits remain separate from the immutable retry payload.
+        name = driver.find_element(By.ID, "watch-setup-name")
+        name.clear()
+        name.send_keys(EDITED_AFTER_FAILURE_NAME)
+        edited_draft = _storage_json(driver, SETUP_DRAFT_KEY)
+        pending_after_edit = _storage_json(driver, SETUP_PENDING_KEY)
+        if not edited_draft or edited_draft.get("name") != EDITED_AFTER_FAILURE_NAME:
+            raise RuntimeError("later edit was not retained in editable draft")
+        if pending_after_edit != pending_before_reload:
+            raise RuntimeError("later edit mutated the immutable pending submission")
+        screenshots.append(_screenshot(driver, output, "05-api-unreachable-edited-draft.png"))
 
         driver.refresh()
-        _wait_text(driver, "What do you want Newsroom to watch?")
-        if driver.find_element(By.ID, "watch-interest").get_attribute("value") != INTEREST:
-            raise RuntimeError("reload lost the interest draft")
-        if driver.find_element(By.ID, "watch-setup-name").get_attribute("value") != WATCH_NAME:
-            raise RuntimeError("reload lost the Watch name")
-        if PRIMARY_TERM not in _body_text(driver):
-            raise RuntimeError("reload lost the confirmed primary term")
-        draft_after_reload = driver.execute_script(
-            "return window.localStorage.getItem('newsroom.watch-setup.v1')"
-        )
-        if json.loads(draft_after_reload).get("request_id") != saved_before.get("request_id"):
-            raise RuntimeError("reload changed the retry request identity")
-        screenshots.append(_screenshot(driver, output, "05-reload-recovery.png"))
+        _wait_text(driver, "Create another Watch")
+        _wait_text(driver, "A previous save still needs confirmation.")
+        if driver.find_element(By.ID, "watch-setup-name").get_attribute("value") != EDITED_AFTER_FAILURE_NAME:
+            raise RuntimeError("reload lost edits made after ambiguous save")
+        pending_after_reload = _storage_json(driver, SETUP_PENDING_KEY)
+        if pending_after_reload != pending_before_reload:
+            raise RuntimeError("reload changed the immutable retry payload")
+        screenshots.append(_screenshot(driver, output, "06-reload-pending-recovery.png"))
 
-        _click_text(driver, "Save paused Watch")
-        _wait_text(driver, "Setup saved as a paused Watch.")
+        _click_text(driver, "Retry the same save")
+        _wait_text(driver, "Recovered the same saved paused Watch.")
         _wait_text(driver, "Next: Add Sources")
         if len(FixtureHandler.setup_attempts) != 2:
             raise RuntimeError(f"expected exactly two setup attempts, got {len(FixtureHandler.setup_attempts)}")
-        identities = [str(item.get("request_id")) for item in FixtureHandler.setup_attempts]
-        if len(set(identities)) != 1:
-            raise RuntimeError(f"retry created a new request identity: {identities}")
-        screenshots.append(_screenshot(driver, output, "06-paused-success.png"))
+        if FixtureHandler.setup_attempts[0] != FixtureHandler.setup_attempts[1]:
+            raise RuntimeError(f"retry changed submitted payload: {FixtureHandler.setup_attempts}")
+        if _storage_json(driver, SETUP_PENDING_KEY) is not None:
+            raise RuntimeError("successful retry did not clear pending submission")
+        screenshots.append(_screenshot(driver, output, "07-paused-success.png"))
 
         driver.refresh()
         _wait_text(driver, "Confirmed primary scope")
         _wait_text(driver, PRIMARY_TERM)
         _wait_text(driver, "Next: Add Sources")
-        if "Paused" not in _body_text(driver):
+        if not _contains_text(driver, "Paused"):
             raise RuntimeError("reloaded saved Watch is not visibly paused")
-        screenshots.append(_screenshot(driver, output, "07-paused-reload.png"))
+        screenshots.append(_screenshot(driver, output, "08-paused-reload.png"))
 
         driver.execute_script("window.location.hash='inbox'")
         _wait_text(driver, "Inbox")
-        if "Keep the signal in view." in _body_text(driver):
+        if _contains_text(driver, "Keep the signal in view."):
             raise RuntimeError("returning workspace was trapped in Welcome")
-        screenshots.append(_screenshot(driver, output, "08-returning-home.png"))
+        screenshots.append(_screenshot(driver, output, "09-returning-home.png"))
 
-        driver.set_window_size(390, 844)
+        # CR-04: qualify an actual measured 390 CSS-pixel viewport, not outer size.
+        driver.execute_cdp_cmd(
+            "Emulation.setDeviceMetricsOverride",
+            {"width": 390, "height": 844, "deviceScaleFactor": 1, "mobile": False},
+        )
         driver.execute_script("window.location.hash='monitors'")
         _wait_text(driver, "Confirmed primary scope")
+        metrics = driver.execute_script(
+            "return {innerWidth: window.innerWidth, clientWidth: document.documentElement.clientWidth, scrollWidth: document.documentElement.scrollWidth};"
+        )
+        mobile_metrics = {key: int(value) for key, value in metrics.items()}
+        if mobile_metrics["innerWidth"] != 390 or mobile_metrics["clientWidth"] != 390:
+            raise RuntimeError(f"mobile qualification did not reach measured 390 CSS px: {mobile_metrics}")
         _assert_no_horizontal_overflow(driver, "390px Watch view")
-        screenshots.append(_screenshot(driver, output, "09-mobile-390.png"))
+        setup_interest = driver.find_element(By.ID, "watch-interest")
+        _assert_element_within_viewport(driver, setup_interest, "390px interest field")
+        screenshots.append(_screenshot(driver, output, "10-mobile-390-setup.png"))
+        scope_heading = driver.find_element(By.XPATH, "//*[normalize-space()='Confirmed primary scope']")
+        _assert_element_within_viewport(driver, scope_heading, "390px confirmed scope")
+        _assert_no_horizontal_overflow(driver, "390px scrolled confirmed scope")
+        screenshots.append(_screenshot(driver, output, "11-mobile-390-scope.png"))
 
+        # Reset mobile emulation before the separate effective-200% qualification.
+        driver.execute_cdp_cmd("Emulation.clearDeviceMetricsOverride", {})
         driver.set_window_size(1440, 1000)
+        driver.execute_cdp_cmd(
+            "Emulation.setDeviceMetricsOverride",
+            {"width": 1440, "height": 1000, "deviceScaleFactor": 1, "mobile": False},
+        )
         driver.execute_script("window.location.hash='monitors'")
         _wait_text(driver, "Confirmed primary scope")
         zoom_before = int(driver.execute_script("return window.innerWidth"))
-        for _ in range(5):
-            ActionChains(driver).key_down(Keys.CONTROL).send_keys("=").key_up(Keys.CONTROL).perform()
-            time.sleep(0.08)
+        driver.execute_cdp_cmd(
+            "Emulation.setDeviceMetricsOverride",
+            {"width": 720, "height": 500, "deviceScaleFactor": 2, "mobile": False},
+        )
         zoom_after = int(driver.execute_script("return window.innerWidth"))
-        if zoom_after >= zoom_before:
+        if zoom_before != 1440 or zoom_after != 720:
             raise RuntimeError(
-                f"browser zoom did not reduce the CSS viewport: before={zoom_before}, after={zoom_after}"
+                f"effective 200% viewport was not deterministic: before={zoom_before}, after={zoom_after}"
             )
         _assert_no_horizontal_overflow(driver, "200% zoom Watch view")
-        screenshots.append(_screenshot(driver, output, "10-zoom-200.png"))
+        screenshots.append(_screenshot(driver, output, "12-zoom-200.png"))
     finally:
         driver.quit()
         server.shutdown()
@@ -464,21 +584,28 @@ def main() -> int:
             "empty_welcome",
             "loading",
             "populated_setup",
-            "api_unreachable",
-            "reload_recovery",
+            "interest_change_requires_reconfirmation",
+            "tab_isolation",
+            "api_unreachable_after_server_commit",
+            "reload_pending_recovery",
             "paused_success",
             "paused_reload",
             "returning_home",
-            "mobile_390",
+            "mobile_390_setup",
+            "mobile_390_scope",
             "zoom_200",
         ],
         "setup_attempt_count": len(FixtureHandler.setup_attempts),
         "same_retry_identity": len({str(item.get('request_id')) for item in FixtureHandler.setup_attempts}) == 1,
+        "same_retry_payload": len(FixtureHandler.setup_attempts) == 2 and FixtureHandler.setup_attempts[0] == FixtureHandler.setup_attempts[1],
         "server_watch_count": 1 if FixtureHandler.watch_exists else 0,
+        "tab_isolation": tab_isolation,
         "keyboard_focus_sequence": keyboard_focus,
+        "mobile_css_viewport": mobile_metrics,
         "zoom_css_viewport_before": zoom_before,
         "zoom_css_viewport_after": zoom_after,
-        "browser_zoom_method": "five Ctrl+= steps from default Chrome zoom",
+        "browser_zoom_method": "Chrome DevTools Emulation.setDeviceMetricsOverride from 1440 CSS px at DPR 1 to 720 CSS px at DPR 2",
+        "browser_zoom_literal_keyboard_shortcut_supported": False,
     }
     (output / "manifest.json").write_text(
         json.dumps(manifest, indent=2) + "\n", encoding="utf-8"
