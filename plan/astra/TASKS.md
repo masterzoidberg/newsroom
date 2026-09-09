@@ -1,812 +1,736 @@
-# Canonical task ledger
+# Canonical execution ledger
 
-Execution state after AST-04. Allowed statuses: NOT_STARTED, READY, IN_PROGRESS, BLOCKED, DONE, DEFERRED. A dependency means verified DONE unless a recorded decision explicitly narrows it. Promote the next eligible task to READY when updating NEXT; never treat elapsed time as paid authorization or human scoring.
+Rebaseline transitioned 2026-09-09 after automated Gate 0 acceptance at integrated head `18c5ee8bdf56a44218af4ecd6d7e8d9ead68f8c0`. Full backend, frontend, corrected AST-24 browser qualification, focused Windows runtime regressions and installed Windows lifecycle smoke passed in CI run 34412730096 attempt 2. AST-05 engineering and AST-23/24 are DONE on that branch; physical reboot/sign-in and lock/sleep/wake evidence remains pending for release. AST-25 is the sole READY task.
 
-| ID | Title | Status | Priority | Milestone | Dependencies | Size |
-|---|---|---|---|---|---|---|
-| AST-01 | Freeze the execution baseline and isolate development from observation | DONE | P0 | M0 | None | M |
-| AST-02 | Identify application instances and diagnose port conflicts | DONE | P0 | M1 | AST-01 | M |
-| AST-03 | Supervise existing runtime components safely | DONE | P0 | M1 | AST-02 | M |
-| AST-04 | Expose honest component status and recovery controls | DONE | P0 | M1 | AST-03 | M |
-| AST-05 | Ship one Start Newsroom entry point | READY | P0 | M1 | AST-04 | M |
-| AST-06 | Create typed public AI configuration metadata | NOT_STARTED | P0 | M2 | AST-05 | M |
-| AST-07 | Store credentials in an approved operating-system vault | NOT_STARTED | P0 | M2 | AST-06 | M |
-| AST-08 | Make paid admission durable across processes and reloads | NOT_STARTED | P0 | M2 | AST-07 | M |
-| AST-09 | Resolve provider configuration at operation boundaries | NOT_STARTED | P0 | M2 | AST-08 | M |
-| AST-10 | Add bounded provider validation and safe API contracts | NOT_STARTED | P0 | M2 | AST-09 | M |
-| AST-11 | Build functional AI Providers and cost settings | NOT_STARTED | P0 | M2 | AST-10 | M |
-| AST-12 | Make first Watch and scoped use possible without IDs | NOT_STARTED | P1 | M3 | AST-11 | M |
-| AST-13 | Finish dark-theme and responsive control behavior | NOT_STARTED | P1 | M3 | AST-12 | M |
-| AST-14 | Wrap verified backup and recovery in owner controls | NOT_STARTED | P1 | M3 | AST-13 | M |
-| AST-15 | Verify representative content-to-value paths | NOT_STARTED | P1 | M3 | AST-14 | M |
-| AST-16 | Continue the approved observation with honest usefulness evidence | NOT_STARTED | P1 | M4 | AST-01 | S |
-| AST-17 | Execute the frozen comparison under its exact contract | BLOCKED | P1 | M4 | AST-01 | M |
-| AST-18 | Issue the evidence-based product scope verdict | NOT_STARTED | P1 | M4 | AST-15, AST-16, AST-17 | S |
-| AST-19 | Qualify the installed daily-use release candidate | NOT_STARTED | P1 | M5 | AST-05, AST-11, AST-12, AST-13, AST-14, AST-18 | M |
-| AST-20 | Remove only proven obsolete completion scaffolding | NOT_STARTED | P2 | M5 | AST-19 | S |
-| AST-21 | Integrate paid Ask only if its value is demonstrated | DEFERRED | P2 | Conditional | AST-11, AST-18 | M |
-| AST-22 | Run a bounded commercial pilot after value qualification | DEFERRED | P2 | Conditional | AST-18, AST-19 | S |
+## Contract inherited by every future task
 
-## AST-01 — Freeze the execution baseline and isolate development from observation
+Each record below inherits these explicit constraints in addition to its task-specific outcome, files and acceptance. These are not optional boilerplate.
 
-- **ID:** AST-01
+- **Outcome / user value:** the named task outcome removes the specific gap identified in FEATURE_GAP_ANALYSIS; deliver that one user capability or evidence gate.
+- **Exact scope:** listed subsystem and described change only. A new neighboring UI component/test file is allowed only for that outcome; no unrelated refactor, dependency or platform expansion.
+- **Non-goals:** all other tasks, merger/deployment/trial promotion, active trial contact, clock/source/provider/budget changes to that trial, real paid execution without separate explicit authorization.
+- **Invariants:** canonical Watch→source Monitor path; bounded jobs and replay identities; immutable artifact/scope/evidence histories; exact-match promotion; accepted Claim versus suggestion/hypothesis distinction; no evidence-free synthesis; existing auth/CSRF and private access; shared Sources remain intact; Simple/Advanced is presentation only.
+- **UX/browser evidence:** every task touching UI or installed owner behavior must exercise entry/happy/loading/empty/error/recovery at desktop and an asserted 390 CSS-pixel viewport, keyboard and 200% zoom, with settled screenshots and server-state checks. The harness must record measured `innerWidth`/`clientWidth` before labeling evidence `390px`; an outer-window request alone is insufficient. For pure backend/document planning tasks browser evidence is not applicable; test API/domain state or document consistency instead.
+- **Rollback/recovery:** revert only owned changes; preserve user data and the last verified artifact/backup. Additive migrations require forward compatibility/backup rehearsal and never rewrite applied migrations; code rollback is not a database downgrade. Failed multi-step UI work preserves draft identity. Credential updates follow the versioned vault compensation contract.
+- **Cost/provider constraints:** deterministic/local/fake tests, zero-paid default, durable reservations for any new paid capability, safe uncertain-call accounting, no secrets in database/browser storage/logs/exports. Do not call real providers to verify implementation without explicit separate authorization.
+- **Reasoning:** Tier 1 low; Tier 2 medium; Tier 3 high; Tier A high for design/evidence, not routine implementation. See MODEL_AND_PROMPT_STRATEGY.
+- **Completion report:** gap, change, exact files, test command/results, browser evidence if applicable, CI status (unqueried is unknown), artifact/branch, unresolved acceptance and exact ledger status. A suite whose final result/output was not retrieved is incomplete evidence and may not support DONE.
+- **Stop condition:** stop after this one task; if its contract cannot be met within scope, record evidence and return for decomposition. Do not promote DONE based only on code existing, mocks or missing installed/human checks.
+
+Statuses: READY, NOT_STARTED, IN_PROGRESS, DONE, BLOCKED, DEFERRED, SUPERSEDED. Exactly one READY. DONE records are qualified by branch; dependencies require code/evidence available in the execution checkout, not necessarily merged to main. Before using a stack, preserve unmerged work and recheck ancestry. No merge is authorized.
+
+## Ledger index
+
+| ID | Title | Status | Dependencies | Tier |
+|---|---|---|---|---|
+| AST-01 | Baseline and isolated CI | DONE | None | Historical |
+| AST-02 | Instance identity and preflight | DONE | AST-01 | Historical |
+| AST-03 | Runtime supervision and lease renewal | DONE | AST-02 | Historical |
+| AST-04 | Honest status and recovery UI | DONE | AST-03 | Historical |
+| AST-05 | Qualify the existing Start Newsroom launcher | DONE | AST-01, AST-02, AST-03, AST-04 | 3 |
+| AST-06 | Create typed public AI configuration metadata | NOT_STARTED | AST-27 | 3 |
+| AST-07 | Store credentials in an approved operating-system vault | NOT_STARTED | AST-06 | 3 |
+| AST-08 | Make paid admission durable across processes and reloads | NOT_STARTED | AST-07 | 3 |
+| AST-09 | Resolve provider configuration at operation boundaries | NOT_STARTED | AST-08 | 3 |
+| AST-10 | Add bounded provider validation and safe API contracts | NOT_STARTED | AST-09 | 3 |
+| AST-11 | Build functional AI Providers and cost settings | NOT_STARTED | AST-10 | 2 |
+| AST-12 | Original broad task, preserved below | SUPERSEDED | Replaced by AST-23–29,32,41,42,52–55 | — |
+| AST-13 | Original broad task, preserved below | SUPERSEDED | Replaced by AST-45–46 | — |
+| AST-14 | Original broad task, preserved below | SUPERSEDED | Replaced by AST-43–44 | — |
+| AST-15 | Original broad task, preserved below | SUPERSEDED | Replaced by AST-47 | — |
+| AST-16 | Observe under the unchanged Phase 29 protocol | BLOCKED | AST-01 | 2 |
+| AST-17 | Execute the frozen comparison only with eligible authorized inputs | BLOCKED | AST-01 | 3 |
+| AST-18 | Issue evidence-based product value and scope verdict | BLOCKED | AST-16, AST-17, AST-47 | A |
+| AST-19 | Original broad task, preserved below | SUPERSEDED | Replaced by AST-48 | — |
+| AST-20 | Remove only demonstrated obsolete support entry points | DEFERRED | AST-48 | 2 |
+| AST-21 | Optionally integrate paid Ask after a value decision | DEFERRED | AST-11, AST-18 | 3 |
+| AST-22 | Optionally run a bounded commercial pilot | DEFERRED | AST-18, AST-48 | A |
+| AST-23 | Create a resumable paused Watch setup contract | DONE | AST-05 | 3 |
+| AST-24 | Add Welcome and interest entry without raw IDs | DONE | AST-23 | 2 |
+| AST-25 | Add and reuse Watch Sources by name or URL | READY | AST-24 | 2 |
+| AST-26 | Expose Watch cadence as plain scheduling choices | NOT_STARTED | AST-25 | 2 |
+| AST-27 | Connect review and Start to honest first-value progress | NOT_STARTED | AST-26 | 2 |
+| AST-28 | Implement bounded semantic vocabulary capability | NOT_STARTED | AST-11, AST-27 | 3 |
+| AST-29 | Make terminology review understandable in setup | NOT_STARTED | AST-28 | 2 |
+| AST-30 | Decide and freeze fresh-corpus source recommendation contract | NOT_STARTED | AST-29 | A |
+| AST-31 | Implement bounded fresh-corpus source candidates | NOT_STARTED | AST-30 | 3 |
+| AST-32 | Connect recommended Sources and source health to setup | NOT_STARTED | AST-31, AST-25 | 2 |
+| AST-33 | Persist and query the returning-user review boundary | NOT_STARTED | AST-27 | 3 |
+| AST-34 | Build Watch overview and since-visit Home | NOT_STARTED | AST-33 | 2 |
+| AST-35 | Connect summary through Claim to exact source Evidence | NOT_STARTED | AST-34 | 2 |
+| AST-36 | Create and read Living Reports from named Watch context | NOT_STARTED | AST-35 | 2 |
+| AST-37 | Add durable user-selected briefing schedules | NOT_STARTED | AST-36 | 3 |
+| AST-38 | Expose briefing preferences and first intelligence choices | NOT_STARTED | AST-37 | 2 |
+| AST-39 | Make alert triage scoped and complete | NOT_STARTED | AST-38 | 2 |
+| AST-40 | Expose Story changes, disagreements and correction preview | NOT_STARTED | AST-35 | 2 |
+| AST-41 | Support question-first Watches and contextual research | NOT_STARTED | AST-29, AST-35 | 3 |
+| AST-42 | Make search, saved and history discoverable by name | NOT_STARTED | AST-35, AST-41 | 2 |
+| AST-43 | Add owner verified-backup and diagnostic controls | NOT_STARTED | AST-11, AST-05 | 3 |
+| AST-44 | Provide controlled restore, update recovery and export guidance | NOT_STARTED | AST-43 | 3 |
+| AST-45 | Qualify and fix bounded responsive/accessibility defects | NOT_STARTED | AST-32, AST-34, AST-38, AST-39, AST-40, AST-41, AST-42, AST-44, AST-51, AST-52, AST-53, AST-54, AST-55 | 2 |
+| AST-46 | Make PWA shell update and asset failure recoverable | NOT_STARTED | AST-45 | 2 |
+| AST-47 | Qualify representative content-to-intelligence journeys | NOT_STARTED | AST-32, AST-35, AST-39, AST-40, AST-41, AST-42, AST-51, AST-52, AST-53, AST-54, AST-55 | 3 |
+| AST-48 | Qualify named isolated Windows release and private phone use | NOT_STARTED | AST-46, AST-47, AST-49, AST-18 | 3 |
+| AST-49 | Write owner installation, use and recovery documentation | NOT_STARTED | AST-44, AST-46, AST-47 | 1 |
+| AST-50 | Freeze geographic and time scope semantics | NOT_STARTED | AST-29, AST-41 | A |
+| AST-51 | Implement the approved scope narrowing contract | NOT_STARTED | AST-50 | 3 |
+| AST-52 | Create a Watch for a named person or organization | NOT_STARTED | AST-29, AST-23 | 2 |
+| AST-53 | Start a developing-event Watch without inventing a Story | NOT_STARTED | AST-24, AST-35 | 2 |
+| AST-54 | Select scoped Ask context without raw IDs | NOT_STARTED | AST-42, AST-41 | 2 |
+| AST-55 | Expose explainable deterministic smart-tag browsing | NOT_STARTED | AST-42 | 2 |
+
+## Completed history: AST-01–04
+
+Full original task bodies, acceptance and completion evidence are preserved in [history/AST-01-04_COMPLETION_RECORD.md](history/AST-01-04_COMPLETION_RECORD.md). Local source/test branches corroborate these narrow completions; hosted results remain recorded evidence, not freshly verified status. Prompts are in `prompts/archive/AST-01.md` through `AST-04.md`. Main still lacks the implementations.
+
+## Superseded task mapping
+
+- **AST-12: SUPERSEDED, not DONE.** Original definition and evidence retained in [TASKS_OLD](TASKS_OLD.md); replacement AST-23–29,32,41,42,52–55. The former prompt is retained under `prompts/superseded/AST-12.md`. Do not execute its broad contract.
+- **AST-13: SUPERSEDED, not DONE.** Original definition and evidence retained in [TASKS_OLD](TASKS_OLD.md); replacement AST-45–46. The former prompt is retained under `prompts/superseded/AST-13.md`. Do not execute its broad contract.
+- **AST-14: SUPERSEDED, not DONE.** Original definition and evidence retained in [TASKS_OLD](TASKS_OLD.md); replacement AST-43–44. The former prompt is retained under `prompts/superseded/AST-14.md`. Do not execute its broad contract.
+- **AST-15: SUPERSEDED, not DONE.** Original definition and evidence retained in [TASKS_OLD](TASKS_OLD.md); replacement AST-47. The former prompt is retained under `prompts/superseded/AST-15.md`. Do not execute its broad contract.
+- **AST-19: SUPERSEDED, not DONE.** Original definition and evidence retained in [TASKS_OLD](TASKS_OLD.md); replacement AST-48. The former prompt is retained under `prompts/superseded/AST-19.md`. Do not execute its broad contract.
+
+## AST-05 — Qualify the existing Start Newsroom launcher
+
 - **Status:** DONE
-- **Priority:** P0
-- **Milestone:** M0
-- **Dependencies:** None
-- **Relative size:** M
-- **Risk:** medium; Current local tests pass, but Linux CI's backend job encounters an npm.cmd build test and lacks frontend dependency setup; active trial must remain frozen.
-- **Reversibility:** Revert bounded docs/CI/test changes; no runtime migration.
-
-**Objective:** Make this audited baseline reproducible and give subsequent work a safe development/qualification target.
-
-**Why now:** Current local tests pass, but Linux CI's backend job encounters an npm.cmd build test and lacks frontend dependency setup; active trial must remain frozen.
-
-**Files/subsystems:** README.md; .github/workflows/ci.yml; tests/test_phase12_frontend.py; tests/test_phase13_frontend.py; tests/test_phase14_frontend.py; docs/reviews/ASTRA_EXECUTION_BASELINE.md. Inspected without changing frontend/package.json, docs/reviews/PHASE_29_BASELINE_ACCEPTANCE.md, docs/DOGFOOD_CONTRACT.md, newsroom/config.py and tests/test_runtime_config.py.
-
-**Implementation approach:** Record current HEAD/worktree and trial boundary; establish explicit outside-repo dev/test roots and separate configured endpoint. Make the frontend build test portable and ensure its invoking CI job has required Node/frontend dependencies, or move the build responsibility cleanly to the existing frontend CI job without losing coverage. Update current authority pointers only; preserve historical claims as dated records.
-
-**Non-goals:** Rewriting test architecture, fixing unrelated mypy annotations, changing the active trial, installing/restarting production.
-
-**Tests:** Run backend suite, ruff, frontend build and offline eval validation; verify CI command/executable selection on Linux and Windows or record remaining hosted-run evidence.
-
-**Acceptance criteria:**
-
-- [x] Reproducible baseline is recorded with exact HEAD and check results
-- [x] CI no longer depends on Windows-only npm.cmd in its Linux backend path or missing frontend installation
-- [x] Safe explicit dev/test root and port are documented; active trial and unrelated files unchanged
-
-**Completion evidence:**
-
-- Started from remote `main` HEAD `3d7f9cfe91b34feeaa5602a5febd9077e1d87b7f` and created `astra/AST-01-baseline` directly from that commit. Schema remains 36; no migration or runtime behavior changed.
-- Frozen observation boundary remains `2026-09-06T21:20:48Z` with earliest four-week boundary `2026-10-04T21:20:48Z`. The logical trial `phase29-trial/prod`, its Watch/Sources/provider/budget/processes/data and port `8127` were not contacted or modified.
-- Astra development is explicitly isolated at `%LOCALAPPDATA%\Newsroom\astra-dev\dev` on `127.0.0.1:18127`; manual tests use per-run outside-repository roots ending in `dev`. Existing `RuntimeConfig` suffix/source-tree guards remain the single root authority.
-- Initial isolated reproduction: `python -m pytest -q tests/test_phase12_frontend.py tests/test_runtime_config.py` failed exactly on Windows-only `npm.cmd`; all five runtime-root tests passed. After the first refactor the same command passed 6/6.
-- The first draft-PR run `34076549706` at implementation commit `99aa49c3047f31ccc18b5e6f6a3869811e36abff` passed Ruff and the complete frontend job, then exposed two additional identical `npm.cmd` calls in `tests/test_phase13_frontend.py` and `tests/test_phase14_frontend.py`. The task stayed open rather than treating partial CI as success.
-- The supplied repository snapshot's Phase 13/14 test blobs exactly matched remote `main`; repository-wide test scanning found no other `npm.cmd` build invocations. After removing those duplicate build subprocesses, `python -m pytest -q tests/test_phase12_frontend.py tests/test_phase13_frontend.py tests/test_phase14_frontend.py tests/test_runtime_config.py` passed 8/8.
-- Offline eval checks passed: `python -m newsroom.evals validate` (46 valid cases), `python -m newsroom.evals lite-contract` (20-question contract valid; no comparative execution), and `python -m newsroom.evals baseline` (20 baseline/semantic cases executed; diagnostic only).
-- Clean Ubuntu draft-PR run `34076899509` at code commit `1d22282955c3dfa9057c0c765dd8b4988de58236` passed backend `python -m pytest -q`, Ruff, frontend `npm ci`, lint, typecheck and production Vite build. This is the authoritative full-suite/build evidence for the implementation code.
-- Local full pytest was not claimed: the bounded local container run exceeded its execution window. Local Ruff was unavailable, and the uploaded Windows-shaped `node_modules` lacked Rollup's Linux optional binary; hosted clean CI superseded those local limitations.
-- No paid provider call was made. No secrets, runtime DB/log/backup/content artifacts, private trial data or historical acceptance records were changed.
-- Detailed baseline/root/CI evidence is recorded in `docs/reviews/ASTRA_EXECUTION_BASELINE.md`. Draft PR #1 remains unmerged.
-
-**Prompt:** [AST-01](prompts/AST-01.md).
-
-## AST-02 — Identify application instances and diagnose port conflicts
-
-- **ID:** AST-02
-- **Status:** DONE
-- **Priority:** P0
-- **Milestone:** M1
-- **Dependencies:** AST-01
-- **Relative size:** M
-- **Risk:** high; Current 8127 already serves Newsroom but duplicate startup blindly binds.
-- **Reversibility:** Revert launcher preflight; retain existing explicit operator commands.
-
-**Objective:** Add ownership-aware preflight and bind-failure diagnosis for the configured endpoint.
-
-**Why now:** Current 8127 already serves Newsroom but duplicate startup blindly binds.
-
-**Files/subsystems:** `newsroom/runtime.py`; `newsroom/app.py`; new `newsroom/runtime_identity.py`; new `tests/test_runtime_identity.py`; new `tests/test_runtime_identity_recovery.py`. Existing `newsroom/config.py`, `tests/test_runtime_config.py`, `tests/test_phase16_deployment.py` and release/install contracts were inspected and exercised without schema or installer behavior changes.
-
-**Implementation approach:** Add a stable non-secret installation identity and process identity checks using root/role/release plus PID creation time. Use an OS exclusive lock, not a PID-file-only guard. Define status protocol for matching, unmanaged, foreign and unknown owners. Handle the bind race after preflight. Permit healthy verified reuse; never terminate or silently move ports.
-
-**Non-goals:** Starting a new service architecture, taking over active unmanaged trial processes, arbitrary process termination.
-
-**Tests:** Temporary sockets/processes: same instance, foreign listener, wrong root, stale PID, concurrent preflight and bind race.
-
-**Acceptance criteria:**
-
-- [x] Matching healthy instance is reused without a second API bind
-- [x] Foreign/mismatched/unknown ownership gives actionable fixed-port diagnosis and no kill
-- [x] Concurrent launches and PID reuse cannot falsely identify another process
-
-**Completion evidence:**
-
-- AST-02 was implemented on `astra/AST-02-instance-preflight`, stacked from verified AST-01 head `4dfc950c3b574cac37d0f149730dd3b97716d880` because AST-01 remains an unmerged draft dependency. Remote `main` remained at `3d7f9cfe91b34feeaa5602a5febd9077e1d87b7f` during implementation.
-- Final implementation head before plan-only closure is `b180e0f138f7ba1c544f7e91166de945515bf81c`. Schema remains 36. No migration file, provider route, budget authority, evidence/provenance rule or data model changed.
-- `runtime_identity.py` persists a stable installation UUID under the canonical runtime root, holds an OS-backed exclusive API lock, records diagnostic owner metadata with canonical root/role/release/PID/process-creation token, verifies process identity against PID reuse, and classifies endpoints as `available`, `matching`, `mismatched`, `unmanaged`, `foreign` or `unknown`.
-- `GET /api/v1/runtime/identity` exposes only bounded non-secret identity needed for local verification and is marked `Cache-Control: no-store`; filesystem paths are not returned publicly.
-- API startup now establishes ownership/preflight before applying API migrations or binding. A healthy verified same-installation/same-release API returns a successful reuse result without a second Uvicorn bind. A matching HTTP identity without the expected OS lock is treated as unknown rather than trusted.
-- Different-root Newsroom, unmanaged Newsroom, unrelated foreign listeners and unverifiable/ambiguous listeners all fail on the configured fixed endpoint with recovery guidance. No diagnostic path terminates a process or silently chooses another port.
-- Concurrent same-root launches converge through the OS lock plus a bounded reconciliation window. A discovered edge where the first lock holder can die before publishing a usable API was corrected: the waiting launcher may take the released OS lock and proceed, but only after actually owning it. No infinite retry loop was introduced.
-- A post-preflight Uvicorn bind failure is diagnosed through the same ownership-aware fixed-port path, covering the bind race without fallback port selection.
-- Packaged release identity remains supported: the larger installed `release-manifest.json` uses a separate bounded reader rather than weakening the small runtime-owner metadata bound. Corrupt stale owner metadata degrades to untrusted/unknown rather than crashing or being trusted.
-- Final local affected command `python -m pytest -q tests/test_runtime_identity.py tests/test_runtime_identity_recovery.py tests/test_runtime_config.py tests/test_phase16_deployment.py tests/test_api.py` passed all 22 collected tests. `python -m compileall -q newsroom tests` also passed. Local Ruff was unavailable, so no local Ruff pass is claimed.
-- Hosted GitHub Actions run `34082005737` at implementation head `b180e0f138f7ba1c544f7e91166de945515bf81c` passed Ruff, the full backend pytest suite, frontend `npm ci`, lint, typecheck and production build.
-- Redacted managed identity example: `{"managed":true,"installation_id":"<uuid>","role":"api","release_id":"<release>","pid":"<pid>","process_creation_token":"<creation-token>"}`. Matching status reuses the owner; mismatched/unmanaged/foreign/unknown status returns fixed-port recovery guidance and explicitly performs no kill/no alternate-port action.
-- Tests used ephemeral loopback ports and temporary roots only. The active `phase29-trial/prod` runtime, its data/processes and port `8127` were not contacted or modified. No paid provider call was made and no secret/private trial artifact was read or committed.
-- Remaining qualification boundary: the Windows-specific process creation-time implementation is source/compile reviewed but was not exercised in a clean installed Windows lifecycle during AST-02. Installed Windows lifecycle qualification remains AST-05/AST-19; this does not weaken the tested ownership contract or justify claiming that later gate complete.
-- Draft PR #2 remains open, stacked on `astra/AST-01-baseline`, and is not merged.
-
-**Prompt:** [AST-02](prompts/AST-02.md).
-
-## AST-03 — Supervise existing runtime components safely
-
-- **ID:** AST-03
-- **Status:** DONE
-- **Priority:** P0
-- **Milestone:** M1
-- **Dependencies:** AST-02
-- **Relative size:** M
-- **Risk:** high; Port checks alone do not ensure processing or prevent child divergence.
-- **Reversibility:** Disable new supervisor in isolated install and use existing commands; no data rollback.
-
-**Objective:** Own one API, worker and scheduler with bounded startup, shutdown and recovery.
-
-**Why now:** Port checks alone do not ensure processing or prevent child divergence.
-
-**Files/subsystems:** `newsroom/runtime.py`; new `newsroom/runtime_managed.py`; new `newsroom/runtime_supervisor.py`; new `newsroom/job_lease.py`; `newsroom/worker.py`; new `tests/test_runtime_supervisor.py`; new `tests/test_worker_lease.py`. Existing scheduler/job/runtime-identity/Phase 7/Phase 16 contracts were exercised without schema or provider changes.
-
-**Implementation approach:** Keep the existing three child entry points and place one small per-runtime supervisor around them. Use one root/release/endpoint manifest, OS-backed per-role ownership locks, PID-creation-token verification, heartbeats, token-bound stop controls, all-role preflight, bounded child restart/backoff, and cooperative writer drain. Managed migrations are owned by the supervisor only when every component lock is free. Preserve AST-02 endpoint/no-kill invariants. Renew a running Job lease only while the same worker still owns the synchronous handler.
-
-**Non-goals:** Replacing durable jobs, distributed workers, task queue rewrite, forced termination of unmanaged processes, AST-04 browser controls or AST-05 installer/shortcut work.
-
-**Tests:** Subprocess crash/restart, supervisor crash with children alive, long handler beyond lease, cancellation, stale heartbeat, unmanaged component, graceful drain and bounded restart exhaustion.
-
-**Acceptance criteria:**
-
-- [x] One owned child per required role survives repeated/concurrent launches
-- [x] Stop/restart drains or reports deadline safely and never duplicates downstream work or uncertain paid calls
-- [x] Failure/restart bounds and long-handler lease safety have explicit test evidence
-
-**Completion evidence:**
-
-- AST-03 was implemented on `astra/AST-03-supervisor`, stacked from AST-02 closure head `db5d94bc6ed531d130bdc853e54474f403425fc6` because AST-01/02 remain verified unmerged draft dependencies. Implementation head before plan-only closure is `6c2b17edf83f3ea72401b1b2291c48748b8977cd`; schema remains 36.
-- `RuntimeSupervisor` owns/reconciles one API, worker and scheduler for one installation/root/release/endpoint manifest. Each managed role uses an OS-backed lock plus installation/root/release/PID/process-creation identity and a fresh heartbeat. A second supervisor converges on the verified existing supervisor/children rather than spawning duplicates.
-- Actual subprocess evidence kills the supervisor process while its three children remain alive, then starts a replacement supervisor and asserts exact child PID reconciliation. Repeated launch likewise retains the same three child PIDs, giving one verified owner per required role.
-- Startup preflights all roles before spawning missing siblings. A stale, ambiguous or verified unmanaged component blocks managed startup rather than causing a partial new child set. No path treats stale metadata as permission to kill or take over a process.
-- Child crash recovery is per-role and bounded. A missing owned child restarts with capped exponential backoff; healthy siblings keep their PIDs. After the configured retry cap, status becomes `restart_exhausted` rather than looping forever.
-- Stop/restart requests are written only for verified `supervisor_managed` owners and bind the target PID plus process-creation token. Shutdown stops scheduler/worker first, waits for a bounded drain, then stops API cooperatively through Uvicorn's exit flag. An unmanaged/ambiguous role is reported, not terminated. A busy managed writer that exceeds the deadline is reported as remaining rather than force-killed.
-- Normal managed migration ownership moves to the supervisor only when all three component locks are free. A replacement supervisor reconciling active same-release children performs no migration write. Advanced/direct commands remain available and are marked unmanaged relative to supervisor authority.
-- The existing 120-second running-job lease had a demonstrated supervision risk: synchronous handlers did not renew it. AST-03 adds bounded periodic renewal while the same `worker_id` still owns the running Job. Renewal stops before durable completion; if ownership is lost, the original worker does not write a competing terminal outcome.
-- Long-work/cancellation evidence uses a one-second lease with a handler running beyond the original expiry. Recovery does not create a second attempt while renewal is active; cancellation remains durable and the worker does not overwrite it. No paid provider is invoked, so uncertain paid work is not synthetically retried or relabeled.
-- Lifecycle state evidence: `healthy` → reuse verified owner; `missing` → start/restart within bounds; `stale`/`ambiguous`/`unmanaged` → degraded/no duplicate/no kill; supervisor loss with healthy children → reconcile exact owners; restart cap reached → `restart_exhausted`; drain deadline with active writer → report remaining role and keep API up rather than force termination.
-- Local isolated command `python -m pytest -q tests/test_runtime_supervisor.py tests/test_worker_lease.py tests/test_phase07_jobs.py tests/test_phase16_deployment.py` passed 20/20. `python -m compileall -q newsroom tests` passed. A broader local full-pytest attempt exceeded the container execution window and local Ruff was unavailable, so neither is misreported as a local pass.
-- Hosted GitHub Actions run `34088867948` at implementation head `6c2b17edf83f3ea72401b1b2291c48748b8977cd` completed successfully: full backend pytest PASS, Ruff PASS, frontend `npm ci`/lint/typecheck/production build PASS.
-- Draft PR #3 is open, draft, mergeable, stacked on `astra/AST-02-instance-preflight`, and unmerged. Plan-only closure reconciles NEXT/CURRENT_STATE/DECISIONS/STARTUP_AND_RUNTIME/TASKS; final closure-head CI is tracked on the PR rather than inferred from the implementation run.
-- Remaining qualification is explicit: clean installed-Windows lifecycle, Task Scheduler migration, sign-in/reboot/lock/wake behavior and owner-facing controls remain AST-04/05/19. This task does not claim those gates complete.
-- All tests used temporary isolated roots and fixture/ephemeral endpoints. The active `phase29-trial/prod` runtime, its data/processes/provider/budget and port `8127` were not contacted or modified. No paid call was made.
-
-**Prompt:** [AST-03](prompts/AST-03.md).
-
-## AST-04 — Expose honest component status and recovery controls
-
-- **ID:** AST-04
-- **Status:** DONE
-- **Priority:** P0
-- **Milestone:** M1
-- **Dependencies:** AST-03
-- **Relative size:** M
-- **Risk:** medium; Public liveness and browser network status do not prove worker/scheduler progress.
-- **Reversibility:** Revert UI/control routes while retaining safe supervisor operation.
-
-**Objective:** Replace misleading service/synced labels with actionable whole-app state.
-
-**Why now:** Public liveness and browser network status do not prove worker/scheduler progress.
-
-**Files/subsystems:** `newsroom/app.py`; new `newsroom/runtime_status.py`; `frontend/src/App.tsx`; `frontend/src/components/AppShell.tsx`; new `frontend/src/lib/runtime.ts`; `.github/workflows/ci.yml`; new `scripts/astra04_browser_smoke.py`; new `tests/test_runtime_status_api.py`; new `tests/test_runtime_status_frontend.py`. AST-03 `runtime_managed.py` and `runtime_supervisor.py` remain the lifecycle authority and were reused rather than duplicated.
-
-**Implementation approach:** Expose authenticated bounded runtime status and named restart/stop requests through the existing AST-03 cooperative control primitive. Poll lightweight heartbeats plus active-job counts with bounded backoff; distinguish API down, worker/scheduler degraded, idle, queued/processing, stopped and starting. Keep `/readiness` integrity scans out of frequent status polling. Keep browser network state separate and show an external launcher recovery path when API is unavailable.
-
-**Non-goals:** Arbitrary command execution, exposing root paths/PIDs/process tokens publicly, force-kill controls, random-port recovery, new general diagnostics dashboard.
-
-**Tests:** Auth/CSRF/control allowlist tests; bounded status payload; idle/queued/processing work; stale worker; browser component-down and network-only failure; stop/restart acknowledgement; isolated rendered browser states.
-
-**Acceptance criteria:**
-
-- [x] Status identifies missing/stale components and distinguishes no work from failure
-- [x] Authorized named controls work and unauthorized/CSRF-invalid calls fail
-- [x] Browser does not claim Synced based only on navigator.onLine or API liveness
-
-**Completion evidence:**
-
-- AST-04 was implemented on `astra/AST-04-status-controls`, stacked directly from verified AST-03 closure head `85f41e1e3c80eba3eb65407c57433f1fa34dbde9`. The corrected implementation head before plan-only closure is `371ff0e24d72f1f0de72eb7f08ff8d1a6c74a659`; schema remains 36 and no migration was added.
-- Authenticated `GET /api/v1/runtime/status` reuses AST-03 supervisor/component ownership and heartbeat state and adds only queued/running Job counts. It is `Cache-Control: no-store`; the public payload excludes runtime root, PID and process-creation token. The heavier `/readiness` database-integrity check is not part of ordinary polling.
-- Authenticated, CSRF-protected `POST /api/v1/runtime/control` has a strict Pydantic allowlist: `restart_api`, `restart_worker`, `restart_scheduler`, `stop_newsroom`. Invalid arbitrary actions fail validation; unavailable/unmanaged targets fail closed. A restart cooperatively stops one verified managed child and AST-03 remains responsible for bounded restart/backoff. Stop targets the verified supervisor so writer-drain ordering remains scheduler/worker before API. No force-kill or arbitrary PID/command path was introduced.
-- Control acknowledgement returns HTTP 202 with an explicit `restarting` or `stopping` transition before the cooperative stop primitive is dispatched as background work, so a Stop Newsroom request can be acknowledged before the API closes.
-- `App.tsx` no longer calls `/health` for service truth and `AppShell.tsx` no longer renders `Synced`. The browser polls `/runtime/status` every five seconds when healthy and backs failures off from 3 seconds to a bounded 30 seconds. `navigator.onLine` remains a separately labeled browser-network signal and an immediate retry trigger, never a health conclusion.
-- Owner-facing states include `Ready · idle`, `Work queued`, `Processing`, `Needs attention`, `Starting`, `Stopping`, `Stopped` and `Service unavailable`. When the API is unavailable/stopped, the UI explains that browser network availability does not prove the local service is running and points to the installed Newsroom launcher.
-- Focused local verification before push passed 20/20 across the new API/status/frontend-contract tests and affected auth/API behavior. Frontend TypeScript no-emit also passed. Local Vite production bundling was not claimed because the supplied `node_modules` was Windows-shaped; clean Ubuntu CI remained the build authority.
-- First hosted implementation run `34147352639` at `ad5b38a5e3732ec34fa3fe20995c24f5fe30a393` passed backend pytest, Ruff and the frontend build/smoke mechanically, but browser artifact `10028137244` failed human visual review because the expanded recovery panel escaped the narrow sidebar and overlapped Settings content. The task remained open; that artifact is retained as failed visual evidence rather than called acceptance.
-- The recovery panel was contained within the scrollable sidebar without a new design system or general dashboard. Corrected implementation head `371ff0e24d72f1f0de72eb7f08ff8d1a6c74a659` then passed hosted run `34147588347`: full backend pytest PASS, Ruff PASS, frontend `npm ci`/lint/typecheck/production build PASS, isolated browser smoke PASS and artifact upload PASS.
-- Corrected browser artifact `10028215213`, digest `sha256:2720fce46a269e67dcc4c1d08fef021b6f034dd71b06b1c18790cc4d6606f8d6`, contains `01-idle.png`, `02-worker-stale.png`, `03-api-unavailable.png` and a manifest. Human visual review accepted all three: idle is compact/truthful; stale worker shows `Needs attention`, the stale role and all four named controls without overlap; API unavailable separates browser-network availability from local API failure and shows launcher recovery guidance.
-- The browser-evidence harness binds only an ephemeral `127.0.0.1` fixture port and contains no `8127` default; its manifest records `trial_contacted=false`. The active `phase29-trial/prod` runtime, data/processes/provider/budget and port `8127` were not contacted or modified. No paid provider call was made.
-- Remaining qualification boundary: AST-04 does not create or qualify the installed Windows one-click launcher, sign-in/reboot/lock/wake behavior or legacy Task Scheduler migration. Those remain AST-05/AST-19 and are not inferred from mocked browser evidence.
-- Draft PR #4 remains open, draft, mergeable, stacked on `astra/AST-03-supervisor`, and unmerged.
-
-**Prompt:** [AST-04](prompts/AST-04.md).
-
-## AST-05 — Ship one Start Newsroom entry point
-
-- **ID:** AST-05
-- **Status:** READY
-- **Priority:** P0
-- **Milestone:** M1
-- **Dependencies:** AST-04
-- **Relative size:** M
-- **Risk:** high; The existing installer generates three launchers and three independent tasks.
-- **Reversibility:** Remove only the new installation's registration/shortcut; preserve runtime and existing legacy configuration.
-
-**Objective:** Make normal launch and reboot/sign-in recovery require no terminal commands.
-
-**Why now:** The existing installer generates three launchers and three independent tasks.
-
-**Files/subsystems:** scripts/phase16_windows_deploy.ps1; newsroom/release.py; newsroom/runtime.py; docs/OPERATIONS_RUNBOOK.md; tests/test_phase16_deployment.py.
-
-**Implementation approach:** Generate one obvious shortcut/hidden launcher invoking the supervisor and opening the product. Register only that authority at user sign-in with same-user identity. Namespace install tasks; detect legacy tasks and provide a reviewed migration action without silently disabling unrelated tasks. Document browser-close/background and pre-login limitations.
-
-**Non-goals:** Tray framework, Windows service, pre-login monitoring guarantee, production task changes during tests.
-
-**Tests:** Clean temporary Windows installation; Start Newsroom special acceptance including reboot/sign-in, duplicate launch, foreign port and locked/wake states.
-
-**Acceptance criteria:**
-
-- [ ] One shortcut starts all components and opens the product
-- [ ] Repeated launch, browser close and reboot/sign-in behave as documented with one authority
-- [ ] Legacy installation handling is explicit and no unrelated scheduled tasks/processes are altered
-
-**Completion evidence:** Not yet executed. Required: Installed artifact identity, Windows qualification checklist and redacted task/process evidence. Record actual HEAD/artifact, changed files, commands with exit results, manual checks and remaining limitations here upon completion.
-
-**Prompt:** [AST-05](prompts/AST-05.md).
+- **Outcome / why it matters:** Qualify the existing Start Newsroom launcher. See the mapped user gap in FEATURE_GAP_ANALYSIS and milestone in COMPLETION_ROADMAP.
+- **Dependencies:** AST-01, AST-02, AST-03, AST-04
+- **Exact scope / files:** scripts/phase16_windows_deploy.ps1; scripts/astra05_windows_smoke.ps1; newsroom/runtime_identity.py; tests/test_phase16_windows_launcher_contract.py; plan/astra/TASKS.md
+- **Implementation approach:** Start from the inspected AST-05 stack, reconcile newer changes and existing qualification evidence. Run the existing smoke only in disposable Windows install/runtime/task namespaces after auditing harness cleanup and legacy task probes. Repair only a reproduced launcher defect, one cause at a time; do not rebuild supervisor/status features. Record exact artifact, launcher exit behavior and supported lifecycle evidence.
+- **Acceptance criteria:** One shortcut reuses matching runtime and exits success; foreign owner/port produces actionable no-kill diagnosis; isolated installed duplicate/sign-in/wake/browser-closed/recovery matrix passes or remains explicitly open without a DONE claim.
+- **Tests / verification:** Existing launcher contract and affected runtime tests; isolated Windows smoke; actual supported sign-in/wake and installed browser evidence, with human-only checks recorded as pending.
+- **Model:** TIER 3; reasoning high.
+- **Prompt filename:** [prompts/AST-05-qualify-existing-launcher.md](prompts/AST-05-qualify-existing-launcher.md)
+- **Non-goals, invariants, browser evidence, rollback, cost and stop condition:** inherited in full from Contract inherited by every future task above.
+- **Completion evidence:** Automated engineering acceptance passed at integrated head `18c5ee8bdf56a44218af4ecd6d7e8d9ead68f8c0` in CI run 34412730096 attempt 2: full backend exit 0, focused Windows suite exit 0 with one documented POSIX-only skip, and installed Windows lifecycle smoke PASS. Physical reboot/sign-in and lock/sleep/wake remain pending release evidence and are not claimed by hosted CI.
 
 ## AST-06 — Create typed public AI configuration metadata
 
-- **ID:** AST-06
 - **Status:** NOT_STARTED
-- **Priority:** P0
-- **Milestone:** M2
-- **Dependencies:** AST-05
-- **Relative size:** M
-- **Risk:** medium; Generic settings plus environment capture cannot support coherent provider management.
-- **Reversibility:** Disable routes/use local; do not down-migrate a populated DB; restore verified backup only when deliberately needed.
-
-**Objective:** Establish the canonical non-secret connection/capability configuration service.
-
-**Why now:** Generic settings plus environment capture cannot support coherent provider management.
-
-**Files/subsystems:** newsroom/migrations.py; newsroom/domain.py; newsroom/domain_api.py; newsroom/article_analysis.py; tests/test_phase21_article_analysis.py.
-
-**Implementation approach:** Implement additive metadata/routes/generation schema from AI_PROVIDER_SETTINGS; allocate current next migration after rechecking ledger. Create a typed service with optimistic revision control, supported-capability validation and no secret storage. Retain one existing budget switch and local defaults.
-
-**Non-goals:** Credential persistence, provider calls, remote support for all capability interfaces.
-
-**Tests:** Fresh/upgrade schema tests, invalid metadata and secret URL rejection, stale revision, local default and metadata export policy.
-
-**Acceptance criteria:**
-
-- [ ] Only public bounded metadata and opaque references persist
-- [ ] Unsupported routes/stale updates fail deterministically; local is default
-- [ ] Schema-36 upgrade preserves existing data and history
-
-**Completion evidence:** Not yet executed. Required: Migration/contract tests and reviewed schema diff. Record actual HEAD/artifact, changed files, commands with exit results, manual checks and remaining limitations here upon completion.
-
-**Prompt:** [AST-06](prompts/AST-06.md).
+- **Outcome / why it matters:** Create typed public AI configuration metadata. See the mapped user gap in FEATURE_GAP_ANALYSIS and milestone in COMPLETION_ROADMAP.
+- **Dependencies:** AST-27
+- **Exact scope / files:** newsroom/migrations.py; newsroom/domain.py; newsroom/domain_api.py; newsroom/article_analysis.py; tests/test_phase21_article_analysis.py.
+- **Implementation approach:** Implement additive metadata/routes/generation schema from AI_PROVIDER_SETTINGS; allocate current next migration after rechecking ledger. Create a typed service with optimistic revision control, supported-capability validation and no secret storage. Retain one existing budget switch and local defaults.
+- **Acceptance criteria:** Only public bounded metadata and opaque references persist; Unsupported routes/stale updates fail deterministically; local is default; Schema-36 upgrade preserves existing data and history.
+- **Tests / verification:** Fresh/upgrade schema tests, invalid metadata and secret URL rejection, stale revision, local default and metadata export policy.
+- **Model:** TIER 3; reasoning high.
+- **Prompt filename:** Not generated: outside the six-task horizon. Generate `prompts/AST-06-<bounded-title>.md` after dependencies land; retained old template (if any) is historical only.
+- **Non-goals, invariants, browser evidence, rollback, cost and stop condition:** inherited in full from Contract inherited by every future task above.
+- **Completion evidence:** Not executed by this rebaseline. AST-05 has implementation on the unmerged stack but incomplete qualification; all other records describe future work or explicit external gates.
 
 ## AST-07 — Store credentials in an approved operating-system vault
 
-- **ID:** AST-07
 - **Status:** NOT_STARTED
-- **Priority:** P0
-- **Milestone:** M2
+- **Outcome / why it matters:** Store credentials in an approved operating-system vault. See the mapped user gap in FEATURE_GAP_ANALYSIS and milestone in COMPLETION_ROADMAP.
 - **Dependencies:** AST-06
-- **Relative size:** M
-- **Risk:** high; Metadata needs a real secret boundary before any provider controls can be safe.
-- **Reversibility:** Disable provider and remove only task-created vault entries; preserve public metadata/history.
-
-**Objective:** Implement write-only credential lifecycle without keys in SQLite, backups or responses.
-
-**Why now:** Metadata needs a real secret boundary before any provider controls can be safe.
-
-**Files/subsystems:** pyproject.toml; newsroom/domain_api.py; newsroom/operations.py; newsroom/article_analysis.py; AI metadata service introduced by AST-06.
-
-**Implementation approach:** Add reviewed keyring dependency and explicit approved platform backend selection. Implement versioned credential set/rotate/read/delete through one narrow interface; same-owner namespace, two-store failure compensation, disabled-before-delete behavior and truthful removal failures. Fake store for CI; fail closed with unsupported backend. Mask model/request representations and validation errors.
-
-**Non-goals:** Plaintext fallback, encrypted SQLite credentials, exposing stored keys, modifying existing user credentials.
-
-**Tests:** Sentinel tests through response/validation/log/telemetry/DB/full-backup/logical-export/build; store failures, rotation rollback, locked/unavailable backend; disposable Windows same-user integration.
-
-**Acceptance criteria:**
-
-- [ ] Sentinel exists only in submitted request/process memory and OS vault, never persisted diagnostic/export surfaces
-- [ ] Save/rotation/deletion failures preserve a truthful recoverable configuration
-- [ ] Windows owner access works; non-Windows approved backend or local-only behavior is explicit
-
-**Completion evidence:** Not yet executed. Required: Secret-leak test matrix and disposable vault integration results without secret contents. Record actual HEAD/artifact, changed files, commands with exit results, manual checks and remaining limitations here upon completion.
-
-**Prompt:** [AST-07](prompts/AST-07.md).
+- **Exact scope / files:** pyproject.toml; newsroom/domain_api.py; newsroom/operations.py; newsroom/article_analysis.py; AI metadata service introduced by AST-06.
+- **Implementation approach:** Add reviewed keyring dependency and explicit approved platform backend selection. Implement versioned credential set/rotate/read/delete through one narrow interface; same-owner namespace, two-store failure compensation, disabled-before-delete behavior and truthful removal failures. Fake store for CI; fail closed with unsupported backend. Mask model/request representations and validation errors.
+- **Acceptance criteria:** Sentinel exists only in submitted request/process memory and OS vault, never persisted diagnostic/export surfaces; Save/rotation/deletion failures preserve a truthful recoverable configuration; Windows owner access works; non-Windows approved backend or local-only behavior is explicit.
+- **Tests / verification:** Sentinel tests through response/validation/log/telemetry/DB/full-backup/logical-export/build; store failures, rotation rollback, locked/unavailable backend; disposable Windows same-user integration.
+- **Model:** TIER 3; reasoning high.
+- **Prompt filename:** Not generated: outside the six-task horizon. Generate `prompts/AST-07-<bounded-title>.md` after dependencies land; retained old template (if any) is historical only.
+- **Non-goals, invariants, browser evidence, rollback, cost and stop condition:** inherited in full from Contract inherited by every future task above.
+- **Completion evidence:** Not executed by this rebaseline. AST-05 has implementation on the unmerged stack but incomplete qualification; all other records describe future work or explicit external gates.
 
 ## AST-08 — Make paid admission durable across processes and reloads
 
-- **ID:** AST-08
 - **Status:** NOT_STARTED
-- **Priority:** P0
-- **Milestone:** M2
+- **Outcome / why it matters:** Make paid admission durable across processes and reloads. See the mapped user gap in FEATURE_GAP_ANALYSIS and milestone in COMPLETION_ROADMAP.
 - **Dependencies:** AST-07
-- **Relative size:** M
-- **Risk:** high; Router-local counters reset across instances; new operations must not bypass existing durable analysis protections.
-- **Reversibility:** Route local and retain ledger/reservations; never erase uncertain paid history.
-
-**Objective:** Use one durable budget authority for production and explicit connection tests.
-
-**Why now:** Router-local counters reset across instances; new operations must not bypass existing durable analysis protections.
-
-**Files/subsystems:** newsroom/jobs.py; newsroom/ai.py; newsroom/article_analysis.py; tests/test_phase07_jobs.py; tests/test_phase21h_hardening.py.
-
-**Implementation approach:** Extend existing BudgetService reservations narrowly for connection-test work and supported paid capabilities. Preserve analysis idempotency, uncertain-call state and blocked-is-zero accounting. Recheck paid permission/config generation at admission, bound concurrent calls, keep estimated cost distinct from actual billing and account for configured SDK retry limits.
-
-**Non-goals:** Replacing budget ledger, fabricated billing accuracy, automatic retry of uncertain remote work.
-
-**Tests:** Concurrent API/worker admission, restart/reset, disable race, failed/uncertain/blocked calls, explicit test allowance, global/per-work exhaustion.
-
-**Acceptance criteria:**
-
-- [ ] Concurrent/restarted clients cannot overspend the configured reservation limits
-- [ ] Blocked calls count zero; sent/uncertain calls remain conservatively accounted
-- [ ] Test-connection permission does not enable background paid routing
-
-**Completion evidence:** Not yet executed. Required: Concurrency and cost-ledger regression results. Record actual HEAD/artifact, changed files, commands with exit results, manual checks and remaining limitations here upon completion.
-
-**Prompt:** [AST-08](prompts/AST-08.md).
+- **Exact scope / files:** newsroom/jobs.py; newsroom/ai.py; newsroom/article_analysis.py; tests/test_phase07_jobs.py; tests/test_phase21h_hardening.py.
+- **Implementation approach:** Extend existing BudgetService reservations narrowly for connection-test work and supported paid capabilities. Preserve analysis idempotency, uncertain-call state and blocked-is-zero accounting. Recheck paid permission/config generation at admission, bound concurrent calls, keep estimated cost distinct from actual billing and account for configured SDK retry limits.
+- **Acceptance criteria:** Concurrent/restarted clients cannot overspend the configured reservation limits; Blocked calls count zero; sent/uncertain calls remain conservatively accounted; Test-connection permission does not enable background paid routing.
+- **Tests / verification:** Concurrent API/worker admission, restart/reset, disable race, failed/uncertain/blocked calls, explicit test allowance, global/per-work exhaustion.
+- **Model:** TIER 3; reasoning high.
+- **Prompt filename:** Not generated: outside the six-task horizon. Generate `prompts/AST-08-<bounded-title>.md` after dependencies land; retained old template (if any) is historical only.
+- **Non-goals, invariants, browser evidence, rollback, cost and stop condition:** inherited in full from Contract inherited by every future task above.
+- **Completion evidence:** Not executed by this rebaseline. AST-05 has implementation on the unmerged stack but incomplete qualification; all other records describe future work or explicit external gates.
 
 ## AST-09 — Resolve provider configuration at operation boundaries
 
-- **ID:** AST-09
 - **Status:** NOT_STARTED
-- **Priority:** P0
-- **Milestone:** M2
+- **Outcome / why it matters:** Resolve provider configuration at operation boundaries. See the mapped user gap in FEATURE_GAP_ANALYSIS and milestone in COMPLETION_ROADMAP.
 - **Dependencies:** AST-08
-- **Relative size:** M
-- **Risk:** high; A Settings save must affect execution without stale environment-only constructors.
-- **Reversibility:** Select local in metadata; preserve generation/history and old analysis identities.
-
-**Objective:** Make actual workers and API capabilities consume the same versioned authority.
-
-**Why now:** A Settings save must affect execution without stale environment-only constructors.
-
-**Files/subsystems:** newsroom/runtime.py; newsroom/article_analysis.py; newsroom/document_processing.py; newsroom/domain_api.py; newsroom/intelligent_monitoring.py.
-
-**Implementation approach:** Implement immutable config snapshots resolved at new operation boundaries, lazy client lifecycle and effective generation telemetry. Route Article Analysis through shared metadata/vault. Keep unsupported capabilities explicitly local through the same resolver. Add explicit legacy environment import/source labeling and managed-config precedence; disable/removal must not resurrect env providers.
-
-**Non-goals:** Changing frozen eval contracts, remote relevance/entailment, replaying historical analysis under a new identity silently.
-
-**Tests:** Edit while worker alive, in-flight pinning, provider disable/delete, environment precedence, local fallback identity and restart persistence.
-
-**Acceptance criteria:**
-
-- [ ] Next work uses saved generation without restarting while in-flight work keeps its identity
-- [ ] All product construction paths report supported local/remote authority coherently
-- [ ] Disable/remove falls back safely and no legacy environment variable re-enables the provider
-
-**Completion evidence:** Not yet executed. Required: Multi-process configuration-generation tests and effective-route records. Record actual HEAD/artifact, changed files, commands with exit results, manual checks and remaining limitations here upon completion.
-
-**Prompt:** [AST-09](prompts/AST-09.md).
+- **Exact scope / files:** newsroom/runtime.py; newsroom/article_analysis.py; newsroom/document_processing.py; newsroom/domain_api.py; newsroom/intelligent_monitoring.py.
+- **Implementation approach:** Implement immutable config snapshots resolved at new operation boundaries, lazy client lifecycle and effective generation telemetry. Route Article Analysis through shared metadata/vault. Keep unsupported capabilities explicitly local through the same resolver. Add explicit legacy environment import/source labeling and managed-config precedence; disable/removal must not resurrect env providers.
+- **Acceptance criteria:** Next work uses saved generation without restarting while in-flight work keeps its identity; All product construction paths report supported local/remote authority coherently; Disable/remove falls back safely and no legacy environment variable re-enables the provider.
+- **Tests / verification:** Edit while worker alive, in-flight pinning, provider disable/delete, environment precedence, local fallback identity and restart persistence.
+- **Model:** TIER 3; reasoning high.
+- **Prompt filename:** Not generated: outside the six-task horizon. Generate `prompts/AST-09-<bounded-title>.md` after dependencies land; retained old template (if any) is historical only.
+- **Non-goals, invariants, browser evidence, rollback, cost and stop condition:** inherited in full from Contract inherited by every future task above.
+- **Completion evidence:** Not executed by this rebaseline. AST-05 has implementation on the unmerged stack but incomplete qualification; all other records describe future work or explicit external gates.
 
 ## AST-10 — Add bounded provider validation and safe API contracts
 
-- **ID:** AST-10
 - **Status:** NOT_STARTED
-- **Priority:** P0
-- **Milestone:** M2
+- **Outcome / why it matters:** Add bounded provider validation and safe API contracts. See the mapped user gap in FEATURE_GAP_ANALYSIS and milestone in COMPLETION_ROADMAP.
 - **Dependencies:** AST-09
-- **Relative size:** M
-- **Risk:** high; Users need useful failure diagnosis before background spending.
-- **Reversibility:** Disable test endpoint/route; keep metadata and credentials intact.
-
-**Objective:** Provide explicit safe connection tests and provider-management APIs.
-
-**Why now:** Users need useful failure diagnosis before background spending.
-
-**Files/subsystems:** newsroom/domain_api.py; newsroom/app.py; newsroom/article_analysis.py; provider service from AST-06/09; tests/test_phase21_article_analysis.py.
-
-**Implementation approach:** Implement proposed CRUD/credential/test/routes/status APIs with auth/CSRF/no-store, safe errors and optimistic revision. Test actual configured structured-output capability using a bounded explicit reservation; no auto-test. Validate HTTPS/loopback keyless rules, redirects, DNS/destination and host-change secret handling. Manual model entry remains sufficient.
-
-**Non-goals:** Automatic paid checks, arbitrary provider headers, broad endpoint compatibility claims or new SDKs.
-
-**Tests:** Fake transport for auth failure, timeout, malformed JSON/schema, host redirect/credential forwarding, unsupported model, stale validation revision, test cap exhaustion.
-
-**Acceptance criteria:**
-
-- [ ] Explicit test yields a safe revision-bound capability result without raw provider body
-- [ ] Credential cannot be forwarded to a changed/unapproved destination
-- [ ] No provider call occurs on listing, edit, startup or typing; test never enables background spend
-
-**Completion evidence:** Not yet executed. Required: API security/error matrix and mock request counts. Record actual HEAD/artifact, changed files, commands with exit results, manual checks and remaining limitations here upon completion.
-
-**Prompt:** [AST-10](prompts/AST-10.md).
+- **Exact scope / files:** newsroom/domain_api.py; newsroom/app.py; newsroom/article_analysis.py; provider service from AST-06/09; tests/test_phase21_article_analysis.py.
+- **Implementation approach:** Implement proposed CRUD/credential/test/routes/status APIs with auth/CSRF/no-store, safe errors and optimistic revision. Test actual configured structured-output capability using a bounded explicit reservation; no auto-test. Validate HTTPS/loopback keyless rules, redirects, DNS/destination and host-change secret handling. Manual model entry remains sufficient.
+- **Acceptance criteria:** Explicit test yields a safe revision-bound capability result without raw provider body; Credential cannot be forwarded to a changed/unapproved destination; No provider call occurs on listing, edit, startup or typing; test never enables background spend.
+- **Tests / verification:** Fake transport for auth failure, timeout, malformed JSON/schema, host redirect/credential forwarding, unsupported model, stale validation revision, test cap exhaustion.
+- **Model:** TIER 3; reasoning high.
+- **Prompt filename:** Not generated: outside the six-task horizon. Generate `prompts/AST-10-<bounded-title>.md` after dependencies land; retained old template (if any) is historical only.
+- **Non-goals, invariants, browser evidence, rollback, cost and stop condition:** inherited in full from Contract inherited by every future task above.
+- **Completion evidence:** Not executed by this rebaseline. AST-05 has implementation on the unmerged stack but incomplete qualification; all other records describe future work or explicit external gates.
 
 ## AST-11 — Build functional AI Providers and cost settings
 
-- **ID:** AST-11
 - **Status:** NOT_STARTED
-- **Priority:** P0
-- **Milestone:** M2
+- **Outcome / why it matters:** Build functional AI Providers and cost settings. See the mapped user gap in FEATURE_GAP_ANALYSIS and milestone in COMPLETION_ROADMAP.
 - **Dependencies:** AST-10
-- **Relative size:** M
-- **Risk:** medium; The current Settings renders raw rows and budget JSON without configuration controls.
-- **Reversibility:** Revert UI only; metadata/vault remain manageable through authenticated API.
+- **Exact scope / files:** frontend/src/views/AdminViews.tsx; frontend/src/lib/api.ts; frontend/src/lib/types.ts; frontend/src/styles.css; newsroom/domain_api.py.
+- **Implementation approach:** Add named Settings sections and provider Add/Edit/Test/Enable/Disable/Model/Remove/Set-default controls. Show fixed mask/configured flag, offline explanation, supported capability, active model/generation, validation and failure, paid switch and typed existing budget controls. Clear secret after submit and label estimated usage honestly. Split a component only if needed for contained readability.
+- **Acceptance criteria:** Full special acceptance succeeds with a fake provider and actual configured worker path; No raw secret is returned/persisted in browser state/storage after submission; User can see offline/active model/paid/budget/failure/reload state and recover without terminal.
+- **Tests / verification:** Browser fake-provider Add AI Provider acceptance, bad inputs, stale edits, failed removal, screen-reader labels, save/refresh and next worker operation.
+- **Model:** TIER 2; reasoning medium.
+- **Prompt filename:** Not generated: outside the six-task horizon. Generate `prompts/AST-11-<bounded-title>.md` after dependencies land; retained old template (if any) is historical only.
+- **Non-goals, invariants, browser evidence, rollback, cost and stop condition:** inherited in full from Contract inherited by every future task above.
+- **Completion evidence:** Not executed by this rebaseline. AST-05 has implementation on the unmerged stack but incomplete qualification; all other records describe future work or explicit external gates.
+
+## AST-16 — Observe under the unchanged Phase 29 protocol
 
-**Objective:** Let the owner configure and understand real Article Analysis routing in Settings.
-
-**Why now:** The current Settings renders raw rows and budget JSON without configuration controls.
-
-**Files/subsystems:** frontend/src/views/AdminViews.tsx; frontend/src/lib/api.ts; frontend/src/lib/types.ts; frontend/src/styles.css; newsroom/domain_api.py.
-
-**Implementation approach:** Add named Settings sections and provider Add/Edit/Test/Enable/Disable/Model/Remove/Set-default controls. Show fixed mask/configured flag, offline explanation, supported capability, active model/generation, validation and failure, paid switch and typed existing budget controls. Clear secret after submit and label estimated usage honestly. Split a component only if needed for contained readability.
-
-**Non-goals:** Brand catalog, remote Ask promise, browser secret storage, redesigning all Settings.
-
-**Tests:** Browser fake-provider Add AI Provider acceptance, bad inputs, stale edits, failed removal, screen-reader labels, save/refresh and next worker operation.
-
-**Acceptance criteria:**
-
-- [ ] Full special acceptance succeeds with a fake provider and actual configured worker path
-- [ ] No raw secret is returned/persisted in browser state/storage after submission
-- [ ] User can see offline/active model/paid/budget/failure/reload state and recover without terminal
-
-**Completion evidence:** Not yet executed. Required: Journey screenshots, API/worker identity proof and sentinel audit; live paid test remains separately authorized. Record actual HEAD/artifact, changed files, commands with exit results, manual checks and remaining limitations here upon completion.
-
-**Prompt:** [AST-11](prompts/AST-11.md).
-
-## AST-12 — Make first Watch and scoped use possible without IDs
-
-- **ID:** AST-12
-- **Status:** NOT_STARTED
-- **Priority:** P1
-- **Milestone:** M3
-- **Dependencies:** AST-11
-- **Relative size:** M
-- **Risk:** medium; Current Watch and scoped Ask forms require canonical IDs; empty collection views cannot create needed records.
-- **Reversibility:** Revert workflow UI; preserve user-created canonical records and existing APIs.
-
-**Objective:** Complete the first-value path for a normal user.
-
-**Why now:** Current Watch and scoped Ask forms require canonical IDs; empty collection views cannot create needed records.
-
-**Files/subsystems:** frontend/src/views/WatchManagementView.tsx; frontend/src/views/AdminViews.tsx; frontend/src/views/AskView.tsx; frontend/src/components/AuthView.tsx; newsroom/domain_api.py.
-
-**Implementation approach:** Use existing APIs for named topic creation/selection, reviewed source entry and simple cadence presets within Watch setup. Provide contextual or named scope selection for Ask. Detect setup availability safely, replace trial-specific defaults and API jargon. Keep advanced policy/IDs available deliberately, prevent unsupported direct Monitor creation.
-
-**Non-goals:** Changing approved trial sources, auto-approving candidates, new Monitor target adapters, generic onboarding platform.
-
-**Tests:** Fresh DB browser user journey: setup → named topic/source/Watch → due fixture → Home/evidence → scoped Ask/refusal; edit/disable persistence and invalid input.
-
-**Acceptance criteria:**
-
-- [ ] First Watch requires no copied IDs or terminal/API calls by user
-- [ ] Source review/pinned scope and offline zero-spend behavior are preserved
-- [ ] Contextual Ask and empty states give a working next action without inventing evidence
-
-**Completion evidence:** Not yet executed. Required: Fresh-install journey evidence and integration checks. Record actual HEAD/artifact, changed files, commands with exit results, manual checks and remaining limitations here upon completion.
-
-**Prompt:** [AST-12](prompts/AST-12.md).
-
-## AST-13 — Finish dark-theme and responsive control behavior
-
-- **ID:** AST-13
-- **Status:** NOT_STARTED
-- **Priority:** P1
-- **Milestone:** M3
-- **Dependencies:** AST-12
-- **Relative size:** M
-- **Risk:** medium; Phone Settings has overlapping buttons inside two-column cards; literal colors impede consistent verification.
-- **Reversibility:** Revert stylesheet/component changes; no schema/data changes.
-
-**Objective:** Keep the dark design and fix confirmed mobile/contrast/accessibility gaps.
-
-**Why now:** Phone Settings has overlapping buttons inside two-column cards; literal colors impede consistent verification.
-
-**Files/subsystems:** frontend/src/styles.css; frontend/src/components/ViewPrimitives.tsx; frontend/src/components/AppShell.tsx; frontend/public/manifest.webmanifest; frontend/index.html.
-
-**Implementation approach:** Consolidate semantic colors within existing CSS; collapse generic content grids and wrap controls at small widths; align chrome/offline surfaces. Measure contrast and fix failing pairs, focus/overlay behavior, reduced motion and zoom. Preserve dark-only default and existing design.
-
-**Non-goals:** Light palette, redesign, CSS framework/dependency or decorative animation.
-
-**Tests:** Dark-experience matrix at 320/390/768/1440px, 200% zoom, populated/error/loading/offline states, keyboard and component-bound checks.
-
-**Acceptance criteria:**
-
-- [ ] No overlapping/clipped controls including Settings buttons and no unexpected bright surfaces
-- [ ] Text/focus/control contrast and keyboard checks have measured evidence
-- [ ] All main views and PWA chrome retain coherent dark presentation
-
-**Completion evidence:** Not yet executed. Required: Before/after screenshots, contrast/focus checklist and frontend build. Record actual HEAD/artifact, changed files, commands with exit results, manual checks and remaining limitations here upon completion.
-
-**Prompt:** [AST-13](prompts/AST-13.md).
-
-## AST-14 — Wrap verified backup and recovery in owner controls
-
-- **ID:** AST-14
-- **Status:** NOT_STARTED
-- **Priority:** P1
-- **Milestone:** M3
-- **Dependencies:** AST-13
-- **Relative size:** M
-- **Risk:** high; Existing SQLite operations are useful but require manual runtime/process handling.
-- **Reversibility:** Keep prior verified database/artifact; rollback only using supported recovery, not live file copies.
-
-**Objective:** Provide safe backup/recovery/update preparation without remembered commands.
-
-**Why now:** Existing SQLite operations are useful but require manual runtime/process handling.
-
-**Files/subsystems:** newsroom/operations.py; newsroom/cli.py; newsroom/domain_api.py; frontend/src/views/AdminViews.tsx; docs/RECOVERY_RUNBOOK.md.
-
-**Implementation approach:** Expose named backup/status/diagnostic actions using existing verified operations and managed lifecycle. Keep restore/update as clearly reviewed workflows with exact target/backup identity and stopped writers; stage before replacement and retain failure evidence. Diagnostics use explicit non-secret allowlists. Reuse release verification rather than an auto-updater service.
-
-**Non-goals:** Unattended destructive restore, arbitrary filesystem API, exporting credentials or raw private content in support bundles.
-
-**Tests:** Temporary populated DB backup/restore equality/integrity, corrupt backup, disk/write failure, active-writer refusal, secret exclusion, UI recovery state.
-
-**Acceptance criteria:**
-
-- [ ] Owner can create and verify a backup through a clear action
-- [ ] Restore/update preparation proves target identity, stopped writers and safe failure preservation
-- [ ] Diagnostic/export output excludes credentials and gives actionable status
-
-**Completion evidence:** Not yet executed. Required: Temporary installation recovery report, integrity results and UI screenshots. Record actual HEAD/artifact, changed files, commands with exit results, manual checks and remaining limitations here upon completion.
-
-**Prompt:** [AST-14](prompts/AST-14.md).
-
-## AST-15 — Verify representative content-to-value paths
-
-- **ID:** AST-15
-- **Status:** NOT_STARTED
-- **Priority:** P1
-- **Milestone:** M3
-- **Dependencies:** AST-14
-- **Relative size:** M
-- **Risk:** high; A3 broad-page path deferred and metadata-only path succeeded; neither proves normal article usefulness.
-- **Reversibility:** Revert measured code fix; fixture report remains; no active trial changes.
-
-**Objective:** Separate working pipeline plumbing from useful article/Story yield and fix only proven blockers.
-
-**Why now:** A3 broad-page path deferred and metadata-only path succeeded; neither proves normal article usefulness.
-
-**Files/subsystems:** newsroom/acquisition.py; newsroom/ai.py; newsroom/automatic_story_resolution.py; tests/test_phase21_article_analysis.py; docs/reviews/PHASE_29_PIPELINE_REHEARSAL.md.
-
-**Implementation approach:** Build a small lawful sanitized fixture set representing article body, navigation-heavy page, feed metadata, unchanged content and blocked source. Record input quality and stage outcomes through production handlers. Reproduce before any minimal content extraction/local candidate repair; preserve exact-span hashes and conservative resolution. If no proven defect, record evidence and propose a separate bounded follow-up rather than tuning thresholds.
-
-**Non-goals:** Relaxing retrieval saturation, changing frozen trial sources/corpus, claiming metadata as full body, bypassing source restrictions.
-
-**Tests:** Representative acquisition → relevance → analysis → promotion → Story/report/alert where qualified; duplicate replay, false-merge and no-evidence negative cases.
-
-**Acceptance criteria:**
-
-- [ ] Body/metadata/blocked/deferred outcomes are explicit with nonzero reviewed denominators
-- [ ] Any repair has a reproduction and no trust-boundary regression
-- [ ] At least a qualifying article-body fixture completes end to end; real usefulness remains a human gate
-
-**Completion evidence:** Not yet executed. Required: Per-fixture stage/quality report, regression results and remaining unknowns. Record actual HEAD/artifact, changed files, commands with exit results, manual checks and remaining limitations here upon completion.
-
-**Prompt:** [AST-15](prompts/AST-15.md).
-
-## AST-16 — Continue the approved observation with honest usefulness evidence
-
-- **ID:** AST-16
-- **Status:** NOT_STARTED
-- **Priority:** P1
-- **Milestone:** M4
-- **Dependencies:** AST-01
-- **Relative size:** S
-- **Risk:** medium; Short checkpoint has insufficient active time/events; calendar duration is a real dependency.
-- **Reversibility:** Observation cannot be undone; preserve original records and append corrections.
-
-**Objective:** Complete the already-started observation protocol without resetting or inventing results.
-
-**Why now:** Short checkpoint has insufficient active time/events; calendar duration is a real dependency.
-
-**Files/subsystems:** docs/DOGFOOD_CONTRACT.md; docs/reviews/PHASE_29_OBSERVATION_PROTOCOL.md; docs/reviews/PHASE_29_WEEK_1_CHECKPOINT.md; docs/reviews/PHASE_29_HUMAN_USEFULNESS_LOG_TEMPLATE.md; docs/reviews/PHASE_29_UAP_PROSPECTIVE_EXPERIMENT_V1.md.
-
-**Implementation approach:** Use existing approved Watch and frozen boundary; collect safe aggregates and request actual owner usefulness entries. Track active time, no-event intervals, source/content quality, missed changes and repairs. Keep raw data/logs outside git. Log any authorized runtime/config change as a segment. Extend when volume/time is insufficient.
-
-**Non-goals:** Starting an automation without request, manufacturing usefulness ratings, redefining criteria or changing sources/provider silently.
-
-**Tests:** Validate observation interval arithmetic, provenance and event denominators; follow existing protocol check commands without modifying data unnecessarily.
-
-**Acceptance criteria:**
-
-- [ ] Required minimum window and eligible observation evidence exist, or task stays explicitly incomplete
-- [ ] Human usefulness log is real and changes/outages are accounted for
-- [ ] Private data stays outside repository and safe summary cites frozen identities
-
-**Completion evidence:** Not yet executed. Required: Dated safe observation report, private evidence references and human review completion. Record actual HEAD/artifact, changed files, commands with exit results, manual checks and remaining limitations here upon completion.
-
-**Prompt:** [AST-16](prompts/AST-16.md).
-
-## AST-17 — Execute the frozen comparison under its exact contract
-
-- **ID:** AST-17
 - **Status:** BLOCKED
-- **Priority:** P1
-- **Milestone:** M4
+- **Outcome / why it matters:** Observe under the unchanged Phase 29 protocol. See the mapped user gap in FEATURE_GAP_ANALYSIS and milestone in COMPLETION_ROADMAP.
 - **Dependencies:** AST-01
-- **Relative size:** M
-- **Risk:** high; Contract validation passed but is not a comparative result; paid permission and eligible data are missing gates.
-- **Reversibility:** Spending cannot be reversed; invalid runs marked invalid and retained, never relabeled.
+- **Exact scope / files:** docs/reviews/PHASE_29_OBSERVATION_PROTOCOL.md; docs/reviews/PHASE_29_WEEK_1_CHECKPOINT.md
+- **Implementation approach:** Retain the existing approved observation only when separately requested. Read permitted evidence, obtain real human usefulness input and report sufficient/insufficient observation without resetting the clock.
+- **Acceptance criteria:** Recorded duration/event volume and human usefulness meet unchanged protocol or explicitly remain insufficient; no fabricated scores or silently changed sources/provider/artifact.
+- **Tests / verification:** Protocol/date/event denominators and human-input audit.
+- **Model:** TIER 2; reasoning medium.
+- **Prompt filename:** Not generated: outside the six-task horizon. Generate `prompts/AST-16-<bounded-title>.md` after dependencies land; retained old template (if any) is historical only.
+- **Non-goals, invariants, browser evidence, rollback, cost and stop condition:** inherited in full from Contract inherited by every future task above.
+- **Completion evidence:** Not executed by this rebaseline. AST-05 has implementation on the unmerged stack but incomplete qualification; all other records describe future work or explicit external gates.
 
-**Objective:** Obtain valid Full-vs-Lite evidence separate from the prospective trial.
+## AST-17 — Execute the frozen comparison only with eligible authorized inputs
 
-**Why now:** Contract validation passed but is not a comparative result; paid permission and eligible data are missing gates.
+- **Status:** BLOCKED
+- **Outcome / why it matters:** Execute the frozen comparison only with eligible authorized inputs. See the mapped user gap in FEATURE_GAP_ANALYSIS and milestone in COMPLETION_ROADMAP.
+- **Dependencies:** AST-01
+- **Exact scope / files:** docs/reviews/PHASE_29_EVALUATION_PROTOCOL.md; docs/reviews/PHASE_29_DECISION_RULE.md; newsroom/evals/phase29_protocol.py
+- **Implementation approach:** Preserve eligible snapshot/case mapping, exact effective provider and blinded human scoring. Requires separate explicit paid authorization and evidence availability; this task is not executable from this audit.
+- **Acceptance criteria:** Exact contract and eligibility verified; actual human scores retained; missing categories/fallback/uncertain cost never reported as success.
+- **Tests / verification:** Offline eligibility and scoring arithmetic plus separately authorized actual execution.
+- **Model:** TIER 3; reasoning high.
+- **Prompt filename:** Not generated: outside the six-task horizon. Generate `prompts/AST-17-<bounded-title>.md` after dependencies land; retained old template (if any) is historical only.
+- **Non-goals, invariants, browser evidence, rollback, cost and stop condition:** inherited in full from Contract inherited by every future task above.
+- **Completion evidence:** Not executed by this rebaseline. AST-05 has implementation on the unmerged stack but incomplete qualification; all other records describe future work or explicit external gates.
 
-**Files/subsystems:** newsroom/evals/phase29_protocol.py; newsroom/evals/benchmark.py; newsroom/evals/benchmark_provider.py; docs/reviews/PHASE_29_EVALUATION_PROTOCOL.md; evals/lite/20q_contract.json.
+## AST-18 — Issue evidence-based product value and scope verdict
 
-**Implementation approach:** Prepare eligible snapshot manifest mapping every case/candidate and cutoff using the frozen protocol; verify route/model/budget. Obtain explicit paid authorization before execution, preserve blinded mapping outside git, obtain actual human scoring and report insufficient categories honestly. Historical and prospective protocols remain separate.
+- **Status:** BLOCKED
+- **Outcome / why it matters:** Issue evidence-based product value and scope verdict. See the mapped user gap in FEATURE_GAP_ANALYSIS and milestone in COMPLETION_ROADMAP.
+- **Dependencies:** AST-16, AST-17, AST-47
+- **Exact scope / files:** docs/reviews/PHASE_29_DECISION_RULE.md; plan/astra/PRODUCT_READINESS.md
+- **Implementation approach:** Apply unchanged decision rule and trust guardrails to real evidence; distinguish prospective observation, frozen comparison and improved isolated UX. An inconclusive result keeps release acceptance open.
+- **Acceptance criteria:** Verdict has attributable human/eligible evidence; missing categories are explicit; release scope and conditional extensions updated without moving thresholds.
+- **Tests / verification:** Adversarial evidence/provenance and arithmetic review.
+- **Model:** TIER A; reasoning high.
+- **Prompt filename:** Not generated: outside the six-task horizon. Generate `prompts/AST-18-<bounded-title>.md` after dependencies land; retained old template (if any) is historical only.
+- **Non-goals, invariants, browser evidence, rollback, cost and stop condition:** inherited in full from Contract inherited by every future task above.
+- **Completion evidence:** Not executed by this rebaseline. AST-05 has implementation on the unmerged stack but incomplete qualification; all other records describe future work or explicit external gates.
 
-**Non-goals:** Changing frozen question set/model/cutoff, replacing evidence with arbitrary UAP snapshot, agent self-scoring, unapproved calls.
+## AST-20 — Remove only demonstrated obsolete support entry points
 
-**Tests:** Offline contract/eligibility validation, intentional wrong model/snapshot/fallback rejection, reproducible blind-score aggregation.
-
-**Acceptance criteria:**
-
-- [ ] Each run proves eligible snapshot and exact effective contract; no hidden fallback
-- [ ] Paid execution is explicitly authorized and human blinded scores are retained
-- [ ] Results show category/guardrail evidence, cost and latency without manufacturing missing coverage
-
-**Completion evidence:** Not yet executed. Required: External snapshot/run hashes, safe report, authorization reference and scoring evidence. Record actual HEAD/artifact, changed files, commands with exit results, manual checks and remaining limitations here upon completion.
-
-**Prompt:** [AST-17](prompts/AST-17.md).
-
-## AST-18 — Issue the evidence-based product scope verdict
-
-- **ID:** AST-18
-- **Status:** NOT_STARTED
-- **Priority:** P1
-- **Milestone:** M4
-- **Dependencies:** AST-15, AST-16, AST-17
-- **Relative size:** S
-- **Risk:** medium; Engineering completion cannot settle value or commercial promise.
-- **Reversibility:** Append a new verdict if later evidence changes; preserve original decision and experiment.
-
-**Objective:** Decide what earns the daily product and whether broad expansion is justified.
-
-**Why now:** Engineering completion cannot settle value or commercial promise.
-
-**Files/subsystems:** docs/reviews/PHASE_29_DECISION_RULE.md; plan/astra/COMMERCIAL_THESIS.md; plan/astra/DELETE_DEFER_KEEP.md; observation/comparison reports from AST-16/17.
-
-**Implementation approach:** Apply unchanged three-of-five categories and trust guardrails; distinguish historical comparison, prospective observation and owner usability. Produce KEEP/SIMPLIFY/CONTEXTUALIZE/DEFER/REMOVE per feature. Explicitly decide AST-21/22 activation and release scope. Inconclusive evidence leaves value acceptance open.
-
-**Non-goals:** Inventing market evidence, moving thresholds, automatic Phase 30 or company-launch declaration.
-
-**Tests:** Audit category score arithmetic, case provenance, blind scoring, effective route and evidence gaps against preregistered rules.
-
-**Acceptance criteria:**
-
-- [ ] Verdict is linked to actual human/eligible comparative evidence
-- [ ] No trust regression or missing category is disguised as a pass
-- [ ] Release scope and conditional task statuses are explicitly updated
-
-**Completion evidence:** Not yet executed. Required: Signed-off/attributed value verdict with evidence links and task updates. Record actual HEAD/artifact, changed files, commands with exit results, manual checks and remaining limitations here upon completion.
-
-**Prompt:** [AST-18](prompts/AST-18.md).
-
-## AST-19 — Qualify the installed daily-use release candidate
-
-- **ID:** AST-19
-- **Status:** NOT_STARTED
-- **Priority:** P1
-- **Milestone:** M5
-- **Dependencies:** AST-05, AST-11, AST-12, AST-13, AST-14, AST-18
-- **Relative size:** M
-- **Risk:** high; Local tests do not qualify Windows installation, update, recovery or phone use.
-- **Reversibility:** Retain prior artifact and verified backup; roll back compatibly through managed recovery.
-
-**Objective:** Prove the selected product can be operated without engineering assistance.
-
-**Why now:** Local tests do not qualify Windows installation, update, recovery or phone use.
-
-**Files/subsystems:** scripts/phase16_windows_deploy.ps1; newsroom/release.py; docs/OPERATIONS_RUNBOOK.md; docs/RECOVERY_RUNBOOK.md; plan/astra/PRODUCT_READINESS.md.
-
-**Implementation approach:** Build a named clean artifact and qualify in isolated Windows install. Execute Start Newsroom, Add AI Provider (fake plus separately authorized live if required), Dark Experience and full local daily-use matrix. Rehearse upgrade from prior schema/artifact, rollback/recovery, phone/PWA, offline/update behavior and credentials after sign-in. Record limitations and no-go results.
-
-**Non-goals:** Publishing automatically, modifying active trial for qualification, claiming all browsers/platforms supported.
-
-**Tests:** Full applicable offline gates, installed lifecycle/credential/recovery tests, physical supported phone/PWA, end-to-end qualified evidence workflow.
-
-**Acceptance criteria:**
-
-- [ ] Daily-use checklist has release-specific evidence and no unresolved P0/P1 blocker
-- [ ] Upgrade/recovery and credential exclusion/access survive installed lifecycle
-- [ ] Phone/PWA and all special acceptance tests pass or release scope explicitly excludes unqualified promises
-
-**Completion evidence:** Not yet executed. Required: Release identity/manifests, completed acceptance report and known limitations. Record actual HEAD/artifact, changed files, commands with exit results, manual checks and remaining limitations here upon completion.
-
-**Prompt:** [AST-19](prompts/AST-19.md).
-
-## AST-20 — Remove only proven obsolete completion scaffolding
-
-- **ID:** AST-20
-- **Status:** NOT_STARTED
-- **Priority:** P2
-- **Milestone:** M5
-- **Dependencies:** AST-19
-- **Relative size:** S
-- **Risk:** medium; Phase naming is not itself a defect; only demonstrated redundant entry points should be retired.
-- **Reversibility:** Revert bounded deletion; no history/data removal.
-
-**Objective:** Reduce permanent support burden after release paths are known.
-
-**Why now:** Phase naming is not itself a defect; only demonstrated redundant entry points should be retired.
-
-**Files/subsystems:** plan/astra/DELETE_DEFER_KEEP.md; scripts/phase12_browser_smoke.py; scripts/phase12_server.py; newsroom/domain.py; README.md.
-
-**Implementation approach:** Trace callers/tests/data dependencies for each candidate in DELETE_DEFER_KEEP. Retire or guard obsolete normal-user launcher/smoke paths once replacements cover them; correct stale runtime comments. Delete only demonstrated unused code and document public compatibility impact. Keep history/eval tools and migration chains.
-
-**Non-goals:** Bulk phase rename, deleting old plans/reference code, removing evidence history/legacy accounting or unrelated cleanup.
-
-**Tests:** Reference search, affected regression tests and clean supported entry-point smoke.
-
-**Acceptance criteria:**
-
-- [ ] Each deletion has caller/data/coverage evidence
-- [ ] Normal docs expose one startup authority and no unsafe test defaults
-- [ ] Historical data/migrations/contracts remain readable and tests pass
-
-**Completion evidence:** Not yet executed. Required: Candidate-by-candidate disposition and focused diff/check results. Record actual HEAD/artifact, changed files, commands with exit results, manual checks and remaining limitations here upon completion.
-
-**Prompt:** [AST-20](prompts/AST-20.md).
-
-## AST-21 — Integrate paid Ask only if its value is demonstrated
-
-- **ID:** AST-21
 - **Status:** DEFERRED
-- **Priority:** P2
-- **Milestone:** Conditional
+- **Outcome / why it matters:** Remove only demonstrated obsolete support entry points. See the mapped user gap in FEATURE_GAP_ANALYSIS and milestone in COMPLETION_ROADMAP.
+- **Dependencies:** AST-48
+- **Exact scope / files:** plan/astra/DELETE_DEFER_KEEP.md; scripts/phase12_server.py; scripts/phase12_browser_smoke.py
+- **Implementation approach:** Apply caller/data/replacement proof per candidate; keep compatibility and historical evidence. Not a release blocker or general cleanup mandate.
+- **Acceptance criteria:** Every removal has replacement/caller proof; no user data/history/runtime invariant lost; supported entrypoints remain documented.
+- **Tests / verification:** Affected caller search/regressions and supported entrypoint smoke.
+- **Model:** TIER 2; reasoning medium.
+- **Prompt filename:** Not generated: outside the six-task horizon. Generate `prompts/AST-20-<bounded-title>.md` after dependencies land; retained old template (if any) is historical only.
+- **Non-goals, invariants, browser evidence, rollback, cost and stop condition:** inherited in full from Contract inherited by every future task above.
+- **Completion evidence:** Not executed by this rebaseline. AST-05 has implementation on the unmerged stack but incomplete qualification; all other records describe future work or explicit external gates.
+
+## AST-21 — Optionally integrate paid Ask after a value decision
+
+- **Status:** DEFERRED
+- **Outcome / why it matters:** Optionally integrate paid Ask after a value decision. See the mapped user gap in FEATURE_GAP_ANALYSIS and milestone in COMPLETION_ROADMAP.
 - **Dependencies:** AST-11, AST-18
-- **Relative size:** M
-- **Risk:** high; Remote benchmark synthesis is not a production feature; do not widen first completion scope speculatively.
-- **Reversibility:** Switch Ask route to local; preserve conversations/audit history.
+- **Exact scope / files:** newsroom/ask.py; newsroom/domain_api.py; frontend/src/views/AskView.tsx
+- **Implementation approach:** Activate only by explicit recorded scope decision. Reuse managed config, durable budgets and qualifying citations; preserve refusal, temporal scope and local fallback. Split if remote synthesis adapter architecture is unsettled.
+- **Acceptance criteria:** Explicit activation exists; every factual answer is citation-bound or qualified/refused; no hidden paid retry/fallback or benchmark contract change.
+- **Tests / verification:** Fake citation/temporal/budget/cancellation tests and browser route/failure evidence.
+- **Model:** TIER 3; reasoning high.
+- **Prompt filename:** Not generated: outside the six-task horizon. Generate `prompts/AST-21-<bounded-title>.md` after dependencies land; retained old template (if any) is historical only.
+- **Non-goals, invariants, browser evidence, rollback, cost and stop condition:** inherited in full from Contract inherited by every future task above.
+- **Completion evidence:** Not executed by this rebaseline. AST-05 has implementation on the unmerged stack but incomplete qualification; all other records describe future work or explicit external gates.
 
-**Objective:** Make normal Ask optionally use the same managed provider safely if the value verdict retains it.
+## AST-22 — Optionally run a bounded commercial pilot
 
-**Why now:** Remote benchmark synthesis is not a production feature; do not widen first completion scope speculatively.
-
-**Files/subsystems:** newsroom/ask.py; newsroom/domain_api.py; newsroom/evals/benchmark_provider.py; frontend/src/views/AskView.tsx; tests/test_phase14_ask.py.
-
-**Implementation approach:** After explicit scope activation, reuse the production config/vault/durable budget service and a reviewed compatible synthesis adapter. Bind prose/statement citations to allowed retrieved evidence, preserve no-evidence refusal/temporal scope and cancellation. Display effective local/remote model and fallback. Do not import benchmark experiment policy into product defaults.
-
-**Non-goals:** General web chat, remote entailment/relevance, ungrounded synthesis, changing frozen eval adapters.
-
-**Tests:** Unsupported citation/claim rejection, insufficient evidence, temporal reads, cancellation/uncertain billing, shared reload and budget checks; authorized live test only if requested.
-
-**Acceptance criteria:**
-
-- [ ] Normal Ask uses selected supported managed route and reports identity
-- [ ] Every generated factual statement remains bound to qualifying evidence or is rejected/qualified
-- [ ] Local/refusal fallback and cost constraints survive failures without benchmark contamination
-
-**Completion evidence:** Not yet executed. Required: Value activation decision, trust tests and product journey evidence. Record actual HEAD/artifact, changed files, commands with exit results, manual checks and remaining limitations here upon completion.
-
-**Prompt:** [AST-21](prompts/AST-21.md).
-
-## AST-22 — Run a bounded commercial pilot after value qualification
-
-- **ID:** AST-22
 - **Status:** DEFERRED
-- **Priority:** P2
-- **Milestone:** Conditional
-- **Dependencies:** AST-18, AST-19
-- **Relative size:** S
-- **Risk:** medium; No market/customer evidence currently justifies commercial infrastructure.
-- **Reversibility:** Stop enrollment/distribution; preserve user export/recovery and honor agreed data handling.
+- **Outcome / why it matters:** Optionally run a bounded commercial pilot. See the mapped user gap in FEATURE_GAP_ANALYSIS and milestone in COMPLETION_ROADMAP.
+- **Dependencies:** AST-18, AST-48
+- **Exact scope / files:** plan/astra/COMMERCIAL_THESIS.md; plan/astra/PRODUCT_READINESS.md
+- **Implementation approach:** Requires explicit owner pilot/contact/distribution authorization; measure real value/support/purchase intent with honest platform/privacy limits. No commercial infrastructure work implied.
+- **Acceptance criteria:** Authorized pilot promise and actual user evidence recorded; support/privacy constraints clear; continue/simplify/stop decision tied to evidence.
+- **Tests / verification:** Dry-run onboarding/recovery and attributable actual pilot findings when authorized.
+- **Model:** TIER A; reasoning high.
+- **Prompt filename:** Not generated: outside the six-task horizon. Generate `prompts/AST-22-<bounded-title>.md` after dependencies land; retained old template (if any) is historical only.
+- **Non-goals, invariants, browser evidence, rollback, cost and stop condition:** inherited in full from Contract inherited by every future task above.
+- **Completion evidence:** Not executed by this rebaseline. AST-05 has implementation on the unmerged stack but incomplete qualification; all other records describe future work or explicit external gates.
 
-**Objective:** Test willingness to pay and support burden with the smallest real pilot.
+## AST-23 — Create a resumable paused Watch setup contract
 
-**Why now:** No market/customer evidence currently justifies commercial infrastructure.
+- **Status:** DONE
+- **Outcome / why it matters:** Create a resumable paused Watch setup contract. See the mapped user gap in FEATURE_GAP_ANALYSIS and milestone in COMPLETION_ROADMAP.
+- **Dependencies:** AST-05
+- **Exact scope / files:** newsroom/intelligent_monitoring.py; newsroom/domain_api.py; newsroom/domain.py; tests/test_phase24_intelligent_monitoring.py
+- **Implementation approach:** Add one authenticated setup composition endpoint over existing Category/Topic/MonitoringPolicy/Watch records. Accept interest, editable name and a request identity; reuse a dedicated neutral category and create a paused Watch with discovery disabled and a per-Watch zero-paid hourly policy. Put this bounded composition in one SQLite transaction using existing validation/transaction patterns; do not call independently committing service methods inside a pretend outer transaction. Persist retry identity using the existing Watch ID if its validation allows the defined UUID form; otherwise stop for a narrowly specified schema decision. Return canonical IDs and resumed draft state. Existing APIs remain unchanged. Also persist at least one explicit user-approved primary term in topic_terms within the same transaction; Topic name/description alone is not scope. Accept an editable primary_terms list, bounded using existing term validation, with the entered interest as a visible initial suggestion rather than hidden NLP. The frontend requires user review of that term before saving.
+- **Acceptance criteria:** Fresh setup creates one valid paused Watch with no Monitors/jobs; identical retry returns the same records while changed input with same identity conflicts; failure rolls back the composition and leaves unrelated objects untouched. Created Topic scope contains the exact user-approved primary terms and is never empty; no generated synonym is implicitly approved.
+- **Tests / verification:** API auth/CSRF; blank/oversize interest; duplicate/concurrent retry; injected mid-transaction failure; phase24 lifecycle tests.
+- **Model:** TIER 3; reasoning high.
+- **Prompt filename:** [prompts/AST-23-paused-watch-contract.md](prompts/AST-23-paused-watch-contract.md)
+- **Non-goals, invariants, browser evidence, rollback, cost and stop condition:** inherited in full from Contract inherited by every future task above.
+- **Completion evidence:** DONE on the integrated accepted branch. Head `18c5ee8` preserves AST-23 base `2ab4715ff1c267d8476a88bcd997380d16976d9d` in ancestry; its backend coverage passed in CI run 34412730096 attempt 2.
 
-**Files/subsystems:** plan/astra/COMMERCIAL_THESIS.md; plan/astra/PRODUCT_READINESS.md; release acceptance from AST-19; docs/THREAT_MODEL.md; pyproject.toml.
+## AST-24 — Add Welcome and interest entry without raw IDs
 
-**Implementation approach:** After owner authorizes pilot scope, define target specialists, limited supported platform/feature promise, participant consent/data handling, purchase-intent test and support-effort log. Review distribution dependencies/licenses and source/privacy terms with appropriate expertise. Draft materials before requesting publication/contact authorization.
+- **Status:** DONE
+- **Outcome / why it matters:** Add Welcome and interest entry without raw IDs. See the mapped user gap in FEATURE_GAP_ANALYSIS and milestone in COMPLETION_ROADMAP.
+- **Dependencies:** AST-23
+- **Exact scope / files:** frontend/src/App.tsx; frontend/src/views/InboxView.tsx; frontend/src/views/WatchManagementView.tsx; frontend/src/lib/api.ts
+- **Implementation approach:** Use Watch count to show first-run Welcome and Create Watch entry. Connect interest/name form to AST-23. Retain request identity through retries; resume a selected paused Watch after reload. Existing users can add another Watch and keep all current routes. Show saved setup as paused, with next action Add Sources. No UAP default value. Show an editable primary-term field/chips seeded visibly from the entered interest; require at least one user-confirmed term for AST-23. This is manual scope review, not semantic expansion. The bounded correction gate also requires: invalidate confirmed-term approval when the interest materially changes; retain later edits separately from an immutable submitted identity/payload so retry resends the exact original request; coordinate or isolate tab drafts so storage cannot silently overwrite another tab; and qualify mobile evidence only after asserting a measured 390 CSS-pixel viewport and checking the relevant scrolled component boundaries.
+- **Acceptance criteria:** Empty workspace reaches a named paused Watch without IDs; returning workspace opens ordinary Home; request failure/retry/reload neither loses the draft identity nor creates duplicates. User-approved primary terms are visible before save and persist into nonempty monitoring scope. A changed interest cannot reuse prior approval. A retry after ambiguous/failure state resends the exact submitted identity and payload even if the editable draft changed. Cross-tab edits either coordinate revisions with an explicit conflict or remain isolated, with no silent overwrite. Mobile evidence records measured 390 CSS-pixel dimensions rather than only an outer window size. The complete backend suite has a retrievable final result; otherwise AST-24 remains unaccepted.
+- **Tests / verification:** Typecheck/build; isolated browser empty/returning/failed POST/reload; interest-change approval invalidation; exact-payload retry after edit or ambiguous completion; cross-tab draft coordination/isolation; keyboard and asserted 390 CSS-pixel viewport with scrolled-state/boundary checks; confirm server record count and retry identity; rerun the relevant focused tests and the full backend suite with retained final output. Hosted CI may supplement but cannot replace missing local evidence.
+- **Model:** TIER 2; reasoning medium.
+- **Prompt filename:** [prompts/AST-24-welcome-interest.md](prompts/AST-24-welcome-interest.md)
+- **Non-goals, invariants, browser evidence, rollback, cost and stop condition:** inherited in full from Contract inherited by every future task above.
+- **Completion evidence:** DONE on the integrated accepted branch. Head `18c5ee8` preserves corrected AST-24 head `0df1c1d39b93b47306d2093cf506599fc44888ef` in ancestry. CI run 34412730096 attempt 2 passed the AST-24 onboarding browser qualification, frontend gates and complete backend suite. Earlier failed acceptance remains historical evidence in [BACKEND_ACCEPTANCE_AND_COMPLETION_PLAN](BACKEND_ACCEPTANCE_AND_COMPLETION_PLAN.md).
 
-**Non-goals:** Unapproved outreach, fabricated pricing/traction, billing platform, multi-tenancy, enterprise features.
+## AST-25 — Add and reuse Watch Sources by name or URL
 
-**Tests:** Dry-run onboarding/recovery/support flow, dependency/distribution review, actual participant outcome/retention/payment-intent evidence when authorized.
+- **Status:** READY
+- **Outcome / why it matters:** Add and reuse Watch Sources by name or URL. See the mapped user gap in FEATURE_GAP_ANALYSIS and milestone in COMPLETION_ROADMAP.
+- **Dependencies:** AST-24
+- **Exact scope / files:** frontend/src/views/WatchManagementView.tsx; frontend/src/views/AdminViews.tsx; newsroom/domain_api.py; tests/test_phase24_intelligent_monitoring.py
+- **Implementation approach:** Expose existing Sources search/selection and manual page/feed candidate creation. Preview rationale and approve explicitly through source-candidate review; reject unsafe URLs through existing backend validation. Keep setup Watch paused so attached Monitors cannot collect early. Detach a Watch relationship without deleting a shared Source. Use existing source CRUD for names/feed edits and disclose shared impact.
+- **Acceptance criteria:** Fresh Watch can attach a usable URL/feed or named existing Source without IDs; approval/retry converges on one relationship and does not run acquisition while paused; detach preserves other Watches and Source history.
+- **Tests / verification:** Phase24 shared-source/unsafe-url/concurrent approval tests; browser manual/reuse/bad URL/empty/approval failure/retry/detach at desktop and phone.
+- **Model:** TIER 2; reasoning medium.
+- **Prompt filename:** [prompts/AST-25-manual-watch-sources.md](prompts/AST-25-manual-watch-sources.md)
+- **Non-goals, invariants, browser evidence, rollback, cost and stop condition:** inherited in full from Contract inherited by every future task above.
+- **Completion evidence:** Not executed by this rebaseline. AST-05 has implementation on the unmerged stack but incomplete qualification; all other records describe future work or explicit external gates.
 
-**Acceptance criteria:**
+## AST-26 — Expose Watch cadence as plain scheduling choices
 
-- [ ] Pilot promise and support/privacy/distribution boundaries are concrete and reviewed
-- [ ] Actual user value/purchase-intent/support evidence is distinguished from hypotheses
-- [ ] Continue/simplify/stop decision is recorded without speculative platform build
+- **Status:** NOT_STARTED
+- **Outcome / why it matters:** Expose Watch cadence as plain scheduling choices. See the mapped user gap in FEATURE_GAP_ANALYSIS and milestone in COMPLETION_ROADMAP.
+- **Dependencies:** AST-25
+- **Exact scope / files:** frontend/src/views/WatchManagementView.tsx; newsroom/monitoring.py; newsroom/domain_api.py; tests/test_phase08_monitors.py
+- **Implementation approach:** Map hourly/several-times-daily/daily/custom to existing policy bounds. Edit only the draft private policy; if a selected policy is shared, choose/create a private policy before changes. Show timezone-formatted next check and supported-channel limits. Keep paid cap zero and Watch paused until review/start. Preserve existing min/max/backoff semantics.
+- **Acceptance criteria:** Chosen cadence persists and is reflected by source Monitors; changing one Watch cannot silently alter another; out-of-range custom input and unsupported fast options give inline recovery.
+- **Tests / verification:** Policy validation/shared-policy isolation and schedule tests; browser each preset/custom/error/reload/390px.
+- **Model:** TIER 2; reasoning medium.
+- **Prompt filename:** [prompts/AST-26-watch-cadence.md](prompts/AST-26-watch-cadence.md)
+- **Non-goals, invariants, browser evidence, rollback, cost and stop condition:** inherited in full from Contract inherited by every future task above.
+- **Completion evidence:** Not executed by this rebaseline. AST-05 has implementation on the unmerged stack but incomplete qualification; all other records describe future work or explicit external gates.
 
-**Completion evidence:** Not yet executed. Required: Authorized pilot brief and actual participant findings, kept appropriately private. Record actual HEAD/artifact, changed files, commands with exit results, manual checks and remaining limitations here upon completion.
+## AST-27 — Connect review and Start to honest first-value progress
 
-**Prompt:** [AST-22](prompts/AST-22.md).
+- **Status:** NOT_STARTED
+- **Outcome / why it matters:** Connect review and Start to honest first-value progress. See the mapped user gap in FEATURE_GAP_ANALYSIS and milestone in COMPLETION_ROADMAP.
+- **Dependencies:** AST-26
+- **Exact scope / files:** frontend/src/views/WatchManagementView.tsx; frontend/src/views/InboxView.tsx; newsroom/domain_api.py; tests/test_phase24_intelligent_monitoring.py
+- **Implementation approach:** Review saved interest, approved vocabulary, sources, cadence and zero-paid mode. Start via existing resume/enable semantics with at least one approved usable Source. Observe health and durable processing status with bounded polling/backoff. Distinguish scheduled/collecting/processing/no-change/irrelevant/deferred/ready/error and link to existing Documents or Stories. Do not label Start as immediate successful collection or call scheduler internals from UI.
+- **Acceptance criteria:** Repeated Start does not create duplicate Monitors/jobs; real persisted outcomes drive visible state and actual last-attempt time; source error/no-evidence/unavailable API gives usable retry/refinement guidance while preserving setup.
+- **Tests / verification:** Fixture-backed worker/status outcomes; browser review/back/edit/start/double-submit/no-change/error/recovery and 390px; no network acquisition in tests.
+- **Model:** TIER 2; reasoning medium.
+- **Prompt filename:** [prompts/AST-27-start-first-value.md](prompts/AST-27-start-first-value.md)
+- **Non-goals, invariants, browser evidence, rollback, cost and stop condition:** inherited in full from Contract inherited by every future task above.
+- **Completion evidence:** Not executed by this rebaseline. AST-05 has implementation on the unmerged stack but incomplete qualification; all other records describe future work or explicit external gates.
+
+## AST-28 — Implement bounded semantic vocabulary capability
+
+- **Status:** NOT_STARTED
+- **Outcome / why it matters:** Implement bounded semantic vocabulary capability. See the mapped user gap in FEATURE_GAP_ANALYSIS and milestone in COMPLETION_ROADMAP.
+- **Dependencies:** AST-11, AST-27
+- **Exact scope / files:** newsroom/ai.py; newsroom/intelligent_monitoring.py; newsroom/runtime.py; tests/test_phase24_intelligent_monitoring.py
+- **Implementation approach:** Reuse VocabularyProvider and the managed capability resolver; add a structured compatible adapter only for vocabulary. User-initiated suggestions use durable admission and approved context, bounded by existing caps. Retain deterministic/manual path, rejection memory and immutable acquired scope. No domain-specific vocabulary hardcoding.
+- **Acceptance criteria:** Fake provider supplies useful varied synonyms/acronyms/aliases with rationale without automatic approval; malformed/paid-disabled/uncertain responses preserve configuration; unrelated ambiguous meanings can be rejected and stay rejected.
+- **Tests / verification:** UAP variants including historical aerial wording, company/person homonyms and unrelated niche fixtures; request count/budget/validation/approval-scope regressions.
+- **Model:** TIER 3; reasoning high.
+- **Prompt filename:** Not generated: outside the six-task horizon. Generate `prompts/AST-28-<bounded-title>.md` after dependencies land; retained old template (if any) is historical only.
+- **Non-goals, invariants, browser evidence, rollback, cost and stop condition:** inherited in full from Contract inherited by every future task above.
+- **Completion evidence:** Not executed by this rebaseline. AST-05 has implementation on the unmerged stack but incomplete qualification; all other records describe future work or explicit external gates.
+
+## AST-29 — Make terminology review understandable in setup
+
+- **Status:** NOT_STARTED
+- **Outcome / why it matters:** Make terminology review understandable in setup. See the mapped user gap in FEATURE_GAP_ANALYSIS and milestone in COMPLETION_ROADMAP.
+- **Dependencies:** AST-28
+- **Exact scope / files:** frontend/src/views/WatchManagementView.tsx; frontend/src/lib/types.ts
+- **Implementation approach:** Insert reviewed terminology step with editable kinds, expansion links, exclusions, rationale and route/cost explanation. Manual entry is always available. Suggestions never appear as enabled until server review succeeds.
+- **Acceptance criteria:** Approve/edit/reject changes only intended terms; unavailable/disabled provider explains manual fallback; approved versus suggested scope is visibly distinct after reload.
+- **Tests / verification:** Browser fake suggestions/empty/error/edit/rejection/reload/keyboard/390px; scope payload inspection.
+- **Model:** TIER 2; reasoning medium.
+- **Prompt filename:** Not generated: outside the six-task horizon. Generate `prompts/AST-29-<bounded-title>.md` after dependencies land; retained old template (if any) is historical only.
+- **Non-goals, invariants, browser evidence, rollback, cost and stop condition:** inherited in full from Contract inherited by every future task above.
+- **Completion evidence:** Not executed by this rebaseline. AST-05 has implementation on the unmerged stack but incomplete qualification; all other records describe future work or explicit external gates.
+
+## AST-30 — Decide and freeze fresh-corpus source recommendation contract
+
+- **Status:** NOT_STARTED
+- **Outcome / why it matters:** Decide and freeze fresh-corpus source recommendation contract. See the mapped user gap in FEATURE_GAP_ANALYSIS and milestone in COMPLETION_ROADMAP.
+- **Dependencies:** AST-29
+- **Exact scope / files:** plan/astra/DECISIONS.md; plan/astra/AI_PROVIDER_SETTINGS.md; newsroom/intelligent_monitoring.py; newsroom/acquisition.py
+- **Implementation approach:** Tier A reviews a bounded candidate-suggestion capability using the managed compatible adapter, followed by existing safe URL/feed validation. Separate model-proposed unverified URLs from corpus-derived observed URLs. Decide whether an external search adapter is actually necessary using empty-corpus fixtures; if so record one provider/transport/cost contract and human preference only if materially needed. Deliver a small schema/API contract and refined AST-31 prompt before coding; do not promise exhaustive web discovery.
+- **Acceptance criteria:** Candidate provenance, reason, validation and rejection semantics are fixed; no automatic source attachment or evidence creation; AST-31 has no unresolved provider/schema decisions.
+- **Tests / verification:** Design review against empty UAP/person/event cases, SSRF limits, source approval and zero-paid fallback; no paid calls.
+- **Model:** TIER A; reasoning high.
+- **Prompt filename:** Not generated: outside the six-task horizon. Generate `prompts/AST-30-<bounded-title>.md` after dependencies land; retained old template (if any) is historical only.
+- **Non-goals, invariants, browser evidence, rollback, cost and stop condition:** inherited in full from Contract inherited by every future task above.
+- **Completion evidence:** Not executed by this rebaseline. AST-05 has implementation on the unmerged stack but incomplete qualification; all other records describe future work or explicit external gates.
+
+## AST-31 — Implement bounded fresh-corpus source candidates
+
+- **Status:** NOT_STARTED
+- **Outcome / why it matters:** Implement bounded fresh-corpus source candidates. See the mapped user gap in FEATURE_GAP_ANALYSIS and milestone in COMPLETION_ROADMAP.
+- **Dependencies:** AST-30
+- **Exact scope / files:** newsroom/intelligent_monitoring.py; newsroom/ai.py; newsroom/domain_api.py; tests/test_phase24_intelligent_monitoring.py
+- **Implementation approach:** Implement exactly AST-30 approved adapter/contract using existing candidate persistence and durable limits. Model suggestions are unverified until safe transport validation; enrich accepted candidates with rationale, discovery provenance and limitations. Preserve corpus discovery and rejection/dedupe. Stop if adapter requires another provider or unanticipated schema.
+- **Acceptance criteria:** Empty corpus can return bounded explained candidates through a fake supported capability; bad/unsafe/hallucinated URLs never activate collection or become Evidence; paid-disabled mode returns honest manual/corpus fallback.
+- **Tests / verification:** Fake discovery, invalid URL/redirect/private destinations, repeated/rejected candidates, budget/cancellation and no mutation before approval.
+- **Model:** TIER 3; reasoning high.
+- **Prompt filename:** Not generated: outside the six-task horizon. Generate `prompts/AST-31-<bounded-title>.md` after dependencies land; retained old template (if any) is historical only.
+- **Non-goals, invariants, browser evidence, rollback, cost and stop condition:** inherited in full from Contract inherited by every future task above.
+- **Completion evidence:** Not executed by this rebaseline. AST-05 has implementation on the unmerged stack but incomplete qualification; all other records describe future work or explicit external gates.
+
+## AST-32 — Connect recommended Sources and source health to setup
+
+- **Status:** NOT_STARTED
+- **Outcome / why it matters:** Connect recommended Sources and source health to setup. See the mapped user gap in FEATURE_GAP_ANALYSIS and milestone in COMPLETION_ROADMAP.
+- **Dependencies:** AST-31, AST-25
+- **Exact scope / files:** frontend/src/views/WatchManagementView.tsx; frontend/src/views/AdminViews.tsx
+- **Implementation approach:** Add recommended/search/manual/existing entry choices with rationale/provenance and unverified status. Keep user approval explicit. Show page/feed health, last failure and retry guidance; edits affect only intended relationship or disclose shared Source change.
+- **Acceptance criteria:** Empty-corpus user sees working manual fallback; recommendation approval is understandable and deduped; failed source is actionable without hiding successful siblings.
+- **Tests / verification:** Browser populated/empty/unsafe/unavailable discovery and partial-source failure at desktop/390px; network responses and approved-source counts.
+- **Model:** TIER 2; reasoning medium.
+- **Prompt filename:** Not generated: outside the six-task horizon. Generate `prompts/AST-32-<bounded-title>.md` after dependencies land; retained old template (if any) is historical only.
+- **Non-goals, invariants, browser evidence, rollback, cost and stop condition:** inherited in full from Contract inherited by every future task above.
+- **Completion evidence:** Not executed by this rebaseline. AST-05 has implementation on the unmerged stack but incomplete qualification; all other records describe future work or explicit external gates.
+
+## AST-33 — Persist and query the returning-user review boundary
+
+- **Status:** NOT_STARTED
+- **Outcome / why it matters:** Persist and query the returning-user review boundary. See the mapped user gap in FEATURE_GAP_ANALYSIS and milestone in COMPLETION_ROADMAP.
+- **Dependencies:** AST-27
+- **Exact scope / files:** newsroom/attention.py; newsroom/domain_api.py; newsroom/temporal.py; tests/test_phase29_temporal.py
+- **Implementation approach:** Add an explicit owner review cursor using existing suitable user-scoped persistence; if none fits, propose one additive migration before coding. Query bounded changes since cursor without mutating Story review/attention automatically. Separate collection success time from user visit time and publication time.
+- **Acceptance criteria:** Returning after days gets bounded stable range/new changes; viewing does not silently mark all items seen; future timestamps, late ingestion and timezone changes cannot omit newly known evidence.
+- **Tests / verification:** Cursor boundary/late arrival/pagination/repeat visit tests using injected time; no frozen eval changes.
+- **Model:** TIER 3; reasoning high.
+- **Prompt filename:** Not generated: outside the six-task horizon. Generate `prompts/AST-33-<bounded-title>.md` after dependencies land; retained old template (if any) is historical only.
+- **Non-goals, invariants, browser evidence, rollback, cost and stop condition:** inherited in full from Contract inherited by every future task above.
+- **Completion evidence:** Not executed by this rebaseline. AST-05 has implementation on the unmerged stack but incomplete qualification; all other records describe future work or explicit external gates.
+
+## AST-34 — Build Watch overview and since-visit Home
+
+- **Status:** NOT_STARTED
+- **Outcome / why it matters:** Build Watch overview and since-visit Home. See the mapped user gap in FEATURE_GAP_ANALYSIS and milestone in COMPLETION_ROADMAP.
+- **Dependencies:** AST-33
+- **Exact scope / files:** frontend/src/views/InboxView.tsx; frontend/src/views/WatchManagementView.tsx; frontend/src/views/DocumentView.tsx
+- **Implementation approach:** Render named Watch context, actual freshness, since-visit range and high/low priority changes using AST-33. Link analyzed relevant material even if Story assignment deferred. Provide More/pagination instead of silently losing rows.
+- **Acceptance criteria:** No-Watch Home has clear setup action; populated Home shows actual collection time and complete paged changes; relevant-but-deferred analysis is reachable without fabricated Story.
+- **Tests / verification:** Browser new/returning/quiet/late updates/deferred/failure/phone and >100-item pagination fixtures.
+- **Model:** TIER 2; reasoning medium.
+- **Prompt filename:** Not generated: outside the six-task horizon. Generate `prompts/AST-34-<bounded-title>.md` after dependencies land; retained old template (if any) is historical only.
+- **Non-goals, invariants, browser evidence, rollback, cost and stop condition:** inherited in full from Contract inherited by every future task above.
+- **Completion evidence:** Not executed by this rebaseline. AST-05 has implementation on the unmerged stack but incomplete qualification; all other records describe future work or explicit external gates.
+
+## AST-35 — Connect summary through Claim to exact source Evidence
+
+- **Status:** NOT_STARTED
+- **Outcome / why it matters:** Connect summary through Claim to exact source Evidence. See the mapped user gap in FEATURE_GAP_ANALYSIS and milestone in COMPLETION_ROADMAP.
+- **Dependencies:** AST-34
+- **Exact scope / files:** frontend/src/views/StoryEvidenceView.tsx; frontend/src/components/EvidenceView.tsx; frontend/src/views/DocumentView.tsx; frontend/src/lib/types.ts
+- **Implementation approach:** Add contextual selection/deep links through existing IDs without raw-ID entry. Show accepted/pending status, source/version/exact excerpt, analysis identity and dependent-source caveats. Preserve return context and missing legacy artifact explanation.
+- **Acceptance criteria:** A factual summary link opens its Claim and correct exact source version; reload/back preserves context; unsupported/pending/legacy states never look verified true.
+- **Tests / verification:** Browser known Claim/span/source chain, stale/deleted identifier, missing artifact and phone/keyboard; phase22 trust tests.
+- **Model:** TIER 2; reasoning medium.
+- **Prompt filename:** Not generated: outside the six-task horizon. Generate `prompts/AST-35-<bounded-title>.md` after dependencies land; retained old template (if any) is historical only.
+- **Non-goals, invariants, browser evidence, rollback, cost and stop condition:** inherited in full from Contract inherited by every future task above.
+- **Completion evidence:** Not executed by this rebaseline. AST-05 has implementation on the unmerged stack but incomplete qualification; all other records describe future work or explicit external gates.
+
+## AST-36 — Create and read Living Reports from named Watch context
+
+- **Status:** NOT_STARTED
+- **Outcome / why it matters:** Create and read Living Reports from named Watch context. See the mapped user gap in FEATURE_GAP_ANALYSIS and milestone in COMPLETION_ROADMAP.
+- **Dependencies:** AST-35
+- **Exact scope / files:** frontend/src/views/ReportsView.tsx; frontend/src/views/WatchManagementView.tsx; newsroom/reports.py; tests/test_phase11_reports_briefings_alerts.py
+- **Implementation approach:** Map selected Watch to its existing supported canonical target; reuse LivingReportService uniqueness and automatic revisions. Offer create/view without target IDs, show latest successful revision and provenance; no new Watch report type unless reviewed.
+- **Acceptance criteria:** Watch opens one correct report without ID input; repeat create converges; no accepted evidence or failed generation preserves last revision and truthful status.
+- **Tests / verification:** Report target/duplicate/no-evidence tests; browser create/read/revision/error/390px.
+- **Model:** TIER 2; reasoning medium.
+- **Prompt filename:** Not generated: outside the six-task horizon. Generate `prompts/AST-36-<bounded-title>.md` after dependencies land; retained old template (if any) is historical only.
+- **Non-goals, invariants, browser evidence, rollback, cost and stop condition:** inherited in full from Contract inherited by every future task above.
+- **Completion evidence:** Not executed by this rebaseline. AST-05 has implementation on the unmerged stack but incomplete qualification; all other records describe future work or explicit external gates.
+
+## AST-37 — Add durable user-selected briefing schedules
+
+- **Status:** NOT_STARTED
+- **Outcome / why it matters:** Add durable user-selected briefing schedules. See the mapped user gap in FEATURE_GAP_ANALYSIS and milestone in COMPLETION_ROADMAP.
+- **Dependencies:** AST-36
+- **Exact scope / files:** newsroom/reports.py; newsroom/jobs.py; newsroom/scheduler.py; newsroom/migrations.py; tests/test_phase11_reports_briefings_alerts.py
+- **Implementation approach:** Introduce one narrowly reviewed additive schedule record for owner timezone, cadence, scope and next due time; route due work through existing durable job/coalescing pattern and BriefingService. Preserve report revision triggers separately. Prepare exact migration and job identity before implementation review.
+- **Acceptance criteria:** Due cadence generates one briefing across concurrent ticks/retry; timezone/DST and missed interval catch-up are bounded; paused schedule and zero-paid defaults prevent unwanted work.
+- **Tests / verification:** Concurrent scheduler/replay/DST/wake/disable tests and schema36 upgrade/backup preservation.
+- **Model:** TIER 3; reasoning high.
+- **Prompt filename:** Not generated: outside the six-task horizon. Generate `prompts/AST-37-<bounded-title>.md` after dependencies land; retained old template (if any) is historical only.
+- **Non-goals, invariants, browser evidence, rollback, cost and stop condition:** inherited in full from Contract inherited by every future task above.
+- **Completion evidence:** Not executed by this rebaseline. AST-05 has implementation on the unmerged stack but incomplete qualification; all other records describe future work or explicit external gates.
+
+## AST-38 — Expose briefing preferences and first intelligence choices
+
+- **Status:** NOT_STARTED
+- **Outcome / why it matters:** Expose briefing preferences and first intelligence choices. See the mapped user gap in FEATURE_GAP_ANALYSIS and milestone in COMPLETION_ROADMAP.
+- **Dependencies:** AST-37
+- **Exact scope / files:** frontend/src/views/ReportsView.tsx; frontend/src/views/WatchManagementView.tsx; frontend/src/views/InboxView.tsx
+- **Implementation approach:** Add named periodic briefing cadence/timezone controls and read latest saved briefing; introduce onboarding intelligence preferences for report/briefing with actual supported semantics. Keep acquisition cadence distinct.
+- **Acceptance criteria:** Chosen preference persists and scheduled output appears without manual refresh; disabled/no-output schedule gives clear state; timezone and next delivery are visible.
+- **Tests / verification:** Browser schedule/disable/reload/latest/empty/error/timezone/mobile with fake clock and job fixtures.
+- **Model:** TIER 2; reasoning medium.
+- **Prompt filename:** Not generated: outside the six-task horizon. Generate `prompts/AST-38-<bounded-title>.md` after dependencies land; retained old template (if any) is historical only.
+- **Non-goals, invariants, browser evidence, rollback, cost and stop condition:** inherited in full from Contract inherited by every future task above.
+- **Completion evidence:** Not executed by this rebaseline. AST-05 has implementation on the unmerged stack but incomplete qualification; all other records describe future work or explicit external gates.
+
+## AST-39 — Make alert triage scoped and complete
+
+- **Status:** NOT_STARTED
+- **Outcome / why it matters:** Make alert triage scoped and complete. See the mapped user gap in FEATURE_GAP_ANALYSIS and milestone in COMPLETION_ROADMAP.
+- **Dependencies:** AST-38
+- **Exact scope / files:** frontend/src/views/AlertsView.tsx; newsroom/reports.py; tests/test_phase11_reports_briefings_alerts.py
+- **Implementation approach:** Replace hardcoded-only 0.85 view with Important/All/history and explicit Watch-derived supported target scope and thresholds. Reuse rule update, dedupe, acknowledge and attention decisions; show cause links via AST-35. Do not alter importance computation.
+- **Acceptance criteria:** Rule-matching 0.5–0.85 alerts are reachable; scope/threshold edits persist; denial of browser notifications retains in-app history without duplicate alerts.
+- **Tests / verification:** Threshold/scope/dedupe tests; browser all/important/history/acknowledge/permission-denied/390px.
+- **Model:** TIER 2; reasoning medium.
+- **Prompt filename:** Not generated: outside the six-task horizon. Generate `prompts/AST-39-<bounded-title>.md` after dependencies land; retained old template (if any) is historical only.
+- **Non-goals, invariants, browser evidence, rollback, cost and stop condition:** inherited in full from Contract inherited by every future task above.
+- **Completion evidence:** Not executed by this rebaseline. AST-05 has implementation on the unmerged stack but incomplete qualification; all other records describe future work or explicit external gates.
+
+## AST-40 — Expose Story changes, disagreements and correction preview
+
+- **Status:** NOT_STARTED
+- **Outcome / why it matters:** Expose Story changes, disagreements and correction preview. See the mapped user gap in FEATURE_GAP_ANALYSIS and milestone in COMPLETION_ROADMAP.
+- **Dependencies:** AST-35
+- **Exact scope / files:** frontend/src/views/StoryEvidenceView.tsx; newsroom/story_corrections.py; tests/test_phase27_story_correction_api.py
+- **Implementation approach:** Use existing evolution/correction APIs for a chronological change view and explicit merge/split preview. Explain new Claims, source disagreement and lineage, with known-at versus source dates. Keep all evidence immutable and cancellation harmless.
+- **Acceptance criteria:** User can identify new/conflicting Claims and evidence; correction preview names affected records and cancel mutates nothing; confirmed corrections retain audit/lineage and safe replay.
+- **Tests / verification:** Browser disagreement/time/preview/cancel/error/reload/phone; existing correction/reconciliation tests.
+- **Model:** TIER 2; reasoning medium.
+- **Prompt filename:** Not generated: outside the six-task horizon. Generate `prompts/AST-40-<bounded-title>.md` after dependencies land; retained old template (if any) is historical only.
+- **Non-goals, invariants, browser evidence, rollback, cost and stop condition:** inherited in full from Contract inherited by every future task above.
+- **Completion evidence:** Not executed by this rebaseline. AST-05 has implementation on the unmerged stack but incomplete qualification; all other records describe future work or explicit external gates.
+
+## AST-41 — Support question-first Watches and contextual research
+
+- **Status:** NOT_STARTED
+- **Outcome / why it matters:** Support question-first Watches and contextual research. See the mapped user gap in FEATURE_GAP_ANALYSIS and milestone in COMPLETION_ROADMAP.
+- **Dependencies:** AST-29, AST-35
+- **Exact scope / files:** frontend/src/views/WatchManagementView.tsx; frontend/src/views/AdminViews.tsx; newsroom/domain_api.py; tests/test_phase25_autonomous_research.py
+- **Implementation approach:** Extend AST-23 setup for a named existing/new Research Question only. Connect the Watch to question/gap detail and bounded pursuit. Reuse existing assessment and hypothesis/Claim separation. Person and event setup belong to AST-52/53.
+- **Acceptance criteria:** Question entry creates/selects the correct canonical need without IDs and retries safely; unsuccessful pursuit leaves the gap open; question/hypothesis material never becomes an accepted Claim without existing evidence verification.
+- **Tests / verification:** API question-target/retry tests; browser question/gap/no-findings/failure/phone; phase25 approval chain.
+- **Model:** TIER 3; reasoning high.
+- **Prompt filename:** Not generated: outside the six-task horizon. Generate `prompts/AST-41-<bounded-title>.md` after dependencies land; retained old template (if any) is historical only.
+- **Non-goals, invariants, browser evidence, rollback, cost and stop condition:** inherited in full from Contract inherited by every future task above.
+- **Completion evidence:** Not executed by this rebaseline. AST-05 has implementation on the unmerged stack but incomplete qualification; all other records describe future work or explicit external gates.
+
+## AST-42 — Make search, saved and history discoverable by name
+
+- **Status:** NOT_STARTED
+- **Outcome / why it matters:** Make search, saved and history discoverable by name. See the mapped user gap in FEATURE_GAP_ANALYSIS and milestone in COMPLETION_ROADMAP.
+- **Dependencies:** AST-35, AST-41
+- **Exact scope / files:** frontend/src/views/WorkbenchView.tsx; frontend/src/views/AskView.tsx; frontend/src/views/ReviewViews.tsx; newsroom/knowledge.py
+- **Implementation approach:** Use named paged selectors and current Watch context for search/history/saved. Preserve existing FTS and retrieval bounds. Scoped Ask and smart tags are separate AST-54/55 slices.
+- **Acceptance criteria:** Ordinary search/browse needs no IDs; more than 100 results can be traversed; saved/history remain accessible with stable context and actionable empty states.
+- **Tests / verification:** Browser search/context/pagination/empty/error/keyboard/phone; phase26 retrieval tests.
+- **Model:** TIER 2; reasoning medium.
+- **Prompt filename:** Not generated: outside the six-task horizon. Generate `prompts/AST-42-<bounded-title>.md` after dependencies land; retained old template (if any) is historical only.
+- **Non-goals, invariants, browser evidence, rollback, cost and stop condition:** inherited in full from Contract inherited by every future task above.
+- **Completion evidence:** Not executed by this rebaseline. AST-05 has implementation on the unmerged stack but incomplete qualification; all other records describe future work or explicit external gates.
+
+## AST-43 — Add owner verified-backup and diagnostic controls
+
+- **Status:** NOT_STARTED
+- **Outcome / why it matters:** Add owner verified-backup and diagnostic controls. See the mapped user gap in FEATURE_GAP_ANALYSIS and milestone in COMPLETION_ROADMAP.
+- **Dependencies:** AST-11, AST-05
+- **Exact scope / files:** newsroom/operations.py; newsroom/domain_api.py; frontend/src/views/AdminViews.tsx; tests/test_phase15_hardening_operations.py
+- **Implementation approach:** Wrap existing verified backup and redacted diagnostics with authenticated owner controls. Return backup identity/time/verification, not private unrestricted paths. No restore or arbitrary filesystem endpoint in this slice.
+- **Acceptance criteria:** Owner can request and identify a verified backup; failure is truthful and cannot replace good backups; credentials/private request data absent from diagnostics and backup additions.
+- **Tests / verification:** Temp-root backup failure/integrity/auth/CSRF/sentinel tests; browser pending/success/fail/retry/390px.
+- **Model:** TIER 3; reasoning high.
+- **Prompt filename:** Not generated: outside the six-task horizon. Generate `prompts/AST-43-<bounded-title>.md` after dependencies land; retained old template (if any) is historical only.
+- **Non-goals, invariants, browser evidence, rollback, cost and stop condition:** inherited in full from Contract inherited by every future task above.
+- **Completion evidence:** Not executed by this rebaseline. AST-05 has implementation on the unmerged stack but incomplete qualification; all other records describe future work or explicit external gates.
+
+## AST-44 — Provide controlled restore, update recovery and export guidance
+
+- **Status:** NOT_STARTED
+- **Outcome / why it matters:** Provide controlled restore, update recovery and export guidance. See the mapped user gap in FEATURE_GAP_ANALYSIS and milestone in COMPLETION_ROADMAP.
+- **Dependencies:** AST-43
+- **Exact scope / files:** newsroom/operations.py; newsroom/release.py; frontend/src/views/AdminViews.tsx; docs/RECOVERY_RUNBOOK.md
+- **Implementation approach:** Use existing stopped-writer/verified artifact operations with explicit owner confirmation and isolated preflight. Separate full restore from logical export, and explain article-body exclusion. Provide a recoverable handoff to the launcher when API cannot safely restore itself. No browser endpoint may overwrite a live DB.
+- **Acceptance criteria:** Owner can obtain logical export with honest limits; restore preflight rejects wrong/corrupt backup and active writers; failed update retains a compatible rollback path and truthful data-state guidance.
+- **Tests / verification:** Isolated backup/restore/upgrade failure and export reconstruction; browser export/preflight/recovery guidance/390px; no production restore.
+- **Model:** TIER 3; reasoning high.
+- **Prompt filename:** Not generated: outside the six-task horizon. Generate `prompts/AST-44-<bounded-title>.md` after dependencies land; retained old template (if any) is historical only.
+- **Non-goals, invariants, browser evidence, rollback, cost and stop condition:** inherited in full from Contract inherited by every future task above.
+- **Completion evidence:** Not executed by this rebaseline. AST-05 has implementation on the unmerged stack but incomplete qualification; all other records describe future work or explicit external gates.
+
+## AST-45 — Qualify and fix bounded responsive/accessibility defects
+
+- **Status:** NOT_STARTED
+- **Outcome / why it matters:** Qualify and fix bounded responsive/accessibility defects. See the mapped user gap in FEATURE_GAP_ANALYSIS and milestone in COMPLETION_ROADMAP.
+- **Dependencies:** AST-32, AST-34, AST-38, AST-39, AST-40, AST-41, AST-42, AST-44, AST-51, AST-52, AST-53, AST-54, AST-55
+- **Exact scope / files:** frontend/src/styles.css; frontend/src/components/ViewPrimitives.tsx; frontend/src/components/AppShell.tsx
+- **Implementation approach:** Audit populated/error/draft states after UI slices; fix only demonstrated layout/focus/contrast/label defects in existing theme. Record per-surface findings and split any unrelated logic defect rather than broad cleanup.
+- **Acceptance criteria:** Desktop/390px/200% zoom has no control overlap or inaccessible action; keyboard flow and error announcements work; long content and disabled/recovery states are readable.
+- **Tests / verification:** Fresh screenshots and keyboard/contrast checklist covering onboarding, Settings, reports, evidence and recovery; typecheck/build.
+- **Model:** TIER 2; reasoning medium.
+- **Prompt filename:** Not generated: outside the six-task horizon. Generate `prompts/AST-45-<bounded-title>.md` after dependencies land; retained old template (if any) is historical only.
+- **Non-goals, invariants, browser evidence, rollback, cost and stop condition:** inherited in full from Contract inherited by every future task above.
+- **Completion evidence:** Not executed by this rebaseline. AST-05 has implementation on the unmerged stack but incomplete qualification; all other records describe future work or explicit external gates.
+
+## AST-46 — Make PWA shell update and asset failure recoverable
+
+- **Status:** NOT_STARTED
+- **Outcome / why it matters:** Make PWA shell update and asset failure recoverable. See the mapped user gap in FEATURE_GAP_ANALYSIS and milestone in COMPLETION_ROADMAP.
+- **Dependencies:** AST-45
+- **Exact scope / files:** frontend/public/sw.js; frontend/src/components/PwaStatus.tsx; tests/test_phase12_frontend.py
+- **Implementation approach:** Version shell/cache by release artifact, restrict cache to appropriate same-origin static resources, and distinguish navigation offline fallback from missing JS/CSS. Never cache API/auth data. Show pending update/reload and recover from stale shell without promising offline evidence access.
+- **Acceptance criteria:** Upgrade cannot silently mix incompatible assets; missing script never receives HTML fallback; offline/auth/session state is honest and online recovery works.
+- **Tests / verification:** Browser two-version update/offline/missing-asset/session/logout traces on isolated server and phone viewport; cache contents inspect.
+- **Model:** TIER 2; reasoning medium.
+- **Prompt filename:** Not generated: outside the six-task horizon. Generate `prompts/AST-46-<bounded-title>.md` after dependencies land; retained old template (if any) is historical only.
+- **Non-goals, invariants, browser evidence, rollback, cost and stop condition:** inherited in full from Contract inherited by every future task above.
+- **Completion evidence:** Not executed by this rebaseline. AST-05 has implementation on the unmerged stack but incomplete qualification; all other records describe future work or explicit external gates.
+
+## AST-47 — Qualify representative content-to-intelligence journeys
+
+- **Status:** NOT_STARTED
+- **Outcome / why it matters:** Qualify representative content-to-intelligence journeys. See the mapped user gap in FEATURE_GAP_ANALYSIS and milestone in COMPLETION_ROADMAP.
+- **Dependencies:** AST-32, AST-35, AST-39, AST-40, AST-41, AST-42, AST-51, AST-52, AST-53, AST-54, AST-55
+- **Exact scope / files:** tests/test_phase23e_compatibility.py; tests/test_phase24_intelligent_monitoring.py; plan/astra/PRODUCT_READINESS.md; newsroom/evals/story_intelligence.py
+- **Implementation approach:** Run reviewed offline full-page/feed/broad-page fixtures through real worker chain, including no-change/irrelevant/deferred/correction paths. Human-labeled expected usefulness is separate from pipeline convergence. File bounded defects; do not silently relax conservative relevance/Story/evidence guards or edit frozen evaluation.
+- **Acceptance criteria:** Fixture report proves artifact→analysis→Claim→Story/report/alert or explicit truthful alternative; UAP/person/event/question coverage includes ambiguity and nonindependent sources; measured quality and unknowns are separated from pass/fail plumbing.
+- **Tests / verification:** Focused chain/replay tests and browser evidence from journeys A–D/F; no paid/live acquisition.
+- **Model:** TIER 3; reasoning high.
+- **Prompt filename:** Not generated: outside the six-task horizon. Generate `prompts/AST-47-<bounded-title>.md` after dependencies land; retained old template (if any) is historical only.
+- **Non-goals, invariants, browser evidence, rollback, cost and stop condition:** inherited in full from Contract inherited by every future task above.
+- **Completion evidence:** Not executed by this rebaseline. AST-05 has implementation on the unmerged stack but incomplete qualification; all other records describe future work or explicit external gates.
+
+## AST-48 — Qualify named isolated Windows release and private phone use
+
+- **Status:** NOT_STARTED
+- **Outcome / why it matters:** Qualify named isolated Windows release and private phone use. See the mapped user gap in FEATURE_GAP_ANALYSIS and milestone in COMPLETION_ROADMAP.
+- **Dependencies:** AST-46, AST-47, AST-49, AST-18
+- **Exact scope / files:** scripts/phase16_windows_deploy.ps1; newsroom/release.py; docs/OPERATIONS_RUNBOOK.md; plan/astra/PRODUCT_READINESS.md
+- **Implementation approach:** Qualify clean named artifact on supported Windows owner context with sign-in/wake/browser-closed lifecycle, separate upgrade/restore and private phone/PWA. Respect value gate; preparation before AST-18 may be recorded but final DONE waits. Split any discovered implementation defect. No deployment or trial promotion.
+- **Acceptance criteria:** All release gates link exact artifact and actual evidence; no P0/P1 blocker or unsupported privacy/background claim; human value verdict present and install/recovery/phone limits explicit.
+- **Tests / verification:** Full applicable offline CI/build plus isolated installed failure/upgrade/recovery/physical phone checklist and artifact hashes.
+- **Model:** TIER 3; reasoning high.
+- **Prompt filename:** Not generated: outside the six-task horizon. Generate `prompts/AST-48-<bounded-title>.md` after dependencies land; retained old template (if any) is historical only.
+- **Non-goals, invariants, browser evidence, rollback, cost and stop condition:** inherited in full from Contract inherited by every future task above.
+- **Completion evidence:** Not executed by this rebaseline. AST-05 has implementation on the unmerged stack but incomplete qualification; all other records describe future work or explicit external gates.
+
+## AST-49 — Write owner installation, use and recovery documentation
+
+- **Status:** NOT_STARTED
+- **Outcome / why it matters:** Write owner installation, use and recovery documentation. See the mapped user gap in FEATURE_GAP_ANALYSIS and milestone in COMPLETION_ROADMAP.
+- **Dependencies:** AST-44, AST-46, AST-47
+- **Exact scope / files:** README.md; docs/OPERATIONS_RUNBOOK.md; docs/RECOVERY_RUNBOOK.md; frontend/README.md
+- **Implementation approach:** Replace stale current-authority statements and explain supported install→Watch→evidence→recovery in user language after behavior lands. Preserve historical phase records and frozen protocols. Add release checklist links without claiming AST-48 already passed.
+- **Acceptance criteria:** A new owner can follow documented local flow without internal IDs; startup/cost/offline/export limits match code; every unqualified promise is labeled and links resolve.
+- **Tests / verification:** Documentation walkthrough against isolated fixture UI and links; no new implementation.
+- **Model:** TIER 1; reasoning low.
+- **Prompt filename:** Not generated: outside the six-task horizon. Generate `prompts/AST-49-<bounded-title>.md` after dependencies land; retained old template (if any) is historical only.
+- **Non-goals, invariants, browser evidence, rollback, cost and stop condition:** inherited in full from Contract inherited by every future task above.
+- **Completion evidence:** Not executed by this rebaseline. AST-05 has implementation on the unmerged stack but incomplete qualification; all other records describe future work or explicit external gates.
+
+## AST-50 — Freeze geographic and time scope semantics
+
+- **Status:** NOT_STARTED
+- **Outcome / why it matters:** Freeze geographic and time scope semantics. See the mapped user gap in FEATURE_GAP_ANALYSIS and milestone in COMPLETION_ROADMAP.
+- **Dependencies:** AST-29, AST-41
+- **Exact scope / files:** newsroom/monitoring.py; newsroom/intelligent_monitoring.py; frontend/src/views/WatchManagementView.tsx; tests/test_phase20_relevance_automation.py
+- **Implementation approach:** Design-only task: freeze a narrow contract distinguishing geographic contextual terms from strict filtering and monitoring/review windows from historical knowledge time. Inspect whether existing pinned scope fields suffice; specify any exact additive schema/API needs and split them before coding. Produce the AST-51 implementation prompt with fixtures for ambiguous geography and undated material. No UI or backend implementation in AST-50.
+- **Acceptance criteria:** Documented controls explicitly distinguish soft guidance from hard filters; schema/API/pinned-history semantics are fully decided; AST-51 has objective tests and no unanticipated architecture prerequisite.
+- **Tests / verification:** Review contract and fixture expectations against RelevanceScope, temporal reads, undated documents and user journey B; no runtime/provider calls.
+- **Model:** TIER A; reasoning high.
+- **Prompt filename:** Not generated: outside the six-task horizon. Generate `prompts/AST-50-<bounded-title>.md` after dependencies land; retained old template (if any) is historical only.
+- **Non-goals, invariants, browser evidence, rollback, cost and stop condition:** inherited in full from Contract inherited by every future task above.
+- **Completion evidence:** Not executed by this rebaseline. AST-05 has implementation on the unmerged stack but incomplete qualification; all other records describe future work or explicit external gates.
+
+## AST-51 — Implement the approved scope narrowing contract
+
+- **Status:** NOT_STARTED
+- **Outcome / why it matters:** Implement the approved scope narrowing contract; this removes the mapped user gap without expanding adjacent surfaces.
+- **Dependencies:** AST-50
+- **Exact scope / files:** newsroom/monitoring.py; newsroom/intelligent_monitoring.py; frontend/src/views/WatchManagementView.tsx; tests/test_phase20_relevance_automation.py
+- **Implementation approach:** Implement only the AST-50 frozen semantics and reviewed schema/API contract. Label geographic guidance and date filtering accurately. Keep acquired scope snapshots immutable. If AST-50 requires more than this bounded slice, replace this task with new IDs before execution.
+- **Acceptance criteria:** Region/date controls meet the explicit contract after reload; ambiguous or undated material is handled as specified without silently disappearing; historical temporal reads and already pinned acquisitions are unchanged.
+- **Tests / verification:** Scope/undated/ambiguous-region/history tests; browser narrow/edit/reload/error/390px.
+- **Model:** TIER 3; reasoning high.
+- **Prompt filename:** Not generated: outside the six-task horizon. Generate `prompts/AST-51-<bounded-title>.md` when prerequisites land.
+- **Non-goals, invariants, browser evidence, rollback, cost and stop condition:** inherited in full from Contract inherited by every future task above.
+- **Completion evidence:** Not executed; future bounded work only.
+
+## AST-52 — Create a Watch for a named person or organization
+
+- **Status:** NOT_STARTED
+- **Outcome / why it matters:** Create a Watch for a named person or organization; this removes the mapped user gap without expanding adjacent surfaces.
+- **Dependencies:** AST-29, AST-23
+- **Exact scope / files:** newsroom/domain_api.py; frontend/src/views/WatchManagementView.tsx; tests/test_phase24_intelligent_monitoring.py
+- **Implementation approach:** Extend paused setup to select/create one Subject with explicit type and aliases using existing Subject schema. Reuse Topic setup retry/rollback patterns. Suggesting a related organization must not silently make it an alias.
+- **Acceptance criteria:** Named Subject setup requires no IDs and reuses selected records; same-name different people can remain separate; explicit aliases/exclusions produce the intended pinned scope without changing another Watch.
+- **Tests / verification:** API Subject/retry/alias ambiguity tests; browser person/company/homonym/error/reload/390px.
+- **Model:** TIER 2; reasoning medium.
+- **Prompt filename:** Not generated: outside the six-task horizon. Generate `prompts/AST-52-<bounded-title>.md` when prerequisites land.
+- **Non-goals, invariants, browser evidence, rollback, cost and stop condition:** inherited in full from Contract inherited by every future task above.
+- **Completion evidence:** Not executed; future bounded work only.
+
+## AST-53 — Start a developing-event Watch without inventing a Story
+
+- **Status:** NOT_STARTED
+- **Outcome / why it matters:** Start a developing-event Watch without inventing a Story; this removes the mapped user gap without expanding adjacent surfaces.
+- **Dependencies:** AST-24, AST-35
+- **Exact scope / files:** frontend/src/views/WatchManagementView.tsx; newsroom/domain_api.py; tests/test_phase24_intelligent_monitoring.py
+- **Implementation approach:** Offer named existing Story selection and descriptive Topic setup for an event with no evidence-bearing Story yet. Use existing target APIs and paused setup, and preserve later conservative Story resolution.
+- **Acceptance criteria:** Existing Story can be watched by name; new event creates descriptive Topic intent rather than fabricated Story/Claim; resulting analyzed material and later Story are accessible through current context.
+- **Tests / verification:** API target and no-Story-created checks; browser existing/new-event/empty/error/390px.
+- **Model:** TIER 2; reasoning medium.
+- **Prompt filename:** Not generated: outside the six-task horizon. Generate `prompts/AST-53-<bounded-title>.md` when prerequisites land.
+- **Non-goals, invariants, browser evidence, rollback, cost and stop condition:** inherited in full from Contract inherited by every future task above.
+- **Completion evidence:** Not executed; future bounded work only.
+
+## AST-54 — Select scoped Ask context without raw IDs
+
+- **Status:** NOT_STARTED
+- **Outcome / why it matters:** Select scoped Ask context without raw IDs; this removes the mapped user gap without expanding adjacent surfaces.
+- **Dependencies:** AST-42, AST-41
+- **Exact scope / files:** frontend/src/views/AskView.tsx; frontend/src/lib/types.ts; tests/test_phase14_frontend.py
+- **Implementation approach:** Replace raw-ID entry with named paged object selection and current Watch context. Reuse the current local Ask endpoint and preserve object scope and no-evidence refusal. Do not add remote synthesis.
+- **Acceptance criteria:** User chooses a valid context by name; removed/empty context gives recovery; answers keep evidence citations and effective local route/refusal visibly distinct.
+- **Tests / verification:** Browser contextual Ask/pagination/no-evidence/error/reload/keyboard/390px; existing Ask grounding tests.
+- **Model:** TIER 2; reasoning medium.
+- **Prompt filename:** Not generated: outside the six-task horizon. Generate `prompts/AST-54-<bounded-title>.md` when prerequisites land.
+- **Non-goals, invariants, browser evidence, rollback, cost and stop condition:** inherited in full from Contract inherited by every future task above.
+- **Completion evidence:** Not executed; future bounded work only.
+
+## AST-55 — Expose explainable deterministic smart-tag browsing
+
+- **Status:** NOT_STARTED
+- **Outcome / why it matters:** Expose explainable deterministic smart-tag browsing; this removes the mapped user gap without expanding adjacent surfaces.
+- **Dependencies:** AST-42
+- **Exact scope / files:** frontend/src/views/WorkbenchView.tsx; newsroom/knowledge.py; tests/test_phase26_knowledge.py
+- **Implementation approach:** Show existing namespaced smart tags and assignment reason/origin in contextual browse/filter controls. Do not add learned tagging or a new automatic backfill policy.
+- **Acceptance criteria:** Smart/user tags are distinguishable with reason; filters show correct bounded results; absent tags or failed read gives an actionable state without generating classifications.
+- **Tests / verification:** Existing deterministic-tag tests; browser tag reason/filter/empty/error/pagination/390px.
+- **Model:** TIER 2; reasoning medium.
+- **Prompt filename:** Not generated: outside the six-task horizon. Generate `prompts/AST-55-<bounded-title>.md` when prerequisites land.
+- **Non-goals, invariants, browser evidence, rollback, cost and stop condition:** inherited in full from Contract inherited by every future task above.
+- **Completion evidence:** Not executed; future bounded work only.
