@@ -269,11 +269,12 @@ def test_shutdown_reports_busy_worker_deadline_without_force_kill(tmp_path):
         supervisor.prepare()
         states = supervisor.ensure_all()
         worker = states["worker"].owner
+        worker_process = supervisor._children["worker"]
         assert worker is not None
         result = supervisor.shutdown(timeout_seconds=0.2)
         assert result.drained is False
         assert "worker" in result.remaining_roles
-        assert os.kill(worker.pid, 0) is None
+        assert worker_process.poll() is None
 
         deadline = time.monotonic() + 2
         while time.monotonic() < deadline and supervisor.state("worker").status != "missing":
