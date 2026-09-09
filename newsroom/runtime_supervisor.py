@@ -215,7 +215,9 @@ class RuntimeSupervisor:
         deadline = time.monotonic() + self.startup_timeout_seconds
         while time.monotonic() < deadline:
             state = self.state(role)
-            if state.status in {"healthy", "stale", "ambiguous", "unmanaged"}:
+            if state.status in {"healthy", "ambiguous", "unmanaged"}:
+                return state
+            if state.status == "stale" and not spawned:
                 return state
             if state.status == "missing" and not spawned:
                 self._spawn(role)
