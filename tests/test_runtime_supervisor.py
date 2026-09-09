@@ -288,7 +288,7 @@ def test_shutdown_reports_busy_worker_deadline_without_force_kill(tmp_path):
 
 def test_bounded_restart_exhaustion_stops_crash_loop(tmp_path):
     config = RuntimeConfig.for_environment("dev", root=tmp_path / "dev")
-    supervisor = _supervisor(config, restart_limit=2, startup_timeout=1.0)
+    supervisor = _supervisor(config, restart_limit=2)
     try:
         supervisor.prepare()
         states = supervisor.ensure_all()
