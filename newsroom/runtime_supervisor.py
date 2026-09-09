@@ -208,20 +208,35 @@ class RuntimeSupervisor:
             return state
         if state.status in {"stale", "ambiguous", "unmanaged"}:
             return state
-        spawned = False
+
+        spawned_process: subprocess.Popen | None = None
         if state.status == "missing":
             self._spawn(role)
-            spawned = True
+            spawned_process = self._children[role]
+
         deadline = time.monotonic() + self.startup_timeout_seconds
         while time.monotonic() < deadline:
             state = self.state(role)
-            if state.status in {"healthy", "ambiguous", "unmanaged"}:
-                return state
-            if state.status == "stale" and not spawned:
-                return state
-            if state.status == "missing" and not spawned:
-                self._spawn(role)
-                spawned = True
+            if spawned_process is not None:
+                # A newly spawned process has a real publication window:
+                # missing before lock acquisition, ambiguous after the lock is
+                # held but before owner publication, then stale until its first
+                # heartbeat is visible. None of those states proves startup
+                # failed while the exact process we launched is still alive.
+                if spawned_process.poll() is not None:
+                    return state
+                if (
+                    state.status == "healthy"
+                    and state.owner is not None
+                    and state.owner.pid == spawned_process.pid
+                ):
+                    return state
+            else:
+                if state.status in {"healthy", "stale", "ambiguous", "unmanaged"}:
+                    return state
+                if state.status == "missing":
+                    self._spawn(role)
+                    spawned_process = self._children[role]
             time.sleep(self.poll_interval_seconds)
         return self.state(role)
 
