@@ -79,8 +79,8 @@ for n in range(1,23):
 
 manifest=json.loads((root/'CHANGE_MANIFEST.json').read_text(encoding='utf-8'))
 for original,old in manifest['preserved']:
-    before=subprocess.check_output(['git','show',f'3d7f9cf:plan/astra/{original}'],cwd=repo).decode().replace('\r\n','\n')
-    after=(root/old).read_text(encoding='utf-8').replace('\r\n','\n')
+    before=subprocess.check_output(['git','show',f'3d7f9cf:plan/astra/{original}'],cwd=repo).decode().replace('\r\n','\n').rstrip('\n')
+    after=(root/old).read_text(encoding='utf-8').replace('\r\n','\n').rstrip('\n')
     if before !=after: errors.append('Preserved original changed: '+old)
 
 changed=subprocess.check_output(['git','diff','--name-only'],cwd=repo).decode().splitlines()

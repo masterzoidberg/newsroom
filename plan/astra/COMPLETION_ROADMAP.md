@@ -6,7 +6,7 @@ Product milestones, not a renumbering of historical phases. TASKS is the status/
 |---|---|---|
 | M0 Preserve earned foundation | AST-01–04 DONE on unmerged stack | preserved code/CI/browser records; availability verified in execution checkout |
 | M1 Start safely | AST-05 | existing launcher qualified in isolated Windows install; pending real lifecycle checks remain open |
-| M2 First local Watch | AST-23 →24 →25 →26 →27 | welcome → paused interest → approved Sources → cadence → review/start → persisted first-result state without IDs |
+| M2 First local Watch | AST-23 →24 →25 →26 →27 | welcome → paused interest → AST-24 correction gate (approval invalidation, immutable retry, cross-tab safety, measured 390 CSS-pixel evidence, complete backend result) → approved Sources → cadence → review/start → persisted first-result state without IDs |
 | M3 Deliberate managed AI | AST-06 →07 →08 →09 →10 →11 | metadata/vault/durable budgets/operation-boundary resolver/validation/UI; fake-provider security and worker identity proof |
 | M4 Assisted setup | AST-28 →29 →30 →31 →32 | terminology and source suggestions useful on bounded cases, explained/reviewed, no hidden paid or auto-approval behavior |
 | M5 Returning intelligence | AST-33 →34 →35 | real since-visit changes, deferred analyzed material, summary→Claim→exact source path |
@@ -22,6 +22,7 @@ The current next horizon is intentionally six tasks: AST-05 and AST-23–27. The
 
 ## Checkpoints and completion boundaries
 
+- Before AST-25, close the AST-24 review gate: changed-interest approval invalidation, immutable exact-payload retry, explicit cross-tab coordination/isolation, measured 390 CSS-pixel qualification with scrolled-boundary checks, and a retrievable full-backend result. Do not treat hosted CI or partial local progress as sufficient.
 - After M2, walk fresh/no-source/failed-source/no-evidence/returning flows with fake acquisition. A working Watch setup is not proof of intelligence usefulness.
 - After M3, sentinel secrets are absent from responses, logs, SQLite, backups, exports and browser storage; concurrent processes enforce one paid authority. Do not add a provider SDK catalog.
 - After M4/M6, simulate journeys A–D/F and preserve refusal, ambiguity and rejection history. Any source provider uncertainty is resolved in AST-30 before AST-31 executes. AST-50 freezes scope semantics before AST-51 implementation; schema expansion must be decomposed before coding.
