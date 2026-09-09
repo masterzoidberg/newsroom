@@ -24,7 +24,32 @@ jobs:
           name: mypy-baseline
           path: mypy-baseline.txt
       - name: Backend tests
-        run: python -m pytest -q
+        shell: bash
+        run: |
+          {
+            echo "command=python -m pytest -q"
+            echo "commit=${GITHUB_SHA}"
+            date -u +"timestamp_utc=%Y-%m-%dT%H:%M:%SZ"
+            python --version
+            python -m pytest --version
+            git status --short --branch
+          } > backend-acceptance.meta
+          set +e
+          python -m pytest -q 2>&1 | tee backend-acceptance.log
+          status=${PIPESTATUS[0]}
+          {
+            echo "exit_code=${status}"
+            git status --short --branch
+          } >> backend-acceptance.meta
+          exit "${status}"
+      - name: Upload backend acceptance evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: backend-acceptance
+          path: |
+            backend-acceptance.log
+            backend-acceptance.meta
 
   frontend:
     runs-on: ubuntu-latest
@@ -94,6 +119,14 @@ jobs:
           "uvicorn>=0.23"
           "pytest>=8.0"
           "httpx>=0.24"
+      - name: AST-05 Windows runtime regression tests
+        shell: powershell
+        run: >-
+          python -m pytest -q
+          tests/test_runtime_managed_state_io.py
+          tests/test_runtime_supervisor.py
+          tests/test_runtime_identity.py
+          tests/test_runtime_status_api.py
       - name: Install frontend dependencies
         working-directory: frontend
         run: npm ci
@@ -115,6 +148,7 @@ jobs:
           -OutputDirectory "${{ github.workspace }}\.artifacts\astra05-windows"
           -PythonExe python
       - name: Upload AST-05 Windows qualification evidence
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: astra05-windows-qualification
