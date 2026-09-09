@@ -474,6 +474,67 @@ def test_watch_lifecycle_vocabulary_review_and_source_approval(tmp_db):
     assert check_database(tmp_db).ok
 
 
+def test_paused_watch_can_preview_named_existing_source_without_starting_collection(tmp_db):
+    apply_migrations(tmp_db)
+    core = CoreService(tmp_db)
+    watches = WatchService(tmp_db)
+    setup = watches.create_paused_setup(_paused_setup_payload())
+    source = core.create_source(
+        {
+            "name": "NASA News",
+            "slug": "nasa-news",
+            "homepage_url": "https://www.nasa.gov/news/",
+            "source_kind": "official",
+        }
+    )
+
+    candidate = watches.add_source_candidate(
+        setup["watch_id"],
+        {
+            "source_id": source["id"],
+            "name": source["name"],
+            "rationale": "Existing Source selected by name",
+            "discovery_method": "existing_source",
+        },
+    )
+    assert candidate["status"] == "suggested"
+    assert candidate["source_id"] == source["id"]
+
+    approved = watches.review_source_candidate(
+        setup["watch_id"], candidate["id"], "approved", "editor"
+    )
+
+    assert approved["status"] == "approved"
+    detail = watches.get(setup["watch_id"])
+    assert detail["status"] == "paused"
+    assert detail["sources"][0]["source"]["id"] == source["id"]
+    assert detail["sources"][0]["monitor"]["enabled"] == 0
+    assert watches.health(setup["watch_id"])["active_source_count"] == 0
+    conn = storage.connect(tmp_db)
+    try:
+        assert conn.execute(
+            "SELECT COUNT(*) FROM jobs WHERE job_type = 'monitor_check'"
+        ).fetchone()[0] == 0
+    finally:
+        conn.close()
+
+
+def test_source_search_can_find_existing_source_by_url(tmp_db):
+    apply_migrations(tmp_db)
+    source = CoreService(tmp_db).create_source(
+        {
+            "name": "NASA News",
+            "slug": "nasa-news",
+            "homepage_url": "https://www.nasa.gov/news/",
+            "feed_url": "https://www.nasa.gov/rss/dyn/nasa.xml",
+        }
+    )
+
+    result = CoreService(tmp_db).list_sources(q="nasa.gov/news")
+
+    assert [item["id"] for item in result["items"]] == [source["id"]]
+
+
 def test_two_watches_share_one_source_with_independent_monitors(tmp_db):
     core, topic, policy = _fixture(tmp_db)
     other_topic = core.create_topic(

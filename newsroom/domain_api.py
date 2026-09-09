@@ -274,7 +274,8 @@ class WatchVocabularyCreate(StrictModel):
 
 class SourceCandidateCreate(StrictModel):
     name: str = Field(min_length=1, max_length=200)
-    homepage_url: str = Field(min_length=1, max_length=2048)
+    source_id: Optional[str] = Field(default=None, max_length=200)
+    homepage_url: Optional[str] = Field(default=None, max_length=2048)
     feed_url: Optional[str] = Field(default=None, max_length=2048)
     discovery_method: str = Field(default="manual", pattern="^(manual|existing_source|document_link|feed_discovery|web_search|ai_suggestion)$")
     rationale: str = Field(min_length=1, max_length=2000)

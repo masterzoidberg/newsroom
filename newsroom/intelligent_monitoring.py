@@ -1473,15 +1473,40 @@ class WatchService:
             raise DomainValidation(
                 "source candidate requires name, rationale, and a supported discovery method"
             )
-        url = _safe_url(data.get("homepage_url"))
-        feed = _safe_url(data["feed_url"]) if data.get("feed_url") else None
-        normalized = _normalized_candidate_url(url)
+        requested_source_id = str(data.get("source_id") or "").strip() or None
         identifier = new_id("cand")
         now = utc_now()
         conn = storage.connect(self.db_path)
         try:
             with storage.write_tx(conn):
                 self._require_watch(conn, watch_id)
+                selected_source = None
+                if requested_source_id:
+                    selected_source = conn.execute(
+                        """
+                        SELECT id, homepage_url, feed_url
+                        FROM sources
+                        WHERE id = ? AND deleted_at IS NULL
+                        """,
+                        (requested_source_id,),
+                    ).fetchone()
+                    if selected_source is None:
+                        raise DomainNotFound("source not found")
+                homepage_value = data.get("homepage_url") or (
+                    selected_source["homepage_url"] or selected_source["feed_url"]
+                    if selected_source is not None
+                    else None
+                )
+                if not homepage_value:
+                    raise DomainValidation(
+                        "source candidate requires a usable homepage or feed URL"
+                    )
+                url = _safe_url(homepage_value)
+                feed_value = data.get("feed_url") or (
+                    selected_source["feed_url"] if selected_source is not None else None
+                )
+                feed = _safe_url(feed_value) if feed_value else None
+                normalized = _normalized_candidate_url(url)
                 existing = conn.execute(
                     "SELECT id FROM source_candidates WHERE watch_id = ? AND normalized_url = ?",
                     (watch_id, normalized),
@@ -1489,16 +1514,16 @@ class WatchService:
                 if existing is not None:
                     identifier = existing[0]
                 else:
-                    source = conn.execute(
-                        """
-                        SELECT id FROM sources
-                        WHERE deleted_at IS NULL
-                          AND (homepage_url = ? OR (feed_url IS NOT NULL AND feed_url = ?))
-                        ORDER BY id
-                        LIMIT 1
-                        """,
-                        (url, feed or url),
-                    ).fetchone()
+                    source = selected_source or conn.execute(
+                            """
+                            SELECT id FROM sources
+                            WHERE deleted_at IS NULL
+                              AND (homepage_url = ? OR (feed_url IS NOT NULL AND feed_url = ?))
+                            ORDER BY id
+                            LIMIT 1
+                            """,
+                            (url, feed or url),
+                        ).fetchone()
                     conn.execute(
                         """
                         INSERT INTO source_candidates(

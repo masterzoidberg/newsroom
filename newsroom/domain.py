@@ -675,7 +675,9 @@ class CoreService:
     def list_sources(self, *, q=None, include_deleted=False, page=1, page_size=25):
         clauses: list[str] = [] if include_deleted else ["deleted_at IS NULL"]
         params: list[object] = []
-        query, query_params = self._q_filter(q, ("name", "slug", "domain"))
+        query, query_params = self._q_filter(
+            q, ("name", "slug", "domain", "homepage_url", "feed_url")
+        )
         if query:
             clauses.append(query)
             params.extend(query_params)

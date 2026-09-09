@@ -51,6 +51,15 @@ type PausedWatchDraft = {
   primary_terms: string[];
 };
 
+type SourceCandidateInput = {
+  source_id?: string;
+  name: string;
+  homepage_url?: string;
+  feed_url?: string;
+  discovery_method: "manual" | "existing_source";
+  rationale: string;
+};
+
 const SETUP_DRAFT_KEY = "newsroom.watch-setup.v2";
 const SETUP_PENDING_KEY = "newsroom.watch-setup.pending.v1";
 const SELECTED_WATCH_KEY = "newsroom.selected-watch.v1";
@@ -364,6 +373,22 @@ export function WatchManagementView() {
     catch (caught) { setError(caught); } finally { setWorking(false); }
   }
 
+  async function addSourceCandidate(input: SourceCandidateInput) {
+    if (!selectedId) return;
+    setWorking(true); setError(null);
+    try {
+      await apiFetch(`/watches/${selectedId}/source-candidates`, { method: "POST", body: jsonBody(input) });
+      await refresh();
+    } catch (caught) { setError(caught); throw caught; } finally { setWorking(false); }
+  }
+
+  async function detachSource(sourceId: string) {
+    if (!selectedId) return;
+    setWorking(true); setError(null);
+    try { await apiFetch(`/watches/${selectedId}/sources/${encodeURIComponent(sourceId)}`, { method: "DELETE" }); await refresh(); }
+    catch (caught) { setError(caught); } finally { setWorking(false); }
+  }
+
   async function review(path: string, status: "approved" | "rejected") { await action(`${path}/review`, { status }); }
 
   if (loading) return <><PageHeader eyebrow="Configure" title="Watches" description="Persistent monitoring intent, approved vocabulary, Sources, and schedules." /><LoadingState label="Loading Watches" />{error && <ErrorState error={error} />}</>;
@@ -406,11 +431,88 @@ export function WatchManagementView() {
     </details>
 
     <SectionCard title="Configured Watches" description={`${watches.length} Watch${watches.length === 1 ? "" : "es"}; select one to inspect its durable state.`}>{watches.length ? <div className="resource-list">{watches.map((watch) => <button type="button" className={`resource-row ${selectedId === watch.id ? "selected" : ""}`} key={watch.id} onClick={() => void selectWatch(watch.id)}><span><strong>{text(watch.name, text(watch.target_type))}</strong><small>{text(watch.target_type, "Watch")} · {text(watch.status, "active")}</small></span><Badge tone={watch.status === "active" ? "mint" : "neutral"}>{text(watch.status, "active")}</Badge></button>)}</div> : <EmptyState title="No Watches yet" description="Use the interest form above to save your first paused Watch." />}</SectionCard>
-    {selected && health && <WatchDetail watch={selected} health={health} name={editName} setName={setEditName} term={term} setTerm={setTerm} kind={kind} setKind={setKind} working={working} onSave={saveName} onAddTerm={addTerm} onAction={action} onReview={review} />}
+    {selected && health && <WatchDetail watch={selected} health={health} name={editName} setName={setEditName} term={term} setTerm={setTerm} kind={kind} setKind={setKind} working={working} onSave={saveName} onAddTerm={addTerm} onAddSource={addSourceCandidate} onDetachSource={detachSource} onAction={action} onReview={review} />}
   </>;
 }
 
-function WatchDetail({ watch, health, name, setName, term, setTerm, kind, setKind, working, onSave, onAddTerm, onAction, onReview }: { watch: Watch; health: Health; name: string; setName: (value: string) => void; term: string; setTerm: (value: string) => void; kind: string; setKind: (value: string) => void; working: boolean; onSave: (event: FormEvent) => void; onAddTerm: (event: FormEvent) => void; onAction: (path: string, body?: unknown) => Promise<void>; onReview: (path: string, status: "approved" | "rejected") => Promise<void> }) {
+function SourceSetup({ working, onCreate }: { working: boolean; onCreate: (input: SourceCandidateInput) => Promise<void> }) {
+  const [query, setQuery] = useState("");
+  const [matches, setMatches] = useState<CollectionRecord[]>([]);
+  const [searched, setSearched] = useState(false);
+  const [searchError, setSearchError] = useState<unknown>(null);
+  const [manualName, setManualName] = useState("");
+  const [homepageUrl, setHomepageUrl] = useState("");
+  const [feedUrl, setFeedUrl] = useState("");
+  const [rationale, setRationale] = useState("Added manually by the owner.");
+  const [formError, setFormError] = useState("");
+
+  async function search(event: FormEvent) {
+    event.preventDefault();
+    const value = query.trim();
+    if (!value) { setSearchError(new Error("Enter a Source name or URL to search.")); return; }
+    setSearchError(null); setSearched(true);
+    try { setMatches((await apiList<CollectionRecord>(`/sources?q=${encodeURIComponent(value)}&page_size=25`)).items); }
+    catch (caught) { setSearchError(caught); setMatches([]); }
+  }
+
+  async function previewExisting(source: CollectionRecord) {
+    setFormError("");
+    try {
+      await onCreate({
+        source_id: source.id,
+        name: text(source.name, "Existing Source"),
+        discovery_method: "existing_source",
+        rationale: "Existing Source selected by name or URL; review before attaching.",
+      });
+      setQuery(""); setMatches([]); setSearched(false);
+    } catch (caught) { setFormError(caught instanceof Error ? caught.message : "Could not create the Source preview."); }
+  }
+
+  async function previewManual(event: FormEvent) {
+    event.preventDefault();
+    setFormError("");
+    if (!manualName.trim() || !homepageUrl.trim() || !rationale.trim()) {
+      setFormError("Enter a Source name, homepage or feed URL, and a reason before previewing.");
+      return;
+    }
+    try {
+      await onCreate({
+        name: manualName.trim(),
+        homepage_url: homepageUrl.trim(),
+        feed_url: feedUrl.trim() || undefined,
+        discovery_method: "manual",
+        rationale: rationale.trim(),
+      });
+      setManualName(""); setHomepageUrl(""); setFeedUrl(""); setRationale("Added manually by the owner.");
+    } catch (caught) { setFormError(caught instanceof Error ? caught.message : "Could not create the Source preview."); }
+  }
+
+  return <SectionCard title="Add Sources" description="Search by name or URL to reuse an existing Source, or preview a manual page/feed. A preview is never attached until you explicitly approve it.">
+    <form className="inline-form" onSubmit={(event) => void search(event)}>
+      <label htmlFor="existing-source-search">Find an existing Source</label>
+      <input id="existing-source-search" value={query} onChange={(event) => { setQuery(event.target.value); setSearchError(null); }} placeholder="Source name or URL" />
+      <button className="secondary-button" type="submit" disabled={working}>Search Sources</button>
+    </form>
+    {searchError !== null && <p className="status-note" role="alert">{searchError instanceof Error ? searchError.message : "Source search failed."}</p>}
+    {searched && (matches.length ? <div className="resource-list" aria-label="Existing Source search results">{matches.map((source) => <div className="resource-row" key={source.id}><span><strong>{text(source.name, "Unnamed Source")}</strong><small>{text(source.domain, text(source.homepage_url, "No domain recorded"))}</small></span><button className="secondary-button" type="button" onClick={() => void previewExisting(source)} disabled={working || !text(source.homepage_url, text(source.feed_url, ""))}>Preview Source</button></div>)}</div> : <EmptyState title="No matching Sources" description="Try another name or URL, or use the manual preview below." />)}
+    <form className="stack-form" onSubmit={(event) => void previewManual(event)}>
+      <h3>Preview a manual Source</h3>
+      <p className="muted">Unsafe, local, and private URLs are rejected by the server before anything is saved.</p>
+      <label htmlFor="manual-source-name">Source name</label>
+      <input id="manual-source-name" value={manualName} onChange={(event) => setManualName(event.target.value)} placeholder="Example: NASA News" />
+      <label htmlFor="manual-source-homepage">Homepage or page URL</label>
+      <input id="manual-source-homepage" type="url" value={homepageUrl} onChange={(event) => setHomepageUrl(event.target.value)} placeholder="https://example.org/news" />
+      <label htmlFor="manual-source-feed">Feed URL (optional)</label>
+      <input id="manual-source-feed" type="url" value={feedUrl} onChange={(event) => setFeedUrl(event.target.value)} placeholder="https://example.org/feed.xml" />
+      <label htmlFor="manual-source-rationale">Why this Source?</label>
+      <textarea id="manual-source-rationale" rows={2} value={rationale} onChange={(event) => setRationale(event.target.value)} />
+      {formError && <p className="status-note" role="alert">{formError}</p>}
+      <button className="secondary-button" type="submit" disabled={working}>Preview Source for approval</button>
+    </form>
+  </SectionCard>;
+}
+
+function WatchDetail({ watch, health, name, setName, term, setTerm, kind, setKind, working, onSave, onAddTerm, onAddSource, onDetachSource, onAction, onReview }: { watch: Watch; health: Health; name: string; setName: (value: string) => void; term: string; setTerm: (value: string) => void; kind: string; setKind: (value: string) => void; working: boolean; onSave: (event: FormEvent) => void; onAddTerm: (event: FormEvent) => Promise<void>; onAddSource: (input: SourceCandidateInput) => Promise<void>; onDetachSource: (sourceId: string) => Promise<void>; onAction: (path: string, body?: unknown) => Promise<void>; onReview: (path: string, status: "approved" | "rejected") => Promise<void> }) {
   const vocabulary = watch.vocabulary ?? [];
   const primaryTerms = watch.primary_terms ?? [];
   const candidates = watch.source_candidates ?? [];
@@ -425,10 +527,11 @@ function WatchDetail({ watch, health, name, setName, term, setTerm, kind, setKin
       {health.last_error && <p className="status-note">Recent error: {health.last_error}</p>}
     </SectionCard>
     {watch.target_type === "topic" && <SectionCard title="Confirmed primary scope" description="These exact Topic terms are active monitoring scope. AST-24 does not generate or preapprove additional semantics.">{primaryTerms.length ? <div className="resource-list">{primaryTerms.map((item) => <div className="resource-row" key={item.id}><span><strong>{text(item.term)}</strong><small>{text(item.term_type, "include")} · {text(item.concept_kind, "term")}</small></span><Badge tone="mint">confirmed</Badge></div>)}</div> : <EmptyState title="No primary terms" description="This Topic has no confirmed primary scope. Edit the Topic vocabulary before relying on it for monitoring." />}</SectionCard>}
+    <SourceSetup working={working} onCreate={onAddSource} />
     <div className="content-grid">
       <SectionCard title="Additional vocabulary" description="Approved Watch vocabulary affects future monitoring; suggestions remain inert until reviewed."><form className="inline-form" onSubmit={onAddTerm}><label htmlFor="watch-term">Add term</label><input id="watch-term" value={term} onChange={(event) => setTerm(event.target.value)} placeholder="Additional alias or exclusion" /><select aria-label="Vocabulary kind" value={kind} onChange={(event) => setKind(event.target.value)}><option value="alias">Alias</option><option value="synonym">Synonym</option><option value="acronym">Acronym</option><option value="acronym_expansion">Acronym expansion</option><option value="include">Include</option><option value="exclude">Exclude</option></select><button className="secondary-button" type="submit" disabled={working}>Add</button></form>{vocabulary.length ? <div className="resource-list">{vocabulary.map((item) => <div className="resource-row" key={item.id}><span><strong>{text(item.term)}</strong><small>{text(item.kind)} · {text(item.origin)} · {text(item.status)}</small></span>{item.status === "suggested" && <div className="button-row"><button className="secondary-button" type="button" onClick={() => void onReview(`vocabulary/${item.id}`, "approved")} disabled={working}>Approve</button><button className="quiet-button" type="button" onClick={() => void onReview(`vocabulary/${item.id}`, "rejected")} disabled={working}>Reject</button></div>}</div>)}</div> : <EmptyState title="No additional vocabulary" description="The confirmed Topic terms above are enough for the paused draft. Additional vocabulary can be reviewed later." />}</SectionCard>
-      <SectionCard title="Source candidates" description="Candidates retain URL, method, rationale, and provenance until reviewed.">{candidates.length ? <div className="resource-list">{candidates.map((item) => <div className="resource-row" key={item.id}><span><strong>{text(item.name)}</strong><small>{text(item.homepage_url)} · {text(item.discovery_method)} · {text(item.rationale)}</small></span>{item.status === "suggested" && <div className="button-row"><button className="secondary-button" type="button" onClick={() => void onReview(`source-candidates/${item.id}`, "approved")} disabled={working}>Approve</button><button className="quiet-button" type="button" onClick={() => void onReview(`source-candidates/${item.id}`, "rejected")} disabled={working}>Reject</button></div>}</div>)}</div> : <EmptyState title="No candidates" description={isUnstartedDraft ? "Add Sources is the next setup step. No Source has been approved yet." : "Run Source discovery when a Watch has relevant corpus state."} />}</SectionCard>
+      <SectionCard title="Source previews" description="Review each candidate before attaching it. Approval reuses an existing shared Source when possible; rejection keeps the decision without attaching anything.">{candidates.length ? <div className="resource-list">{candidates.map((item) => <div className="resource-row" key={item.id}><span><strong>{text(item.name)}</strong><small>{text(item.homepage_url)} · {text(item.discovery_method)} · {text(item.rationale)}</small></span><div className="button-row"><Badge tone={item.status === "approved" ? "mint" : item.status === "rejected" ? "neutral" : "amber"}>{item.status === "suggested" ? "preview" : text(item.status)}</Badge>{item.status === "suggested" && <><button className="secondary-button" type="button" onClick={() => void onReview(`source-candidates/${item.id}`, "approved")} disabled={working}>Approve</button><button className="quiet-button" type="button" onClick={() => void onReview(`source-candidates/${item.id}`, "rejected")} disabled={working}>Reject</button></>}</div></div>)}</div> : <EmptyState title="No Source previews" description={isUnstartedDraft ? "Search or preview a Source above. Nothing is attached or collecting yet." : "Run Source discovery when a Watch has relevant corpus state."} />}</SectionCard>
     </div>
-    <SectionCard title="Attached Sources" description="Approved Sources use the normal Monitor acquisition path.">{sources.length ? <div className="resource-list">{sources.map((item) => <div className="resource-row" key={text(item.source?.id)}><span><strong>{text(item.source?.name)}</strong><small>{text(item.source?.domain)} · next {formatDate(text(item.monitor?.next_check_at, "Not scheduled"))}</small></span><Badge tone={item.monitor?.enabled ? "mint" : "neutral"}>{item.monitor?.enabled ? "enabled" : "paused"}</Badge></div>)}</div> : <EmptyState title="No attached Sources" description={isUnstartedDraft ? "Your Watch is safely paused. Add Sources is next; nothing is collecting yet." : "Approve a Source candidate to start normal acquisition."} />}</SectionCard>
+    <SectionCard title="Attached Sources" description="Approved Sources use the normal Monitor acquisition path. Detach removes only this Watch relationship; the shared Source and its history stay intact.">{sources.length ? <div className="resource-list">{sources.map((item) => <div className="resource-row" key={text(item.source?.id)}><span><strong>{text(item.source?.name)}</strong><small>{text(item.source?.domain)} · next {formatDate(text(item.monitor?.next_check_at, "Not scheduled"))}</small></span><div className="button-row"><Badge tone={item.monitor?.enabled ? "mint" : "neutral"}>{item.monitor?.enabled ? "enabled" : "paused"}</Badge><button className="quiet-button" type="button" onClick={() => void onDetachSource(text(item.source?.id, ""))} disabled={working}>Detach</button></div></div>)}</div> : <EmptyState title="No attached Sources" description={isUnstartedDraft ? "Your Watch is safely paused. Add Sources is next; nothing is collecting yet." : "Approve a Source candidate to start normal acquisition."} />}</SectionCard>
   </>;
 }
