@@ -19,7 +19,8 @@ import { AskView } from "./views/AskView";
 const HEALTHY_POLL_MS = 5_000;
 const FAILURE_POLL_MIN_MS = 3_000;
 const FAILURE_POLL_MAX_MS = 30_000;
-const WATCH_SETUP_DRAFT_KEY = "newsroom.watch-setup.v1";
+const WATCH_SETUP_DRAFT_KEY = "newsroom.watch-setup.v2";
+const WATCH_SETUP_PENDING_KEY = "newsroom.watch-setup.pending.v1";
 
 function initialView(): ViewKey {
   const value = window.location.hash.replace(/^#/, "") as ViewKey;
@@ -28,7 +29,17 @@ function initialView(): ViewKey {
 
 function hasResumableWatchSetupDraft(): boolean {
   try {
-    const raw = window.localStorage.getItem(WATCH_SETUP_DRAFT_KEY);
+    const pendingRaw = window.sessionStorage.getItem(WATCH_SETUP_PENDING_KEY);
+    if (pendingRaw) {
+      const pending = JSON.parse(pendingRaw) as { request_id?: unknown; interest?: unknown; name?: unknown; primary_terms?: unknown };
+      if (
+        typeof pending.request_id === "string" && pending.request_id.length > 0 &&
+        typeof pending.interest === "string" && pending.interest.trim().length > 0 &&
+        typeof pending.name === "string" && pending.name.trim().length > 0 &&
+        Array.isArray(pending.primary_terms) && pending.primary_terms.length > 0
+      ) return true;
+    }
+    const raw = window.sessionStorage.getItem(WATCH_SETUP_DRAFT_KEY);
     if (!raw) return false;
     const draft = JSON.parse(raw) as { request_id?: unknown; interest?: unknown };
     return typeof draft.request_id === "string" && draft.request_id.length > 0 && typeof draft.interest === "string" && draft.interest.trim().length > 0;
