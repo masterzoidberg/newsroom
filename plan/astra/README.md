@@ -15,6 +15,7 @@ Read [CURRENT_STATE](CURRENT_STATE.md), [PRODUCT_VISION](PRODUCT_VISION.md), [UX
 | [AUDIT_EVIDENCE](AUDIT_EVIDENCE.md) | Git state, code anchors, checks and limitations |
 | [JOURNEY_VALIDATION](JOURNEY_VALIDATION.md) | Six simulated finished journeys and missing links |
 | [PRODUCT_READINESS](PRODUCT_READINESS.md) | Release acceptance gates |
+| [BACKEND_ACCEPTANCE_AND_COMPLETION_PLAN](BACKEND_ACCEPTANCE_AND_COMPLETION_PLAN.md) | Retained AST-24 backend failure, bounded Windows lifecycle fix, and adjusted completion order |
 | [prompts/README](prompts/README.md) | Six current execution prompts |
 | [AI_PROVIDER_SETTINGS](AI_PROVIDER_SETTINGS.md), [STARTUP_AND_RUNTIME](STARTUP_AND_RUNTIME.md), [TEST_STRATEGY](TEST_STRATEGY.md), [CODEX_EXECUTION_RULES](CODEX_EXECUTION_RULES.md) | Narrow technical constraints; ledger owns order |
 

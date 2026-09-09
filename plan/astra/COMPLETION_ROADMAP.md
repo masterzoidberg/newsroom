@@ -22,7 +22,7 @@ The current next horizon is intentionally six tasks: AST-05 and AST-23–27. The
 
 ## Checkpoints and completion boundaries
 
-- Before AST-25, close the AST-24 review gate: changed-interest approval invalidation, immutable exact-payload retry, explicit cross-tab coordination/isolation, measured 390 CSS-pixel qualification with scrolled-boundary checks, and a retrievable full-backend result. Do not treat hosted CI or partial local progress as sufficient.
+- Before AST-25, close the AST-24 review gate. The four Watch/browser corrections are implemented through `0df1c1d`; the retained Windows backend run failed on two non-portable runtime-supervisor kill tests and a heartbeat-cleanup sharing violation. Fix those lifecycle-owned defects, incorporate the fix without breaking stack ancestry, and retain a complete passing full-backend result. Do not treat hosted CI, focused reruns or partial local progress as sufficient.
 - After M2, walk fresh/no-source/failed-source/no-evidence/returning flows with fake acquisition. A working Watch setup is not proof of intelligence usefulness.
 - After M3, sentinel secrets are absent from responses, logs, SQLite, backups, exports and browser storage; concurrent processes enforce one paid authority. Do not add a provider SDK catalog.
 - After M4/M6, simulate journeys A–D/F and preserve refusal, ambiguity and rejection history. Any source provider uncertainty is resolved in AST-30 before AST-31 executes. AST-50 freezes scope semantics before AST-51 implementation; schema expansion must be decomposed before coding.

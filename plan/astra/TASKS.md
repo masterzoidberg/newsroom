@@ -1,6 +1,6 @@
 # Canonical execution ledger
 
-Rebaseline 2026-09-08. No implementation task is authorized in this planning pass. The AST-24 candidate review is complete, but its acceptance is not: two P1 and two P2 corrections remain, and the local backend result is incomplete. IDs AST-01–22 remain reserved; new work continues at AST-23 through AST-55. The task-index.json file is a checked machine-readable mirror, never a competing status authority; update it with TASKS and run validate_plan.py.
+Rebaseline 2026-09-09. No implementation task is authorized in this planning pass. The four AST-24 review corrections are implemented through `0df1c1d`, but acceptance failed on three Windows runtime-supervisor tests. The bounded fix is owned by the AST-05 lifecycle surface and a passing retained full run is still required. IDs AST-01–22 remain reserved; new work continues at AST-23 through AST-55. The task-index.json file is a checked machine-readable mirror, never a competing status authority; update it with TASKS and run validate_plan.py.
 
 ## Contract inherited by every future task
 
@@ -299,7 +299,7 @@ Full original task bodies, acceptance and completion evidence are preserved in [
 - **Model:** TIER 2; reasoning medium.
 - **Prompt filename:** [prompts/AST-24-welcome-interest.md](prompts/AST-24-welcome-interest.md)
 - **Non-goals, invariants, browser evidence, rollback, cost and stop condition:** inherited in full from Contract inherited by every future task above.
-- **Completion evidence:** The AST-24 candidate was reviewed at head `93c80b564485f8a864b085af190f8b888b0a9f98` against AST-23 base `2ab4715ff1c267d8476a88bcd997380d16976d9d`. Review found CR-01/CR-02 as P1 and CR-03/CR-04 as P2; the final local backend result was unavailable, and the harness did not prove a 390 CSS-pixel viewport. This is bounded correction evidence, not DONE evidence. AST-24 remains unaccepted; AST-25 must not start until the corrections and complete backend result are recorded. AST-05 remains the sole READY task.
+- **Completion evidence:** The AST-24 candidate was reviewed at head `93c80b564485f8a864b085af190f8b888b0a9f98` against AST-23 base `2ab4715ff1c267d8476a88bcd997380d16976d9d`. CR-01 through CR-04 were implemented in commits through `0df1c1d39b93b47306d2093cf506599fc44888ef`, including measured 390 CSS-pixel evidence. The retained Windows `python -m pytest -q` run at that head reached 100% but exited 1: two runtime-supervisor tests reference unavailable `signal.SIGKILL`, and managed heartbeat cleanup hit `WinError 32`, causing a third failure. See [BACKEND_ACCEPTANCE_AND_COMPLETION_PLAN](BACKEND_ACCEPTANCE_AND_COMPLETION_PLAN.md). This is corrected-candidate and failed-acceptance evidence, not DONE evidence. AST-24 remains unaccepted; AST-25 must not start until the lifecycle fix is incorporated and a complete passing backend result is retained. AST-05 remains the sole READY task.
 
 ## AST-25 — Add and reuse Watch Sources by name or URL
 
