@@ -60,7 +60,7 @@ jobs:
           path: .artifacts/astra04-browser-status
       - name: AST-24 onboarding browser qualification
         run: >-
-          python ../scripts/astra24_browser_diagnostic.py
+          python ../scripts/astra24_browser_smoke.py
           --frontend-dist dist
           --output ../.artifacts/astra24-browser-onboarding
           --source-commit "${{ github.sha }}"
