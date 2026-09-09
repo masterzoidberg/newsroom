@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import threading
 import time
@@ -19,6 +20,7 @@ MANAGED_ROLES = ("supervisor", *RUNTIME_ROLES)
 _MAX_STATE_BYTES = 16 * 1024
 _STATE_REPLACE_RETRIES = 5
 _STATE_REPLACE_RETRY_SECONDS = 0.02
+_LOGGER = logging.getLogger(__name__)
 
 
 class SupervisorError(RuntimeError):
@@ -144,6 +146,21 @@ def _write_json_atomic(path: Path, payload: Mapping) -> None:
             temp.unlink()
         except FileNotFoundError:
             pass
+
+
+def _unlink_state_file(path: Path) -> bool:
+    """Remove one runtime state file without exceeding the bounded I/O retry budget."""
+    for attempt in range(_STATE_REPLACE_RETRIES):
+        try:
+            path.unlink()
+            return True
+        except FileNotFoundError:
+            return True
+        except PermissionError:
+            if attempt + 1 >= _STATE_REPLACE_RETRIES:
+                return False
+            time.sleep(_STATE_REPLACE_RETRY_SECONDS * (attempt + 1))
+    return False
 
 
 def ensure_runtime_manifest(
@@ -377,21 +394,27 @@ class ManagedRoleContext:
 
     def __exit__(self, _exc_type, _exc, _tb) -> None:
         self._thread_stop.set()
-        if self._thread is not None:
-            self._thread.join(timeout=max(1.0, self.heartbeat_interval_seconds * 3))
-        if self.owner is not None:
-            current = current_owner(self.config, self.role)
-            if current == self.owner:
-                for path in (
-                    component_owner_path(self.config, self.role),
-                    component_heartbeat_path(self.config, self.role),
-                    component_control_path(self.config, self.role),
-                ):
-                    try:
-                        path.unlink()
-                    except FileNotFoundError:
-                        pass
-        self.lock.release()
+        try:
+            if self._thread is not None:
+                self._thread.join(timeout=max(1.0, self.heartbeat_interval_seconds * 3))
+            if self.owner is None:
+                return
+            for path in (
+                component_heartbeat_path(self.config, self.role),
+                component_control_path(self.config, self.role),
+                component_owner_path(self.config, self.role),
+            ):
+                if current_owner(self.config, self.role) != self.owner:
+                    break
+                if not _unlink_state_file(path):
+                    _LOGGER.warning(
+                        "managed state cleanup could not remove %s for role %s; "
+                        "leaving it for identity-aware reconciliation",
+                        path.name,
+                        self.role,
+                    )
+        finally:
+            self.lock.release()
 
 
 def request_component_stop(config: RuntimeConfig, owner: ManagedOwner) -> None:

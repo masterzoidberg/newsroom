@@ -103,6 +103,15 @@ def _cleanup(supervisor: RuntimeSupervisor):
         process.wait(timeout=2)
 
 
+def _kill_child(process: subprocess.Popen) -> None:
+    process.kill()
+    process.wait(timeout=2)
+    if os.name == "nt":
+        # Release the retained parent handle so Windows ownership probes see
+        # the terminated child rather than its still-open process object.
+        process._handle.Close()  # type: ignore[attr-defined]
+
+
 def test_repeated_supervisor_reconciles_existing_children_without_duplicates(tmp_path):
     config = RuntimeConfig.for_environment("dev", root=tmp_path / "dev")
     first = _supervisor(config)
@@ -166,9 +175,8 @@ def test_supervisor_crash_reconciliation_reuses_children_then_child_crash_restar
         assert adopted._children == {}
 
         worker_pid = original["worker"]
-        os.kill(worker_pid, signal.SIGKILL)
-        # Reap through the original Popen handle so PID inspection becomes authoritative.
-        first._children["worker"].wait(timeout=2)
+        # Kill and reap through the retained Popen handle so this is portable on Windows.
+        _kill_child(first._children.pop("worker"))
         deadline = time.monotonic() + 2
         while time.monotonic() < deadline and adopted.state("worker").status != "missing":
             time.sleep(0.02)
@@ -285,8 +293,7 @@ def test_bounded_restart_exhaustion_stops_crash_loop(tmp_path):
         states = supervisor.ensure_all()
         worker = states["worker"].owner
         assert worker is not None
-        os.kill(worker.pid, signal.SIGKILL)
-        supervisor._children["worker"].wait(timeout=2)
+        _kill_child(supervisor._children.pop("worker"))
 
         good_factory = supervisor._command_factory
         supervisor.startup_timeout_seconds = 0.15
