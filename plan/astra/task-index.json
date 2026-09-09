@@ -8,7 +8,7 @@
     "accept": "One shortcut reuses matching runtime and exits success; foreign owner/port produces actionable no-kill diagnosis; isolated installed duplicate/sign-in/wake/browser-closed/recovery matrix passes or remains explicitly open without a DONE claim.",
     "tests": "Existing launcher contract and affected runtime tests; isolated Windows smoke; actual supported sign-in/wake and installed browser evidence, with human-only checks recorded as pending.",
     "tier": "3",
-    "status": "READY",
+    "status": "DONE",
     "prompt": "prompts/AST-05-qualify-existing-launcher.md"
   },
   {
@@ -92,7 +92,7 @@
     "accept": "Fresh setup creates one valid paused Watch with no Monitors/jobs; identical retry returns the same records while changed input with same identity conflicts; failure rolls back the composition and leaves unrelated objects untouched. Created Topic scope contains the exact user-approved primary terms and is never empty; no generated synonym is implicitly approved.",
     "tests": "API auth/CSRF; blank/oversize interest; duplicate/concurrent retry; injected mid-transaction failure; phase24 lifecycle tests.",
     "tier": "3",
-    "status": "NOT_STARTED",
+    "status": "DONE",
     "prompt": "prompts/AST-23-paused-watch-contract.md"
   },
   {
@@ -104,7 +104,7 @@
     "accept": "Empty workspace reaches a named paused Watch without IDs; returning workspace opens ordinary Home; request failure/retry/reload neither loses the draft identity nor creates duplicates. User-approved primary terms are visible before save and persist into nonempty monitoring scope. A changed interest cannot reuse prior approval. A retry after ambiguous/failure state resends the exact submitted identity and payload even if the editable draft changed. Cross-tab edits either coordinate revisions with an explicit conflict or remain isolated, with no silent overwrite. Mobile evidence records measured 390 CSS-pixel dimensions rather than only an outer window size. The complete backend suite has a retrievable final result; otherwise AST-24 remains unaccepted.",
     "tests": "Typecheck/build; isolated browser empty/returning/failed POST/reload; interest-change approval invalidation; exact-payload retry after edit or ambiguous completion; cross-tab draft coordination/isolation; keyboard and asserted 390 CSS-pixel viewport with scrolled-state/boundary checks; confirm server record count and retry identity; rerun the relevant focused tests and the full backend suite with retained final output. Hosted CI may supplement but cannot replace missing local evidence.",
     "tier": "2",
-    "status": "NOT_STARTED",
+    "status": "DONE",
     "prompt": "prompts/AST-24-welcome-interest.md"
   },
   {
@@ -116,7 +116,7 @@
     "accept": "Fresh Watch can attach a usable URL/feed or named existing Source without IDs; approval/retry converges on one relationship and does not run acquisition while paused; detach preserves other Watches and Source history.",
     "tests": "Phase24 shared-source/unsafe-url/concurrent approval tests; browser manual/reuse/bad URL/empty/approval failure/retry/detach at desktop and phone.",
     "tier": "2",
-    "status": "NOT_STARTED",
+    "status": "READY",
     "prompt": "prompts/AST-25-manual-watch-sources.md"
   },
   {

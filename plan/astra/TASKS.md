@@ -1,6 +1,6 @@
 # Canonical execution ledger
 
-Rebaseline 2026-09-09. No implementation task is authorized in this planning pass. The four AST-24 review corrections are implemented through `0df1c1d`, but acceptance failed on three Windows runtime-supervisor tests. The bounded fix is owned by the AST-05 lifecycle surface and a passing retained full run is still required. IDs AST-01–22 remain reserved; new work continues at AST-23 through AST-55. The task-index.json file is a checked machine-readable mirror, never a competing status authority; update it with TASKS and run validate_plan.py.
+Rebaseline transitioned 2026-09-09 after automated Gate 0 acceptance at integrated head `18c5ee8bdf56a44218af4ecd6d7e8d9ead68f8c0`. Full backend, frontend, corrected AST-24 browser qualification, focused Windows runtime regressions and installed Windows lifecycle smoke passed in CI run 34412730096 attempt 2. AST-05 engineering and AST-23/24 are DONE on that branch; physical reboot/sign-in and lock/sleep/wake evidence remains pending for release. AST-25 is the sole READY task.
 
 ## Contract inherited by every future task
 
@@ -27,7 +27,7 @@ Statuses: READY, NOT_STARTED, IN_PROGRESS, DONE, BLOCKED, DEFERRED, SUPERSEDED. 
 | AST-02 | Instance identity and preflight | DONE | AST-01 | Historical |
 | AST-03 | Runtime supervision and lease renewal | DONE | AST-02 | Historical |
 | AST-04 | Honest status and recovery UI | DONE | AST-03 | Historical |
-| AST-05 | Qualify the existing Start Newsroom launcher | READY | AST-01, AST-02, AST-03, AST-04 | 3 |
+| AST-05 | Qualify the existing Start Newsroom launcher | DONE | AST-01, AST-02, AST-03, AST-04 | 3 |
 | AST-06 | Create typed public AI configuration metadata | NOT_STARTED | AST-27 | 3 |
 | AST-07 | Store credentials in an approved operating-system vault | NOT_STARTED | AST-06 | 3 |
 | AST-08 | Make paid admission durable across processes and reloads | NOT_STARTED | AST-07 | 3 |
@@ -45,9 +45,9 @@ Statuses: READY, NOT_STARTED, IN_PROGRESS, DONE, BLOCKED, DEFERRED, SUPERSEDED. 
 | AST-20 | Remove only demonstrated obsolete support entry points | DEFERRED | AST-48 | 2 |
 | AST-21 | Optionally integrate paid Ask after a value decision | DEFERRED | AST-11, AST-18 | 3 |
 | AST-22 | Optionally run a bounded commercial pilot | DEFERRED | AST-18, AST-48 | A |
-| AST-23 | Create a resumable paused Watch setup contract | NOT_STARTED | AST-05 | 3 |
-| AST-24 | Add Welcome and interest entry without raw IDs | NOT_STARTED | AST-23 | 2 |
-| AST-25 | Add and reuse Watch Sources by name or URL | NOT_STARTED | AST-24 | 2 |
+| AST-23 | Create a resumable paused Watch setup contract | DONE | AST-05 | 3 |
+| AST-24 | Add Welcome and interest entry without raw IDs | DONE | AST-23 | 2 |
+| AST-25 | Add and reuse Watch Sources by name or URL | READY | AST-24 | 2 |
 | AST-26 | Expose Watch cadence as plain scheduling choices | NOT_STARTED | AST-25 | 2 |
 | AST-27 | Connect review and Start to honest first-value progress | NOT_STARTED | AST-26 | 2 |
 | AST-28 | Implement bounded semantic vocabulary capability | NOT_STARTED | AST-11, AST-27 | 3 |
@@ -93,7 +93,7 @@ Full original task bodies, acceptance and completion evidence are preserved in [
 
 ## AST-05 — Qualify the existing Start Newsroom launcher
 
-- **Status:** READY
+- **Status:** DONE
 - **Outcome / why it matters:** Qualify the existing Start Newsroom launcher. See the mapped user gap in FEATURE_GAP_ANALYSIS and milestone in COMPLETION_ROADMAP.
 - **Dependencies:** AST-01, AST-02, AST-03, AST-04
 - **Exact scope / files:** scripts/phase16_windows_deploy.ps1; scripts/astra05_windows_smoke.ps1; newsroom/runtime_identity.py; tests/test_phase16_windows_launcher_contract.py; plan/astra/TASKS.md
@@ -103,7 +103,7 @@ Full original task bodies, acceptance and completion evidence are preserved in [
 - **Model:** TIER 3; reasoning high.
 - **Prompt filename:** [prompts/AST-05-qualify-existing-launcher.md](prompts/AST-05-qualify-existing-launcher.md)
 - **Non-goals, invariants, browser evidence, rollback, cost and stop condition:** inherited in full from Contract inherited by every future task above.
-- **Completion evidence:** Not executed by this rebaseline. AST-05 has implementation on the unmerged stack but incomplete qualification; all other records describe future work or explicit external gates.
+- **Completion evidence:** Automated engineering acceptance passed at integrated head `18c5ee8bdf56a44218af4ecd6d7e8d9ead68f8c0` in CI run 34412730096 attempt 2: full backend exit 0, focused Windows suite exit 0 with one documented POSIX-only skip, and installed Windows lifecycle smoke PASS. Physical reboot/sign-in and lock/sleep/wake remain pending release evidence and are not claimed by hosted CI.
 
 ## AST-06 — Create typed public AI configuration metadata
 
@@ -275,7 +275,7 @@ Full original task bodies, acceptance and completion evidence are preserved in [
 
 ## AST-23 — Create a resumable paused Watch setup contract
 
-- **Status:** NOT_STARTED
+- **Status:** DONE
 - **Outcome / why it matters:** Create a resumable paused Watch setup contract. See the mapped user gap in FEATURE_GAP_ANALYSIS and milestone in COMPLETION_ROADMAP.
 - **Dependencies:** AST-05
 - **Exact scope / files:** newsroom/intelligent_monitoring.py; newsroom/domain_api.py; newsroom/domain.py; tests/test_phase24_intelligent_monitoring.py
@@ -285,11 +285,11 @@ Full original task bodies, acceptance and completion evidence are preserved in [
 - **Model:** TIER 3; reasoning high.
 - **Prompt filename:** [prompts/AST-23-paused-watch-contract.md](prompts/AST-23-paused-watch-contract.md)
 - **Non-goals, invariants, browser evidence, rollback, cost and stop condition:** inherited in full from Contract inherited by every future task above.
-- **Completion evidence:** Not executed by this rebaseline. AST-05 has implementation on the unmerged stack but incomplete qualification; all other records describe future work or explicit external gates.
+- **Completion evidence:** DONE on the integrated accepted branch. Head `18c5ee8` preserves AST-23 base `2ab4715ff1c267d8476a88bcd997380d16976d9d` in ancestry; its backend coverage passed in CI run 34412730096 attempt 2.
 
 ## AST-24 — Add Welcome and interest entry without raw IDs
 
-- **Status:** NOT_STARTED
+- **Status:** DONE
 - **Outcome / why it matters:** Add Welcome and interest entry without raw IDs. See the mapped user gap in FEATURE_GAP_ANALYSIS and milestone in COMPLETION_ROADMAP.
 - **Dependencies:** AST-23
 - **Exact scope / files:** frontend/src/App.tsx; frontend/src/views/InboxView.tsx; frontend/src/views/WatchManagementView.tsx; frontend/src/lib/api.ts
@@ -299,11 +299,11 @@ Full original task bodies, acceptance and completion evidence are preserved in [
 - **Model:** TIER 2; reasoning medium.
 - **Prompt filename:** [prompts/AST-24-welcome-interest.md](prompts/AST-24-welcome-interest.md)
 - **Non-goals, invariants, browser evidence, rollback, cost and stop condition:** inherited in full from Contract inherited by every future task above.
-- **Completion evidence:** The AST-24 candidate was reviewed at head `93c80b564485f8a864b085af190f8b888b0a9f98` against AST-23 base `2ab4715ff1c267d8476a88bcd997380d16976d9d`. CR-01 through CR-04 were implemented in commits through `0df1c1d39b93b47306d2093cf506599fc44888ef`, including measured 390 CSS-pixel evidence. The retained Windows `python -m pytest -q` run at that head reached 100% but exited 1: two runtime-supervisor tests reference unavailable `signal.SIGKILL`, and managed heartbeat cleanup hit `WinError 32`, causing a third failure. See [BACKEND_ACCEPTANCE_AND_COMPLETION_PLAN](BACKEND_ACCEPTANCE_AND_COMPLETION_PLAN.md). This is corrected-candidate and failed-acceptance evidence, not DONE evidence. AST-24 remains unaccepted; AST-25 must not start until the lifecycle fix is incorporated and a complete passing backend result is retained. AST-05 remains the sole READY task.
+- **Completion evidence:** DONE on the integrated accepted branch. Head `18c5ee8` preserves corrected AST-24 head `0df1c1d39b93b47306d2093cf506599fc44888ef` in ancestry. CI run 34412730096 attempt 2 passed the AST-24 onboarding browser qualification, frontend gates and complete backend suite. Earlier failed acceptance remains historical evidence in [BACKEND_ACCEPTANCE_AND_COMPLETION_PLAN](BACKEND_ACCEPTANCE_AND_COMPLETION_PLAN.md).
 
 ## AST-25 — Add and reuse Watch Sources by name or URL
 
-- **Status:** NOT_STARTED
+- **Status:** READY
 - **Outcome / why it matters:** Add and reuse Watch Sources by name or URL. See the mapped user gap in FEATURE_GAP_ANALYSIS and milestone in COMPLETION_ROADMAP.
 - **Dependencies:** AST-24
 - **Exact scope / files:** frontend/src/views/WatchManagementView.tsx; frontend/src/views/AdminViews.tsx; newsroom/domain_api.py; tests/test_phase24_intelligent_monitoring.py

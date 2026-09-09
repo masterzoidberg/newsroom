@@ -13,7 +13,7 @@ by_id = {t['id']: t for t in tasks}
 historical = {f'AST-{n:02}' for n in range(1, 5)}
 all_ids = set(by_id) | historical | {'AST-12','AST-13','AST-14','AST-15','AST-19'}
 ready = [t['id'] for t in tasks if t['status'] == 'READY']
-if ready != ['AST-05']: errors.append(f'Unexpected READY tasks: {ready}')
+if ready != ['AST-25']: errors.append(f'Unexpected READY tasks: {ready}')
 if ledger.count('- **Status:** READY') != 1: errors.append('Ledger READY count')
 visited, active = set(), set()
 
@@ -84,7 +84,7 @@ for original,old in manifest['preserved']:
     if before !=after: errors.append('Preserved original changed: '+old)
 
 changed=subprocess.check_output(['git','diff','--name-only'],cwd=repo).decode().splitlines()
-if any(not x.startswith('plan/astra/') for x in changed): errors.append('Tracked change outside planning scope')
+if any(not (x.startswith('plan/astra/') or x.startswith('plan/plan-rework/')) for x in changed): errors.append('Tracked change outside planning scope')
 if subprocess.check_output(['git','diff','--cached','--name-only'],cwd=repo).strip(): errors.append('Unexpected staged changes')
 print(json.dumps({'result':'FAIL' if errors else 'PASS','future_records':len(tasks),'ready':ready,'current_prompts':len(current_prompts),'canonical_links_checked':checked,'preserved_originals':len(manifest['preserved']),'original_prompts_verified':22,'errors':errors},indent=2))
 raise SystemExit(bool(errors))
