@@ -321,6 +321,100 @@ class MonitoringPolicyService:
             conn.close()
         return self.get(identifier)
 
+    def update_for_watch(self, watch_id: str, base_cadence_seconds: int) -> dict[str, Any]:
+        """Update one Watch's cadence without mutating another Watch's policy."""
+        base = _bounded_seconds(base_cadence_seconds, "base_cadence_seconds")
+        conn = storage.connect(self.db_path)
+        try:
+            with storage.write_tx(conn):
+                watch = conn.execute(
+                    "SELECT * FROM watches WHERE id = ?", (watch_id,)
+                ).fetchone()
+                if watch is None:
+                    raise DomainNotFound("watch not found")
+                policy = conn.execute(
+                    "SELECT * FROM monitoring_policies WHERE id = ?",
+                    (watch["policy_id"],),
+                ).fetchone()
+                if policy is None:
+                    raise DomainNotFound("monitoring policy not found")
+                minimum = int(policy["min_cadence_seconds"])
+                maximum = int(policy["max_cadence_seconds"])
+                if not minimum <= base <= maximum:
+                    raise DomainValidation(
+                        "base_cadence_seconds must remain within the policy bounds"
+                    )
+
+                now = utc_now()
+                watch_count = conn.execute(
+                    "SELECT COUNT(*) FROM watches WHERE policy_id = ?",
+                    (watch["policy_id"],),
+                ).fetchone()[0]
+                policy_id = str(watch["policy_id"])
+                if watch_count > 1:
+                    policy_id = new_id("pol")
+                    private_name = f"{policy['name']} for {watch['name']}"[:200]
+                    conn.execute(
+                        """
+                        INSERT INTO monitoring_policies(
+                            id, name, allowed_channels, base_cadence_seconds,
+                            min_cadence_seconds, max_cadence_seconds, priority,
+                            query_budget, paid_budget_usd, local_model_budget,
+                            escalation_rules, backoff_rules, retirement_criteria,
+                            created_at, updated_at)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        """,
+                        (
+                            policy_id,
+                            private_name,
+                            policy["allowed_channels"],
+                            base,
+                            policy["min_cadence_seconds"],
+                            policy["max_cadence_seconds"],
+                            policy["priority"],
+                            policy["query_budget"],
+                            policy["paid_budget_usd"],
+                            policy["local_model_budget"],
+                            policy["escalation_rules"],
+                            policy["backoff_rules"],
+                            policy["retirement_criteria"],
+                            now,
+                            now,
+                        ),
+                    )
+                    conn.execute(
+                        "UPDATE watches SET policy_id = ?, updated_at = ? WHERE id = ?",
+                        (policy_id, now, watch_id),
+                    )
+                else:
+                    conn.execute(
+                        "UPDATE monitoring_policies SET base_cadence_seconds = ?, updated_at = ? WHERE id = ?",
+                        (base, now, policy_id),
+                    )
+
+                conn.execute(
+                    """
+                    UPDATE monitors
+                       SET policy_id = ?, next_check_at = ?, updated_at = ?
+                     WHERE id IN (SELECT monitor_id FROM watch_sources WHERE watch_id = ?)
+                    """,
+                    (policy_id, _plus_seconds(now, base), now, watch_id),
+                )
+                updated_watch = conn.execute(
+                    "SELECT * FROM watches WHERE id = ?", (watch_id,)
+                ).fetchone()
+                updated_policy = conn.execute(
+                    "SELECT * FROM monitoring_policies WHERE id = ?", (policy_id,)
+                ).fetchone()
+                return {
+                    "watch": dict(updated_watch),
+                    "policy": _policy_output(updated_policy),
+                    "private_policy": watch_count > 1 or policy_id == str(watch["policy_id"]),
+                    "shared_policy_detached": watch_count > 1,
+                }
+        finally:
+            conn.close()
+
 
 _TOKEN_RE = re.compile(r"[\w][\w-]*", re.UNICODE)
 

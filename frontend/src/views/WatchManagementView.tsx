@@ -6,6 +6,7 @@ import { Badge, EmptyState, ErrorState, LoadingState, PageHeader, SectionCard, S
 type Watch = CollectionRecord & {
   target_type?: string;
   target_id?: string;
+  policy?: CollectionRecord;
   vocabulary?: CollectionRecord[];
   primary_terms?: CollectionRecord[];
   source_candidates?: CollectionRecord[];
@@ -182,17 +183,21 @@ export function WatchManagementView() {
 
   const loadDetail = useCallback(async (id: string) => {
     const watch = await apiFetch<Watch>(`/watches/${id}`);
+    const policyRequest = watch.policy_id
+      ? apiFetch<CollectionRecord>(`/monitoring-policies/${watch.policy_id}`)
+      : Promise.resolve(null);
     const primaryTermsRequest = watch.target_type === "topic" && watch.target_id
       ? apiList<CollectionRecord>(`/topics/${watch.target_id}/vocabulary?page_size=100`)
       : Promise.resolve({ items: [] as CollectionRecord[] });
-    const [watchHealth, vocabulary, candidates, sources, primaryTerms] = await Promise.all([
+    const [watchHealth, vocabulary, candidates, sources, primaryTerms, policy] = await Promise.all([
       apiFetch<Health>(`/watches/${id}/health`),
       apiList<CollectionRecord>(`/watches/${id}/vocabulary?page_size=100`),
       apiList<CollectionRecord>(`/watches/${id}/source-candidates?page_size=100`),
       apiList<{ source?: CollectionRecord; monitor?: CollectionRecord }>(`/watches/${id}/sources?page_size=100`),
       primaryTermsRequest,
+      policyRequest,
     ]);
-    setSelected({ ...watch, vocabulary: vocabulary.items, primary_terms: primaryTerms.items, source_candidates: candidates.items, sources: sources.items });
+    setSelected({ ...watch, policy: policy ?? undefined, vocabulary: vocabulary.items, primary_terms: primaryTerms.items, source_candidates: candidates.items, sources: sources.items });
     setHealth(watchHealth);
     setEditName(text(watch.name, ""));
   }, []);
@@ -389,6 +394,15 @@ export function WatchManagementView() {
     catch (caught) { setError(caught); } finally { setWorking(false); }
   }
 
+  async function updateCadence(baseCadenceSeconds: number) {
+    if (!selectedId) return;
+    setWorking(true); setError(null);
+    try {
+      await apiFetch(`/watches/${selectedId}/cadence`, { method: "PATCH", body: jsonBody({ base_cadence_seconds: baseCadenceSeconds }) });
+      await refresh();
+    } catch (caught) { setError(caught); throw caught; } finally { setWorking(false); }
+  }
+
   async function review(path: string, status: "approved" | "rejected") { await action(`${path}/review`, { status }); }
 
   if (loading) return <><PageHeader eyebrow="Configure" title="Watches" description="Persistent monitoring intent, approved vocabulary, Sources, and schedules." /><LoadingState label="Loading Watches" />{error && <ErrorState error={error} />}</>;
@@ -431,8 +445,92 @@ export function WatchManagementView() {
     </details>
 
     <SectionCard title="Configured Watches" description={`${watches.length} Watch${watches.length === 1 ? "" : "es"}; select one to inspect its durable state.`}>{watches.length ? <div className="resource-list">{watches.map((watch) => <button type="button" className={`resource-row ${selectedId === watch.id ? "selected" : ""}`} key={watch.id} onClick={() => void selectWatch(watch.id)}><span><strong>{text(watch.name, text(watch.target_type))}</strong><small>{text(watch.target_type, "Watch")} · {text(watch.status, "active")}</small></span><Badge tone={watch.status === "active" ? "mint" : "neutral"}>{text(watch.status, "active")}</Badge></button>)}</div> : <EmptyState title="No Watches yet" description="Use the interest form above to save your first paused Watch." />}</SectionCard>
-    {selected && health && <WatchDetail watch={selected} health={health} name={editName} setName={setEditName} term={term} setTerm={setTerm} kind={kind} setKind={setKind} working={working} onSave={saveName} onAddTerm={addTerm} onAddSource={addSourceCandidate} onDetachSource={detachSource} onAction={action} onReview={review} />}
+    {selected && health && <WatchDetail watch={selected} health={health} name={editName} setName={setEditName} term={term} setTerm={setTerm} kind={kind} setKind={setKind} working={working} onSave={saveName} onAddTerm={addTerm} onAddSource={addSourceCandidate} onDetachSource={detachSource} onUpdateCadence={updateCadence} onAction={action} onReview={review} />}
   </>;
+}
+
+type CadenceChoice = "hourly" | "several_times_daily" | "daily" | "custom";
+
+const PRESET_SECONDS: Record<Exclude<CadenceChoice, "custom">, number> = {
+  hourly: 3_600,
+  several_times_daily: 21_600,
+  daily: 86_400,
+};
+
+function numericValue(value: unknown, fallback: number): number {
+  const result = typeof value === "number" ? value : Number(value);
+  return Number.isFinite(result) ? result : fallback;
+}
+
+function cadenceChoice(seconds: number): CadenceChoice {
+  if (seconds === PRESET_SECONDS.hourly) return "hourly";
+  if (seconds === PRESET_SECONDS.several_times_daily) return "several_times_daily";
+  if (seconds === PRESET_SECONDS.daily) return "daily";
+  return "custom";
+}
+
+function cadenceLabel(seconds: number): string {
+  if (seconds % 86_400 === 0) return `every ${seconds / 86_400} day${seconds === 86_400 ? "" : "s"}`;
+  if (seconds % 3_600 === 0) return `every ${seconds / 3_600} hour${seconds === 3_600 ? "" : "s"}`;
+  if (seconds % 60 === 0) return `every ${seconds / 60} minute${seconds === 60 ? "" : "s"}`;
+  return `every ${seconds} seconds`;
+}
+
+function formatNextCheck(value: string | null | undefined): string {
+  if (!value) return "Not scheduled while this Watch is paused";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  return new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short", timeZoneName: "short" }).format(date);
+}
+
+function CadenceSetup({ watch, health, policy, working, onSave }: { watch: Watch; health: Health; policy?: CollectionRecord; working: boolean; onSave: (seconds: number) => Promise<void> }) {
+  const base = numericValue(policy?.base_cadence_seconds, 3_600);
+  const minimum = numericValue(policy?.min_cadence_seconds, 1);
+  const maximum = numericValue(policy?.max_cadence_seconds, 31_536_000);
+  const [choice, setChoice] = useState<CadenceChoice>(cadenceChoice(base));
+  const [seconds, setSeconds] = useState(String(base));
+  const [validation, setValidation] = useState("");
+
+  useEffect(() => {
+    setChoice(cadenceChoice(base));
+    setSeconds(String(base));
+    setValidation("");
+  }, [policy?.id, base]);
+
+  function choose(value: CadenceChoice) {
+    setChoice(value);
+    if (value !== "custom") setSeconds(String(PRESET_SECONDS[value]));
+    setValidation("");
+  }
+
+  async function save(event: FormEvent) {
+    event.preventDefault();
+    const value = Number(seconds);
+    if (!Number.isInteger(value) || value < minimum || value > maximum) {
+      setValidation(`Choose a cadence between ${cadenceLabel(minimum)} and ${cadenceLabel(maximum)}.`);
+      return;
+    }
+    try { await onSave(value); setValidation(""); } catch { /* The parent keeps the last good policy and renders recovery. */ }
+  }
+
+  const channels = Array.isArray(policy?.allowed_channels) ? policy.allowed_channels.map(String) : [];
+  const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone || "local time";
+  return <SectionCard title="Cadence" description="Choose how often this Watch should be checked. These choices update only this Watch's policy and do not start collection.">
+    <form className="stack-form" onSubmit={(event) => void save(event)}>
+      <label htmlFor="watch-cadence-choice">Check frequency</label>
+      <select id="watch-cadence-choice" value={choice} onChange={(event) => choose(event.target.value as CadenceChoice)} disabled={working}>
+        <option value="hourly">Hourly</option>
+        <option value="several_times_daily">Several times daily (every 6 hours)</option>
+        <option value="daily">Daily</option>
+        <option value="custom">Custom interval</option>
+      </select>
+      {choice === "custom" && <><label htmlFor="watch-cadence-seconds">Custom interval in seconds</label><input id="watch-cadence-seconds" type="number" min={minimum} max={maximum} step={1} value={seconds} onChange={(event) => { setSeconds(event.target.value); setValidation(""); }} onInvalid={(event) => { event.preventDefault(); setValidation(`Choose a cadence between ${cadenceLabel(minimum)} and ${cadenceLabel(maximum)}.`); }} aria-describedby="watch-cadence-help" /><p id="watch-cadence-help" className="status-note">Supported range: {cadenceLabel(minimum)} to {cadenceLabel(maximum)}.</p></>}
+      {validation && <p className="status-note" role="alert">{validation}</p>}
+      <div className="stats-grid"><Stat label="Saved cadence" value={cadenceLabel(base)} /><Stat label="Next check" value={formatNextCheck(health.next_scheduled_run)} /><Stat label="Timezone" value={timezone} /></div>
+      <p className="muted">Supported channels: {channels.length ? channels.join(", ") : "none configured"}. Paid mode: {numericValue(policy?.paid_budget_usd, 0) === 0 ? "zero paid calls" : "configured server policy"}. {watch.status === "paused" ? "This Watch remains paused until you explicitly start it." : "This change preserves the Watch's current state."}</p>
+      <button className="secondary-button" type="submit" disabled={working}>{working ? "Saving cadence…" : "Save cadence"}</button>
+    </form>
+  </SectionCard>;
 }
 
 function SourceSetup({ working, onCreate }: { working: boolean; onCreate: (input: SourceCandidateInput) => Promise<void> }) {
@@ -512,7 +610,7 @@ function SourceSetup({ working, onCreate }: { working: boolean; onCreate: (input
   </SectionCard>;
 }
 
-function WatchDetail({ watch, health, name, setName, term, setTerm, kind, setKind, working, onSave, onAddTerm, onAddSource, onDetachSource, onAction, onReview }: { watch: Watch; health: Health; name: string; setName: (value: string) => void; term: string; setTerm: (value: string) => void; kind: string; setKind: (value: string) => void; working: boolean; onSave: (event: FormEvent) => void; onAddTerm: (event: FormEvent) => Promise<void>; onAddSource: (input: SourceCandidateInput) => Promise<void>; onDetachSource: (sourceId: string) => Promise<void>; onAction: (path: string, body?: unknown) => Promise<void>; onReview: (path: string, status: "approved" | "rejected") => Promise<void> }) {
+function WatchDetail({ watch, health, name, setName, term, setTerm, kind, setKind, working, onSave, onAddTerm, onAddSource, onDetachSource, onUpdateCadence, onAction, onReview }: { watch: Watch; health: Health; name: string; setName: (value: string) => void; term: string; setTerm: (value: string) => void; kind: string; setKind: (value: string) => void; working: boolean; onSave: (event: FormEvent) => void; onAddTerm: (event: FormEvent) => Promise<void>; onAddSource: (input: SourceCandidateInput) => Promise<void>; onDetachSource: (sourceId: string) => Promise<void>; onUpdateCadence: (seconds: number) => Promise<void>; onAction: (path: string, body?: unknown) => Promise<void>; onReview: (path: string, status: "approved" | "rejected") => Promise<void> }) {
   const vocabulary = watch.vocabulary ?? [];
   const primaryTerms = watch.primary_terms ?? [];
   const candidates = watch.source_candidates ?? [];
@@ -532,6 +630,7 @@ function WatchDetail({ watch, health, name, setName, term, setTerm, kind, setKin
       <SectionCard title="Additional vocabulary" description="Approved Watch vocabulary affects future monitoring; suggestions remain inert until reviewed."><form className="inline-form" onSubmit={onAddTerm}><label htmlFor="watch-term">Add term</label><input id="watch-term" value={term} onChange={(event) => setTerm(event.target.value)} placeholder="Additional alias or exclusion" /><select aria-label="Vocabulary kind" value={kind} onChange={(event) => setKind(event.target.value)}><option value="alias">Alias</option><option value="synonym">Synonym</option><option value="acronym">Acronym</option><option value="acronym_expansion">Acronym expansion</option><option value="include">Include</option><option value="exclude">Exclude</option></select><button className="secondary-button" type="submit" disabled={working}>Add</button></form>{vocabulary.length ? <div className="resource-list">{vocabulary.map((item) => <div className="resource-row" key={item.id}><span><strong>{text(item.term)}</strong><small>{text(item.kind)} · {text(item.origin)} · {text(item.status)}</small></span>{item.status === "suggested" && <div className="button-row"><button className="secondary-button" type="button" onClick={() => void onReview(`vocabulary/${item.id}`, "approved")} disabled={working}>Approve</button><button className="quiet-button" type="button" onClick={() => void onReview(`vocabulary/${item.id}`, "rejected")} disabled={working}>Reject</button></div>}</div>)}</div> : <EmptyState title="No additional vocabulary" description="The confirmed Topic terms above are enough for the paused draft. Additional vocabulary can be reviewed later." />}</SectionCard>
       <SectionCard title="Source previews" description="Review each candidate before attaching it. Approval reuses an existing shared Source when possible; rejection keeps the decision without attaching anything.">{candidates.length ? <div className="resource-list">{candidates.map((item) => <div className="resource-row" key={item.id}><span><strong>{text(item.name)}</strong><small>{text(item.homepage_url)} · {text(item.discovery_method)} · {text(item.rationale)}</small></span><div className="button-row"><Badge tone={item.status === "approved" ? "mint" : item.status === "rejected" ? "neutral" : "amber"}>{item.status === "suggested" ? "preview" : text(item.status)}</Badge>{item.status === "suggested" && <><button className="secondary-button" type="button" onClick={() => void onReview(`source-candidates/${item.id}`, "approved")} disabled={working}>Approve</button><button className="quiet-button" type="button" onClick={() => void onReview(`source-candidates/${item.id}`, "rejected")} disabled={working}>Reject</button></>}</div></div>)}</div> : <EmptyState title="No Source previews" description={isUnstartedDraft ? "Search or preview a Source above. Nothing is attached or collecting yet." : "Run Source discovery when a Watch has relevant corpus state."} />}</SectionCard>
     </div>
+    <CadenceSetup watch={watch} health={health} policy={watch.policy} working={working} onSave={onUpdateCadence} />
     <SectionCard title="Attached Sources" description="Approved Sources use the normal Monitor acquisition path. Detach removes only this Watch relationship; the shared Source and its history stay intact.">{sources.length ? <div className="resource-list">{sources.map((item) => <div className="resource-row" key={text(item.source?.id)}><span><strong>{text(item.source?.name)}</strong><small>{text(item.source?.domain)} · next {formatDate(text(item.monitor?.next_check_at, "Not scheduled"))}</small></span><div className="button-row"><Badge tone={item.monitor?.enabled ? "mint" : "neutral"}>{item.monitor?.enabled ? "enabled" : "paused"}</Badge><button className="quiet-button" type="button" onClick={() => void onDetachSource(text(item.source?.id, ""))} disabled={working}>Detach</button></div></div>)}</div> : <EmptyState title="No attached Sources" description={isUnstartedDraft ? "Your Watch is safely paused. Add Sources is next; nothing is collecting yet." : "Approve a Source candidate to start normal acquisition."} />}</SectionCard>
   </>;
 }

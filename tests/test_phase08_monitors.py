@@ -39,6 +39,7 @@ from newsroom.monitoring import (
     ScopeSuggestionService,
     monitor_job_completion_hook,
 )
+from newsroom.intelligent_monitoring import WatchService
 from newsroom.jobs import (
     BudgetService,
     JobService,
@@ -136,6 +137,61 @@ def test_monitor_policy_and_targets_are_validated_and_persisted(tmp_db):
                 "policy_id": policy["id"],
             }
         )
+
+
+def test_watch_cadence_isolated_when_watches_share_a_policy(tmp_db):
+    apply_migrations(tmp_db)
+    core, topic = _category_and_topic(tmp_db)
+    other_topic = core.create_topic(
+        {
+            "category_id": topic["category_id"],
+            "slug": "quantum-hardware",
+            "name": "Quantum Hardware",
+        }
+    )
+    policy = _policy(tmp_db, base_cadence_seconds=60, min_cadence_seconds=30, max_cadence_seconds=86_400)
+    watches = WatchService(tmp_db)
+    first = watches.create({"name": "First Watch", "target_type": "topic", "target_id": topic["id"], "policy_id": policy["id"]})
+    second = watches.create({"name": "Second Watch", "target_type": "topic", "target_id": other_topic["id"], "policy_id": policy["id"]})
+
+    updated = MonitoringPolicyService(tmp_db).update_for_watch(first["id"], 21_600)
+
+    assert updated["watch"]["policy_id"] != policy["id"]
+    assert updated["policy"]["base_cadence_seconds"] == 21_600
+    assert MonitoringPolicyService(tmp_db).get(policy["id"])["base_cadence_seconds"] == 60
+    assert WatchService(tmp_db).get(second["id"])["policy_id"] == policy["id"]
+
+
+def test_watch_cadence_preserves_bounds_and_rebinds_paused_monitors(tmp_db):
+    apply_migrations(tmp_db)
+    core, topic = _category_and_topic(tmp_db)
+    source = core.create_source(
+        {
+            "name": "Cadence Source",
+            "slug": "cadence-source",
+            "homepage_url": "https://cadence.example/news",
+        }
+    )
+    policy = _policy(tmp_db, base_cadence_seconds=60, min_cadence_seconds=30, max_cadence_seconds=300)
+    watches = WatchService(tmp_db)
+    watch = watches.create({"name": "Cadence Watch", "target_type": "topic", "target_id": topic["id"], "policy_id": policy["id"]})
+    candidate = watches.add_source_candidate(
+        watch["id"],
+        {"source_id": source["id"], "name": source["name"], "rationale": "Fixture Source", "discovery_method": "existing_source"},
+    )
+    watches.review_source_candidate(watch["id"], candidate["id"], "approved", "editor")
+    watches.pause(watch["id"])
+
+    with pytest.raises(DomainValidation):
+        MonitoringPolicyService(tmp_db).update_for_watch(watch["id"], 10)
+    updated = MonitoringPolicyService(tmp_db).update_for_watch(watch["id"], 120)
+
+    monitor = watches.get(watch["id"])["sources"][0]["monitor"]
+    assert updated["policy"]["base_cadence_seconds"] == 120
+    assert updated["watch"]["status"] == "paused"
+    assert monitor["enabled"] == 0
+    assert monitor["next_check_at"] is not None
+    assert monitor["last_run_at"] is None
 
 
 def test_scope_suggestions_are_pending_until_approved_and_history_is_visible(tmp_db):

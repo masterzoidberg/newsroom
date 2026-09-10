@@ -248,6 +248,10 @@ class WatchPatch(StrictModel):
     discovery_enabled: Optional[bool] = None
 
 
+class WatchCadencePatch(StrictModel):
+    base_cadence_seconds: int = Field(ge=1, le=31_536_000)
+
+
 class WatchReview(StrictModel):
     """Shared approve/reject envelope for vocabulary and Source candidates."""
 
@@ -2430,6 +2434,11 @@ def create_domain_router(
     async def update_watch(request: Request, identifier: str, payload: WatchPatch):
         write_guard(request)
         return watches.update(identifier, payload.model_dump(exclude_unset=True))
+
+    @router.patch("/watches/{identifier}/cadence")
+    async def update_watch_cadence(request: Request, identifier: str, payload: WatchCadencePatch):
+        write_guard(request)
+        return policies.update_for_watch(identifier, payload.base_cadence_seconds)
 
     @router.get("/watches/{identifier}/health")
     async def get_watch_health(request: Request, identifier: str):
