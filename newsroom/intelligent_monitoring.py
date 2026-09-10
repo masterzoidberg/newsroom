@@ -843,11 +843,296 @@ class WatchService:
         finally:
             conn.close()
 
+    @staticmethod
+    def _target_interest(conn: sqlite3.Connection, watch: sqlite3.Row) -> str:
+        target = conn.execute(
+            f"SELECT * FROM {TARGET_TABLES[watch['target_type']]} WHERE id = ?",
+            (watch["target_id"],),
+        ).fetchone()
+        if target is None:
+            return ""
+        for field in ("description", "question", "name", "headline"):
+            if field in target.keys() and target[field]:
+                return str(target[field])
+        return ""
+
+    @staticmethod
+    def _review_payload(conn: sqlite3.Connection, watch: sqlite3.Row) -> dict[str, Any]:
+        """Project the saved Start contract without exposing internal IDs."""
+        policy = conn.execute(
+            "SELECT * FROM monitoring_policies WHERE id = ?", (watch["policy_id"],)
+        ).fetchone()
+        if policy is None:
+            raise DomainNotFound("monitoring policy not found")
+        scope = _scope_for_target(conn, watch["target_type"], watch["target_id"])
+        source_rows = conn.execute(
+            """
+            SELECT s.name, s.domain, s.homepage_url, s.feed_url,
+                   s.deleted_at, m.enabled
+            FROM watch_sources AS ws
+            JOIN sources AS s ON s.id = ws.source_id
+            JOIN monitors AS m ON m.id = ws.monitor_id
+            WHERE ws.watch_id = ?
+            ORDER BY s.name, s.id
+            """,
+            (watch["id"],),
+        ).fetchall()
+        sources = []
+        for row in source_rows:
+            usable = (
+                row["deleted_at"] is None
+                and bool(
+                    str(row["homepage_url"] or "").strip()
+                    or str(row["feed_url"] or "").strip()
+                )
+            )
+            sources.append(
+                {
+                    "name": row["name"],
+                    "domain": row["domain"],
+                    "homepage_url": row["homepage_url"],
+                    "feed_url": row["feed_url"],
+                    "usable": usable,
+                    "enabled": bool(row["enabled"]),
+                }
+            )
+
+        blockers: list[str] = []
+        if not sources or not any(source["usable"] for source in sources):
+            blockers.append(
+                "Add and approve at least one usable approved Source before starting."
+            )
+        def decode(field: str, default: Any) -> Any:
+            try:
+                return json.loads(policy[field] or json.dumps(default))
+            except (TypeError, ValueError, json.JSONDecodeError):
+                return default
+
+        paid_budget = float(policy["paid_budget_usd"] or 0.0)
+        return {
+            "interest": WatchService._target_interest(conn, watch),
+            "approved_terms": list(dict.fromkeys(scope.all_terms()))[:MAX_ACTIVE_QUERY_TERMS],
+            "excluded_terms": list(scope.exclusions)[:MAX_ACTIVE_QUERY_TERMS],
+            "sources": sources,
+            "cadence": {
+                "base_cadence_seconds": int(policy["base_cadence_seconds"]),
+                "min_cadence_seconds": int(policy["min_cadence_seconds"]),
+                "max_cadence_seconds": int(policy["max_cadence_seconds"]),
+                "next_check_at": None,
+            },
+            "supported_channels": decode("allowed_channels", []),
+            "paid_budget_usd": paid_budget,
+            "paid_mode": "zero-paid" if paid_budget == 0.0 else "paid-budget-configured",
+            "ready_to_start": not blockers,
+            "blockers": blockers,
+        }
+
+    @staticmethod
+    def _progress_payload(
+        conn: sqlite3.Connection,
+        watch: sqlite3.Row,
+        monitor_summary: sqlite3.Row,
+        monitors: Sequence[sqlite3.Row],
+    ) -> dict[str, Any]:
+        """Derive progress only from durable Monitor, Job, and result rows."""
+        monitor_ids = {str(row["id"]) for row in monitors}
+        placeholders = ",".join("?" for _ in monitor_ids) or "NULL"
+        monitor_jobs = list(
+            conn.execute(
+                f"""
+                SELECT id, status, attempts, next_attempt_at, failure_cause,
+                       created_at, updated_at
+                FROM jobs
+                WHERE job_type = 'monitor_check' AND monitor_id IN ({placeholders})
+                ORDER BY updated_at DESC, id DESC
+                LIMIT 100
+                """,
+                tuple(monitor_ids),
+            ).fetchall()
+        )
+        processing_jobs: list[sqlite3.Row] = []
+        for row in conn.execute(
+            """
+            SELECT id, status, attempts, next_attempt_at, failure_cause,
+                   payload_json, created_at, updated_at, result_json
+            FROM jobs
+            WHERE job_type = 'document_version_process'
+            ORDER BY updated_at DESC, id DESC
+            LIMIT 100
+            """
+        ).fetchall():
+            try:
+                payload = json.loads(row["payload_json"] or "{}")
+            except (TypeError, ValueError, json.JSONDecodeError):
+                payload = {}
+            if isinstance(payload, Mapping) and str(payload.get("monitor_id") or "") in monitor_ids:
+                processing_jobs.append(row)
+
+        all_jobs = [*monitor_jobs, *processing_jobs]
+        deferred = next(
+            (
+                row
+                for row in all_jobs
+                if row["status"] == "queued"
+                and int(row["attempts"] or 0) > 0
+                and row["next_attempt_at"]
+            ),
+            None,
+        )
+        failed = next(
+            (row for row in all_jobs if row["status"] in {"failed", "cancelled"}),
+            None,
+        )
+        latest_activity = conn.execute(
+            f"""
+            SELECT outcome, error_code, observed_at
+            FROM monitor_activity
+            WHERE monitor_id IN ({placeholders})
+            ORDER BY observed_at DESC, id DESC
+            LIMIT 1
+            """,
+            tuple(monitor_ids),
+        ).fetchone()
+
+        ready_documents: list[sqlite3.Row] = []
+        if monitor_ids:
+            ready_documents = list(
+                conn.execute(
+                    f"""
+                    SELECT DISTINCT d.id, d.title, d.canonical_url, dv.id AS version_id,
+                                    dv.retrieved_at
+                    FROM document_version_relevance AS r
+                    JOIN document_versions AS dv ON dv.id = r.document_version_id
+                    JOIN documents AS d ON d.id = dv.document_id
+                    WHERE r.monitor_id IN ({placeholders}) AND r.relevant = 1
+                      AND EXISTS (
+                          SELECT 1
+                          FROM article_analyses AS aa
+                          JOIN article_analysis_promotions AS ap
+                            ON ap.article_analysis_id = aa.id
+                          WHERE aa.document_version_id = dv.id
+                            AND aa.relevance_id = r.id
+                            AND ap.outcome_code = 'verified'
+                      )
+                    ORDER BY dv.retrieved_at DESC, dv.id DESC
+                    LIMIT 10
+                    """,
+                    tuple(monitor_ids),
+                ).fetchall()
+            )
+        ready_document_ids = [row[0] for row in ready_documents]
+        stories: list[sqlite3.Row] = []
+        if ready_document_ids:
+            story_placeholders = ",".join("?" for _ in ready_document_ids)
+            stories = list(
+                conn.execute(
+                    f"""
+                    SELECT DISTINCT s.id, sr.headline, s.updated_at
+                    FROM story_documents AS sd
+                    JOIN stories AS s ON s.id = sd.story_id
+                    JOIN story_revisions AS sr ON sr.story_id = s.id
+                    WHERE sd.document_id IN ({story_placeholders})
+                      AND sr.revision_number = (
+                          SELECT MAX(current.revision_number)
+                          FROM story_revisions AS current
+                          WHERE current.story_id = s.id
+                      )
+                    ORDER BY s.updated_at DESC, s.id DESC
+                    LIMIT 10
+                    """,
+                    tuple(ready_document_ids),
+                ).fetchall()
+            )
+        result_links = [
+            {
+                "kind": "document",
+                "id": row[0],
+                "title": row[1],
+                "canonical_url": row[2],
+                "version_id": row[3],
+                "ready_at": row[4],
+            }
+            for row in ready_documents
+        ] + [
+            {"kind": "story", "id": row[0], "title": row[1], "ready_at": row[2]}
+            for row in stories
+        ]
+
+        if watch["status"] == "paused":
+            state, label = "paused", "Paused"
+            detail = "This Watch is paused; no acquisition is running."
+        elif watch["status"] == "disabled":
+            state, label = "disabled", "Disabled"
+            detail = "This Watch is disabled; resume it after reviewing the saved setup."
+        elif deferred is not None:
+            state, label = "deferred", "Deferred for retry"
+            detail = "The last attempt is waiting for its persisted retry time."
+        elif any(row["status"] == "running" for row in processing_jobs):
+            state, label = "processing", "Processing"
+            detail = "A persisted Document processing job is evaluating acquired material."
+        elif any(row["status"] == "queued" for row in processing_jobs):
+            state, label = "processing", "Processing"
+            detail = "A persisted Document processing job is queued."
+        elif any(row["status"] == "running" for row in monitor_jobs):
+            state, label = "collecting", "Collecting"
+            detail = "A persisted Monitor job is collecting from an approved Source."
+        elif failed is not None:
+            state, label = "error", "Needs recovery"
+            detail = failed["failure_cause"] or "The last persisted attempt failed."
+        elif latest_activity is not None and latest_activity["outcome"] == "error":
+            state, label = "error", "Needs recovery"
+            detail = latest_activity["error_code"] or "The last persisted Monitor attempt failed."
+        elif latest_activity is not None and latest_activity["outcome"] == "no_change":
+            state, label = "no-change", "No change"
+            detail = "The last persisted acquisition completed and found no change."
+        elif processing_jobs and processing_jobs[0]["status"] == "succeeded":
+            try:
+                processing_result = json.loads(processing_jobs[0]["result_json"] or "{}")
+            except (TypeError, ValueError, json.JSONDecodeError):
+                processing_result = {}
+            relevance = processing_result.get("relevance") if isinstance(processing_result, Mapping) else None
+            if isinstance(relevance, Mapping) and relevance.get("relevant") is False:
+                state, label = "irrelevant", "Not relevant"
+                detail = "The last persisted processing decision found no approved-scope match."
+            elif result_links:
+                state, label = "ready", "Ready"
+                detail = "A persisted processed result is ready to review."
+            else:
+                state, label = "processing", "Processing"
+                detail = "Processing completed without a reviewable result yet."
+        elif result_links:
+            state, label = "ready", "Ready"
+            detail = "A persisted processed result is ready to review."
+        else:
+            state, label = "scheduled", "Scheduled"
+            detail = "The Watch is active and waiting for its next persisted check."
+
+        return {
+            "state": state,
+            "label": label,
+            "detail": detail,
+            "last_attempt": monitor_summary["last_attempt"],
+            "last_result": latest_activity["outcome"] if latest_activity else None,
+            "last_error": failed["failure_cause"] if failed else None,
+            "retryable": state in {"deferred", "error"},
+            "results": result_links,
+        }
+
     def health(self, watch_id: str) -> dict[str, Any]:
         """Return a bounded coverage and operational summary derived from state."""
         conn = storage.connect(self.db_path)
         try:
             watch = self._require_watch(conn, watch_id)
+            monitors = conn.execute(
+                """
+                SELECT m.*
+                FROM watch_sources AS ws
+                JOIN monitors AS m ON m.id = ws.monitor_id
+                WHERE ws.watch_id = ?
+                ORDER BY m.id
+                """,
+                (watch_id,),
+            ).fetchall()
             monitor_summary = conn.execute(
                 """
                 SELECT COUNT(*) AS attached_source_count,
@@ -881,12 +1166,15 @@ class WatchService:
                 SELECT job_type, status, payload_json, created_at, updated_at,
                        failure_cause
                 FROM jobs
-                WHERE job_type IN ('monitor_check', 'watch_source_discovery',
+                WHERE job_type IN ('watch_source_discovery',
                                    'watch_vocabulary_suggestion')
                 ORDER BY updated_at DESC, id DESC
                 LIMIT 100
                 """
             ).fetchall()
+            review = self._review_payload(conn, watch)
+            review["cadence"]["next_check_at"] = monitor_summary["next_scheduled_run"]
+            progress = self._progress_payload(conn, watch, monitor_summary, monitors)
         finally:
             conn.close()
 
@@ -922,6 +1210,8 @@ class WatchService:
             "last_discovery_run": watch["last_discovery_at"],
             "last_discovery_status": discovery_job["status"] if discovery_job else None,
             "last_error": recent_error,
+            "review": review,
+            "progress": progress,
         }
 
     def update(self, watch_id: str, data: Mapping[str, Any]) -> dict[str, Any]:
@@ -985,7 +1275,13 @@ class WatchService:
         conn = storage.connect(self.db_path)
         try:
             with storage.write_tx(conn):
-                self._require_watch(conn, watch_id)
+                watch = self._require_watch(conn, watch_id)
+                if status == "active":
+                    review = self._review_payload(conn, watch)
+                    if not review["ready_to_start"]:
+                        raise DomainConflict(
+                            "Watch cannot start: " + " ".join(review["blockers"])
+                        )
                 conn.execute(
                     "UPDATE watches SET status = ?, updated_at = ? WHERE id = ?",
                     (status, now, watch_id),

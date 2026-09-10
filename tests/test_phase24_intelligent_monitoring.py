@@ -17,7 +17,7 @@ from newsroom.evidence_promotion import ArticleAnalysisPromotionService
 from newsroom.integrity import check_database
 import newsroom.intelligent_monitoring as intelligent_monitoring
 from newsroom.intelligent_monitoring import WatchMaintenanceService, WatchService
-from newsroom.jobs import BudgetService, SchedulerService
+from newsroom.jobs import BudgetService, JobService, SchedulerService
 from newsroom import migrations
 from newsroom.migrations import apply_migrations, migration_status
 from newsroom.monitoring import MonitorService, MonitoringPolicyService
@@ -472,6 +472,213 @@ def test_watch_lifecycle_vocabulary_review_and_source_approval(tmp_db):
     assert resumed["status"] == "active"
     assert resumed["sources"][0]["monitor"]["enabled"] == 1
     assert check_database(tmp_db).ok
+
+
+def test_watch_review_blocks_start_until_one_usable_source_is_approved(tmp_db):
+    apply_migrations(tmp_db)
+    watches = WatchService(tmp_db)
+    setup = watches.create_paused_setup(_paused_setup_payload())
+
+    before = watches.health(setup["watch_id"])
+
+    assert before["progress"]["state"] == "paused"
+    assert before["review"]["ready_to_start"] is False
+    assert "approved Source" in " ".join(before["review"]["blockers"])
+    assert before["review"]["interest"] == setup["interest"]
+    assert set(before["review"]["approved_terms"]) == set(setup["primary_terms"])
+    assert before["review"]["cadence"]["base_cadence_seconds"] == 3600
+    assert before["review"]["paid_mode"] == "zero-paid"
+    with pytest.raises(DomainConflict, match="approved Source"):
+        watches.resume(setup["watch_id"])
+
+    candidate = watches.add_source_candidate(
+        setup["watch_id"],
+        {
+            "name": "NASA News",
+            "homepage_url": "https://www.nasa.gov/news/",
+            "rationale": "Primary agency publication",
+            "discovery_method": "manual",
+        },
+    )
+    watches.review_source_candidate(setup["watch_id"], candidate["id"], "approved", "editor")
+
+    ready = watches.health(setup["watch_id"])
+    assert ready["review"]["ready_to_start"] is True
+    assert ready["review"]["sources"][0]["usable"] is True
+    assert ready["progress"]["state"] == "paused"
+
+    started = watches.resume(setup["watch_id"])
+
+    assert started["status"] == "active"
+    after = watches.health(setup["watch_id"])
+    assert after["progress"]["state"] == "scheduled"
+    assert after["progress"]["last_attempt"] is None
+
+
+def test_watch_start_is_idempotent_under_concurrent_requests(tmp_db):
+    apply_migrations(tmp_db)
+    watches = WatchService(tmp_db)
+    setup = watches.create_paused_setup(_paused_setup_payload())
+    candidate = watches.add_source_candidate(
+        setup["watch_id"],
+        {
+            "name": "NASA News",
+            "homepage_url": "https://www.nasa.gov/news/",
+            "rationale": "Primary agency publication",
+            "discovery_method": "manual",
+        },
+    )
+    watches.review_source_candidate(setup["watch_id"], candidate["id"], "approved", "editor")
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        results = list(pool.map(lambda _item: watches.resume(setup["watch_id"]), range(2)))
+
+    assert {result["status"] for result in results} == {"active"}
+    detail = watches.get(setup["watch_id"])
+    assert len(detail["sources"]) == 1
+    assert detail["sources"][0]["monitor"]["enabled"] == 1
+    conn = storage.connect(tmp_db)
+    try:
+        assert conn.execute("SELECT COUNT(*) FROM monitors").fetchone()[0] == 1
+        assert conn.execute("SELECT COUNT(*) FROM jobs").fetchone()[0] == 0
+    finally:
+        conn.close()
+
+
+def test_watch_progress_requires_persisted_verified_result_before_ready(tmp_db):
+    analysis = _analysis(
+        tmp_db,
+        text="The agency released a UAP report.",
+        excerpt="released a UAP report",
+    )
+    conn = storage.connect(tmp_db)
+    try:
+        monitor = conn.execute(
+            "SELECT target_id, need_type, need_id, policy_id FROM monitors WHERE id = ?",
+            (analysis["monitor_id"],),
+        ).fetchone()
+    finally:
+        conn.close()
+
+    watches = WatchService(tmp_db)
+    watch = watches.create(
+        {
+            "name": "First value Watch",
+            "target_type": monitor["need_type"],
+            "target_id": monitor["need_id"],
+            "policy_id": monitor["policy_id"],
+            "status": "paused",
+        }
+    )
+    candidate = watches.add_source_candidate(
+        watch["id"],
+        {
+            "source_id": monitor["target_id"],
+            "name": "Example",
+            "rationale": "Existing Source selected for the Watch.",
+            "discovery_method": "existing_source",
+        },
+    )
+    watches.review_source_candidate(watch["id"], candidate["id"], "approved", "editor")
+    watches.resume(watch["id"])
+
+    # A relevant decision is not enough: Start must not claim Ready until the
+    # existing promotion path has persisted verified evidence.
+    before_promotion = watches.health(watch["id"])
+    assert before_promotion["progress"]["state"] == "processing"
+    assert before_promotion["progress"]["results"] == []
+
+    ArticleAnalysisPromotionService(tmp_db).promote(analysis["id"])
+    queue = JobService(tmp_db)
+    queue.claim(analysis["job_id"], "watch-progress-test", now="2026-08-20T12:00:00Z")
+    queue.complete(
+        analysis["job_id"],
+        "watch-progress-test",
+        "succeeded",
+        outcome={"relevance": {"relevant": True}},
+        now="2026-08-20T12:00:00Z",
+    )
+
+    after_promotion = watches.health(watch["id"])
+    assert after_promotion["progress"]["state"] == "ready"
+    assert after_promotion["progress"]["results"][0]["kind"] == "document"
+    assert after_promotion["progress"]["results"][0]["title"] == "UAP report"
+
+
+def test_watch_progress_distinguishes_deferred_error_and_no_change_from_schedule(tmp_db):
+    apply_migrations(tmp_db)
+    watches = WatchService(tmp_db)
+    setup = watches.create_paused_setup(_paused_setup_payload())
+    candidate = watches.add_source_candidate(
+        setup["watch_id"],
+        {
+            "name": "NASA News",
+            "homepage_url": "https://www.nasa.gov/news/",
+            "rationale": "Primary agency publication",
+            "discovery_method": "manual",
+        },
+    )
+    watches.review_source_candidate(setup["watch_id"], candidate["id"], "approved", "editor")
+    watches.resume(setup["watch_id"])
+    monitor_id = watches.get(setup["watch_id"])["sources"][0]["monitor"]["id"]
+    queue = JobService(tmp_db)
+
+    queued = queue.enqueue(
+        "monitor_check",
+        {"monitor_id": monitor_id},
+        monitor_id=monitor_id,
+        idempotency_key="watch-progress-queued",
+    )
+    assert watches.health(setup["watch_id"])["progress"]["state"] == "scheduled"
+    queue.claim(queued["id"], "watch-progress-test", now="2026-08-20T12:00:00Z")
+    assert watches.health(setup["watch_id"])["progress"]["state"] == "collecting"
+    queue.complete(
+        queued["id"],
+        "watch-progress-test",
+        "succeeded",
+        outcome={"outcome": "no_change"},
+        now="2026-08-20T12:00:00Z",
+    )
+    MonitorService(tmp_db).record_activity(
+        monitor_id, "no_change", observed_at="2026-08-20T12:00:00Z"
+    )
+    assert watches.health(setup["watch_id"])["progress"]["state"] == "no-change"
+
+    retry = queue.enqueue(
+        "monitor_check",
+        {"monitor_id": monitor_id},
+        monitor_id=monitor_id,
+        idempotency_key="watch-progress-retry",
+    )
+    conn = storage.connect(tmp_db)
+    try:
+        with storage.write_tx(conn):
+            conn.execute(
+                """
+                UPDATE jobs
+                   SET status = 'queued', attempts = 1,
+                       next_attempt_at = '2026-08-20T12:05:00Z'
+                 WHERE id = ?
+                """,
+                (retry["id"],),
+            )
+    finally:
+        conn.close()
+    assert watches.health(setup["watch_id"])["progress"]["state"] == "deferred"
+
+    conn = storage.connect(tmp_db)
+    try:
+        with storage.write_tx(conn):
+            conn.execute(
+                "UPDATE jobs SET status = 'failed', failure_cause = 'source unavailable' WHERE id = ?",
+                (retry["id"],),
+            )
+    finally:
+        conn.close()
+    failed = watches.health(setup["watch_id"])
+    assert failed["progress"]["state"] == "error"
+    assert failed["progress"]["retryable"] is True
+    assert failed["status"] == "active"
 
 
 def test_paused_watch_can_preview_named_existing_source_without_starting_collection(tmp_db):

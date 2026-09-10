@@ -23,6 +23,32 @@ type Health = {
   next_scheduled_run?: string | null;
   last_discovery_run?: string | null;
   last_error?: string | null;
+  review?: WatchReview;
+  progress?: WatchProgress;
+};
+
+type WatchReview = {
+  interest: string;
+  approved_terms: string[];
+  excluded_terms: string[];
+  sources: Array<{ name: string; domain?: string | null; usable: boolean; enabled: boolean }>;
+  cadence: { base_cadence_seconds: number; min_cadence_seconds: number; max_cadence_seconds: number; next_check_at?: string | null };
+  supported_channels: string[];
+  paid_budget_usd: number;
+  paid_mode: string;
+  ready_to_start: boolean;
+  blockers: string[];
+};
+
+type WatchProgress = {
+  state: string;
+  label: string;
+  detail: string;
+  last_attempt?: string | null;
+  last_result?: string | null;
+  last_error?: string | null;
+  retryable: boolean;
+  results: Array<{ kind: "document" | "story"; id: string; title: string; canonical_url?: string; ready_at?: string | null }>;
 };
 
 type SetupDraft = {
@@ -231,6 +257,30 @@ export function WatchManagementView() {
   }, [loadDetail]);
 
   useEffect(() => { void load(); }, [load]);
+
+  useEffect(() => {
+    const progressState = health?.progress?.state;
+    if (!selectedId || !progressState || !["collecting", "processing", "deferred", "error"].includes(progressState)) return;
+    let cancelled = false;
+    let timer: number | undefined;
+    let failures = 0;
+    const poll = async () => {
+      if (cancelled) return;
+      try {
+        setHealth(await apiFetch<Health>(`/watches/${selectedId}/health`));
+        failures = 0;
+      } catch (caught) {
+        failures += 1;
+        setError(caught);
+      }
+      if (cancelled) return;
+      const base = progressState === "error" ? 10_000 : progressState === "deferred" ? 5_000 : 2_500;
+      const delay = Math.min(30_000, base * (2 ** Math.min(failures, 3)));
+      timer = window.setTimeout(() => void poll(), delay);
+    };
+    timer = window.setTimeout(() => void poll(), progressState === "error" ? 5_000 : 1_500);
+    return () => { cancelled = true; if (timer !== undefined) window.clearTimeout(timer); };
+  }, [selectedId, health?.progress?.state]);
 
   async function selectWatch(id: string) {
     setSelectedId(id);
@@ -480,7 +530,7 @@ function formatNextCheck(value: string | null | undefined): string {
   if (!value) return "Not scheduled while this Watch is paused";
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return value;
-  return new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short", timeZoneName: "short" }).format(date);
+  return new Intl.DateTimeFormat(undefined, { year: "numeric", month: "short", day: "numeric", hour: "numeric", minute: "2-digit", timeZoneName: "short" }).format(date);
 }
 
 function CadenceSetup({ watch, health, policy, working, onSave }: { watch: Watch; health: Health; policy?: CollectionRecord; working: boolean; onSave: (seconds: number) => Promise<void> }) {
@@ -615,15 +665,32 @@ function WatchDetail({ watch, health, name, setName, term, setTerm, kind, setKin
   const primaryTerms = watch.primary_terms ?? [];
   const candidates = watch.source_candidates ?? [];
   const sources = watch.sources ?? [];
-  const canResume = health.status !== "active" && sources.length > 0;
+  const review = health.review;
+  const progress = health.progress;
+  const canResume = health.status !== "active" && Boolean(review?.ready_to_start);
   const isUnstartedDraft = health.status === "paused" && sources.length === 0;
+  const progressTone = progress?.state === "ready" || progress?.state === "no-change" ? "mint" : progress?.state === "error" ? "coral" : progress?.state === "deferred" || progress?.state === "irrelevant" ? "amber" : "neutral";
   return <>
     {isUnstartedDraft && <SectionCard title="Setup saved" description="This Watch is paused and is not collecting yet."><div className="button-row"><Badge tone="neutral">Paused</Badge><Badge tone="amber">Next: Add Sources</Badge></div><p className="muted">Your approved primary terms are stored. Source selection is the next setup step; starting collection comes later after Sources and cadence are reviewed.</p></SectionCard>}
-    <SectionCard title={text(watch.name)} description={`${text(watch.target_type, "Watch")} monitoring intent`} action={<div className="button-row"><Badge tone={health.status === "active" ? "mint" : "neutral"}>{health.status}</Badge>{health.status === "active" && <button className="quiet-button" type="button" onClick={() => void onAction("pause")} disabled={working}>Pause</button>}{canResume && <button className="quiet-button" type="button" onClick={() => void onAction("resume")} disabled={working}>Resume</button>}{sources.length > 0 && <button className="secondary-button" type="button" onClick={() => void onAction("vocabulary/suggest", { limit: 20 })} disabled={working}>Suggest vocabulary</button>}</div>}>
+    <SectionCard title={text(watch.name)} description={`${text(watch.target_type, "Watch")} monitoring intent`} action={<div className="button-row"><Badge tone={health.status === "active" ? "mint" : "neutral"}>{health.status}</Badge>{health.status === "active" && <button className="quiet-button" type="button" onClick={() => void onAction("pause")} disabled={working}>Pause</button>}{canResume && <button className="primary-button" type="button" onClick={() => void onAction("resume")} disabled={working}>{health.status === "paused" ? "Start Watch" : "Resume Watch"}</button>}{sources.length > 0 && <button className="secondary-button" type="button" onClick={() => void onAction("vocabulary/suggest", { limit: 20 })} disabled={working}>Suggest vocabulary</button>}</div>}>
       <div className="stats-grid"><Stat label="Active Sources" value={health.active_source_count} tone="mint" /><Stat label="Pending terms" value={health.pending_vocabulary_suggestion_count} tone="amber" /><Stat label="Pending Sources" value={health.pending_source_candidate_count} tone="amber" /><Stat label="Next run" value={formatDate(text(health.next_scheduled_run, "Not scheduled"))} /></div>
       <form className="inline-form" onSubmit={onSave}><label htmlFor="selected-watch-name">Edit name</label><input id="selected-watch-name" value={name} onChange={(event) => setName(event.target.value)} /><button className="secondary-button" type="submit" disabled={working}>Save</button></form>
       {health.last_error && <p className="status-note">Recent error: {health.last_error}</p>}
     </SectionCard>
+    {review && <SectionCard title="Review before Start" description="Newsroom will start only from this saved interest, approved scope, Sources, cadence, and budget mode. Starting activates existing Monitors; it does not claim that a result is ready.">
+      <div className="stats-grid"><Stat label="Saved interest" value={review.interest || "Not recorded"} /><Stat label="Approved terms" value={review.approved_terms.length} tone={review.approved_terms.length ? "mint" : "amber"} /><Stat label="Cadence" value={cadenceLabel(review.cadence.base_cadence_seconds)} /><Stat label="Budget mode" value={review.paid_mode === "zero-paid" ? "Zero-paid" : "Configured paid budget"} tone={review.paid_mode === "zero-paid" ? "mint" : "amber"} /></div>
+      <div className="content-grid">
+        <div><h3>Approved scope</h3>{review.approved_terms.length ? <ul className="compact-list">{review.approved_terms.map((item) => <li key={item}><Badge tone="mint">approved</Badge> {item}</li>)}</ul> : <p className="muted">No approved terms are saved.</p>}</div>
+        <div><h3>Approved Sources</h3>{review.sources.length ? <ul className="compact-list">{review.sources.map((item) => <li key={`${item.name}-${item.domain}`}><Badge tone={item.usable ? "mint" : "coral"}>{item.usable ? "usable" : "not usable"}</Badge> {item.name}{item.domain ? ` · ${item.domain}` : ""}</li>)}</ul> : <p className="muted">No approved Sources yet.</p>}</div>
+      </div>
+      <p className="muted">Allowed channels: {review.supported_channels.length ? review.supported_channels.join(", ") : "none configured"}. {review.cadence.next_check_at ? `Next check: ${formatNextCheck(review.cadence.next_check_at)}.` : "Next check will be scheduled when this Watch starts."}</p>
+      {!review.ready_to_start && <div className="state-panel empty-panel" role="status"><strong>Complete this review before Start.</strong><ul className="compact-list">{review.blockers.map((item) => <li key={item}>{item}</li>)}</ul></div>}
+    </SectionCard>}
+    {progress && <SectionCard title="First-value progress" description="This status is read from persisted backend state. It distinguishes an attempt from a verified result." action={<Badge tone={progressTone}>{progress.label}</Badge>}>
+      <div aria-live="polite"><p>{progress.detail}</p><div className="stats-grid"><Stat label="State" value={progress.label} tone={progressTone} /><Stat label="Last attempt" value={progress.last_attempt ? formatDate(progress.last_attempt) : "Not attempted"} /><Stat label="Last result" value={progress.last_result ?? "Not attempted"} /></div></div>
+      {progress.results.length ? <div className="resource-list" aria-label="Ready results">{progress.results.map((item) => <div className="resource-row" key={`${item.kind}-${item.id}`}><span><strong>{item.kind === "document" ? "Document" : "Story"}: {item.title}</strong><small>{item.ready_at ? formatDate(item.ready_at) : "Persisted result"}</small></span><div className="button-row">{item.kind === "document" && item.canonical_url && <a className="quiet-button" href={item.canonical_url} target="_blank" rel="noreferrer">Open source</a>}<a className="secondary-button" href={`#${item.kind === "document" ? "documents" : "stories"}`}>Open {item.kind === "document" ? "Documents" : "Stories"}</a></div></div>)}</div> : progress.state === "ready" ? <p className="status-note">A ready state needs a persisted Document or Story link; none is available yet.</p> : <p className="muted">No ready result has been persisted.</p>}
+      {(progress.state === "error" || progress.state === "deferred") && <p className="status-note">Your setup is preserved. Review the Source configuration and use the existing Watch controls to recover; Newsroom will not label this attempt successful until backend state confirms it.</p>}
+    </SectionCard>}
     {watch.target_type === "topic" && <SectionCard title="Confirmed primary scope" description="These exact Topic terms are active monitoring scope. AST-24 does not generate or preapprove additional semantics.">{primaryTerms.length ? <div className="resource-list">{primaryTerms.map((item) => <div className="resource-row" key={item.id}><span><strong>{text(item.term)}</strong><small>{text(item.term_type, "include")} · {text(item.concept_kind, "term")}</small></span><Badge tone="mint">confirmed</Badge></div>)}</div> : <EmptyState title="No primary terms" description="This Topic has no confirmed primary scope. Edit the Topic vocabulary before relying on it for monitoring." />}</SectionCard>}
     <SourceSetup working={working} onCreate={onAddSource} />
     <div className="content-grid">
