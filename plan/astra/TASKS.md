@@ -1,6 +1,6 @@
 # Canonical execution ledger
 
-Rebaseline transitioned 2026-09-09 after automated Gate 0 acceptance at integrated head `18c5ee8bdf56a44218af4ecd6d7e8d9ead68f8c0`. Newsroom Run 1 then completed sequentially on `astra/AST-25-27-first-watch` through code head `35584eb`: AST-25, AST-26 and AST-27 are DONE and Checkpoint C1 passed. The C1 backend run collected 919 tests and completed with exit 0 (918 passed and one documented POSIX-only skip); Ruff and all frontend checks passed. Physical reboot/sign-in and lock/sleep/wake evidence remains pending for release. AST-33 is now the sole READY task.
+Rebaseline transitioned 2026-09-09 after automated Gate 0 acceptance at integrated head `18c5ee8bdf56a44218af4ecd6d7e8d9ead68f8c0`. Newsroom Run 1 then completed sequentially on `astra/AST-25-27-first-watch` through AST-27 at code head `35584eb`. AST-25, AST-26, AST-27 and AST-33 are DONE; AST-33 completed at code head `4a7c0f9` with the full local backend suite green. Physical reboot/sign-in and lock/sleep/wake evidence remains pending for release. AST-34 is now the sole READY task.
 
 ## Contract inherited by every future task
 
@@ -55,8 +55,8 @@ Statuses: READY, NOT_STARTED, IN_PROGRESS, DONE, BLOCKED, DEFERRED, SUPERSEDED. 
 | AST-30 | Decide and freeze fresh-corpus source recommendation contract | NOT_STARTED | AST-29 | A |
 | AST-31 | Implement bounded fresh-corpus source candidates | NOT_STARTED | AST-30 | 3 |
 | AST-32 | Connect recommended Sources and source health to setup | NOT_STARTED | AST-31, AST-25 | 2 |
-| AST-33 | Persist and query the returning-user review boundary | READY | AST-27 | 3 |
-| AST-34 | Build Watch overview and since-visit Home | NOT_STARTED | AST-33 | 2 |
+| AST-33 | Persist and query the returning-user review boundary | DONE | AST-27 | 3 |
+| AST-34 | Build Watch overview and since-visit Home | READY | AST-33 | 2 |
 | AST-35 | Connect summary through Claim to exact source Evidence | NOT_STARTED | AST-34 | 2 |
 | AST-36 | Create and read Living Reports from named Watch context | NOT_STARTED | AST-35 | 2 |
 | AST-37 | Add durable user-selected briefing schedules | NOT_STARTED | AST-36 | 3 |
@@ -415,7 +415,7 @@ Full original task bodies, acceptance and completion evidence are preserved in [
 
 ## AST-33 — Persist and query the returning-user review boundary
 
-- **Status:** READY
+- **Status:** DONE
 - **Outcome / why it matters:** Persist and query the returning-user review boundary. See the mapped user gap in FEATURE_GAP_ANALYSIS and milestone in COMPLETION_ROADMAP.
 - **Dependencies:** AST-27
 - **Exact scope / files:** newsroom/attention.py; newsroom/domain_api.py; newsroom/temporal.py; tests/test_phase29_temporal.py
@@ -425,11 +425,11 @@ Full original task bodies, acceptance and completion evidence are preserved in [
 - **Model:** TIER 3; reasoning high.
 - **Prompt filename:** Not generated: outside the six-task horizon. Generate `prompts/AST-33-<bounded-title>.md` after dependencies land; retained old template (if any) is historical only.
 - **Non-goals, invariants, browser evidence, rollback, cost and stop condition:** inherited in full from Contract inherited by every future task above.
-- **Completion evidence:** Not executed by this rebaseline. AST-05 has implementation on the unmerged stack but incomplete qualification; all other records describe future work or explicit external gates.
+- **Completion evidence:** DONE on `astra/AST-25-27-first-watch`, commit `4a7c0f9`. Reused the existing `settings` table with user-scoped `review_boundary:<user_id>` keys, so schema 36 remains unchanged. Added authenticated `GET /api/v1/review-boundary`, bounded `GET /api/v1/review-boundary/changes`, and CSRF-protected `PUT /api/v1/review-boundary`; reads never advance the cursor, and writes normalize UTC, reject future/regressive values, and remain idempotent. Meaningful changes are evidence-backed material Story revisions keyed by knowledge time, with publication time returned only as context. Descending keyset pagination uses an encoded high-water mark for replayable pages. `python -m pytest -q` passed at 100% with one documented POSIX-only skip; `ruff check newsroom tests`, `python -m compileall -q newsroom tests`, `python -m newsroom.evals validate`, `python -m newsroom.evals lite-contract`, and `git diff --check` passed. `python plan/astra/validate_plan.py` passed after this ledger transition; no frontend or browser evidence was applicable to this backend-only task.
 
 ## AST-34 — Build Watch overview and since-visit Home
 
-- **Status:** NOT_STARTED
+- **Status:** READY
 - **Outcome / why it matters:** Build Watch overview and since-visit Home. See the mapped user gap in FEATURE_GAP_ANALYSIS and milestone in COMPLETION_ROADMAP.
 - **Dependencies:** AST-33
 - **Exact scope / files:** frontend/src/views/InboxView.tsx; frontend/src/views/WatchManagementView.tsx; frontend/src/views/DocumentView.tsx

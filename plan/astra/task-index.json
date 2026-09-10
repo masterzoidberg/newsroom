@@ -212,7 +212,7 @@
     "accept": "Returning after days gets bounded stable range/new changes; viewing does not silently mark all items seen; future timestamps, late ingestion and timezone changes cannot omit newly known evidence.",
     "tests": "Cursor boundary/late arrival/pagination/repeat visit tests using injected time; no frozen eval changes.",
     "tier": "3",
-    "status": "READY",
+    "status": "DONE",
     "prompt": null
   },
   {
@@ -224,7 +224,7 @@
     "accept": "No-Watch Home has clear setup action; populated Home shows actual collection time and complete paged changes; relevant-but-deferred analysis is reachable without fabricated Story.",
     "tests": "Browser new/returning/quiet/late updates/deferred/failure/phone and >100-item pagination fixtures.",
     "tier": "2",
-    "status": "NOT_STARTED",
+    "status": "READY",
     "prompt": null
   },
   {
