@@ -7,18 +7,21 @@ append-only relationship that made it usable are no later than that boundary.
 """
 from __future__ import annotations
 
+import base64
+import binascii
 import json
 import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Iterable, Mapping
+from typing import Any, Callable, Iterable, Mapping
 
 from . import storage
-from .domain import DomainNotFound, DomainValidation
+from .domain import DomainNotFound, DomainValidation, utc_now
 from .evidence import ACCEPTED_STATES
 
 
 TEMPORAL_CLAIM_STATES = frozenset({*ACCEPTED_STATES, "disputed"})
+REVIEW_CHANGE_EPOCH = "1970-01-01T00:00:00.000000Z"
 
 
 def normalize_as_of(value: str | datetime) -> str:
@@ -65,8 +68,230 @@ def _json(value: str | None, default: Any) -> Any:
 class TemporalReadService:
     """Read canonical evidence, Claims, Stories, and Reports as-of a boundary."""
 
-    def __init__(self, db_path: str | Path):
+    def __init__(self, db_path: str | Path, *, clock: Callable[[], str] | None = None):
         self.db_path = Path(db_path)
+        self._clock = clock or utc_now
+
+    @staticmethod
+    def _encode_page_token(value: Mapping[str, Any]) -> str:
+        raw = json.dumps(value, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        return base64.urlsafe_b64encode(raw).decode("ascii").rstrip("=")
+
+    @staticmethod
+    def _decode_page_token(value: str) -> dict[str, Any]:
+        if not isinstance(value, str) or not value or len(value) > 2048:
+            raise DomainValidation("page_token is invalid")
+        try:
+            padded = value + ("=" * (-len(value) % 4))
+            decoded = base64.urlsafe_b64decode(padded.encode("ascii"))
+            payload = json.loads(decoded.decode("utf-8"))
+        except (ValueError, UnicodeDecodeError, binascii.Error) as exc:
+            raise DomainValidation("page_token is invalid") from exc
+        if not isinstance(payload, dict) or payload.get("version") != 1:
+            raise DomainValidation("page_token is invalid")
+        for name in ("since", "snapshot", "after"):
+            if not isinstance(payload.get(name), dict if name != "since" else str):
+                raise DomainValidation("page_token is invalid")
+        for name in ("snapshot", "after"):
+            value = payload[name]
+            if not isinstance(value.get("at"), str) or not isinstance(value.get("id"), str) or not value["id"]:
+                raise DomainValidation("page_token is invalid")
+        try:
+            payload["since"] = normalize_as_of(payload["since"])
+            payload["snapshot"]["at"] = normalize_as_of(payload["snapshot"]["at"])
+            payload["after"]["at"] = normalize_as_of(payload["after"]["at"])
+        except DomainValidation as exc:
+            raise DomainValidation("page_token is invalid") from exc
+        return payload
+
+    @staticmethod
+    def _watch_context(
+        conn: sqlite3.Connection,
+        *,
+        story_id: str,
+        revision_id: str,
+    ) -> list[dict[str, str]]:
+        rows = conn.execute(
+            """
+            SELECT DISTINCT w.id, w.name, w.target_type
+            FROM watches w
+            WHERE (w.target_type = 'story' AND w.target_id = ?)
+               OR (w.target_type = 'topic' AND EXISTS (
+                    SELECT 1 FROM story_topics st
+                    WHERE st.story_id = ? AND st.topic_id = w.target_id
+               ))
+               OR (w.target_type = 'subject' AND EXISTS (
+                    SELECT 1 FROM story_subjects ss
+                    WHERE ss.story_id = ? AND ss.subject_id = w.target_id
+               ))
+               OR (w.target_type = 'source' AND EXISTS (
+                    SELECT 1
+                    FROM story_revision_documents srd
+                    JOIN documents d ON d.id = srd.document_id
+                    WHERE srd.revision_id = ? AND d.source_id = w.target_id
+               ))
+            ORDER BY w.name COLLATE NOCASE, w.id
+            """,
+            (story_id, story_id, story_id, revision_id),
+        ).fetchall()
+        return [{"id": row[0], "name": row[1], "target_type": row[2]} for row in rows]
+
+    def meaningful_changes_since(
+        self,
+        since: str | datetime | None = None,
+        *,
+        limit: int = 25,
+        page_token: str | None = None,
+    ) -> dict[str, Any]:
+        """List evidence-backed material Story revisions after a knowledge boundary.
+
+        ``story_revisions.created_at`` is the knowledge time: it records when
+        Newsroom recorded the evidence-backed revision. Publication time is
+        returned as context only and never participates in eligibility. Each
+        revision is one logical item, which avoids duplicating the same change
+        through Alerts or read-time Attention projections.
+
+        Pagination is descending keyset pagination with a first-page
+        high-water mark. The token therefore replays the same result window
+        even if a newer row is inserted between page requests.
+        """
+
+        if isinstance(limit, bool) or not 1 <= limit <= 100:
+            raise DomainValidation("change limit must be between 1 and 100")
+        token = self._decode_page_token(page_token) if page_token else None
+        if token is not None:
+            token_since = token["since"]
+            if since is not None and normalize_as_of(since) != token_since:
+                raise DomainValidation("page_token does not match since")
+            boundary = token_since
+            snapshot = token["snapshot"]
+            after = token["after"]
+        else:
+            boundary = normalize_as_of(since) if since is not None else REVIEW_CHANGE_EPOCH
+            snapshot = None
+            after = None
+        if boundary > normalize_as_of(self._clock()):
+            raise DomainValidation("review cursor cannot be in the future")
+
+        clauses = [
+            "r.material_change = 1",
+            "s.deleted_at IS NULL",
+            "julianday(r.created_at) > julianday(?)",
+            "EXISTS ("
+            " SELECT 1"
+            " FROM story_revision_claims src"
+            " JOIN claims c ON c.id = src.claim_id"
+            " JOIN claim_evidence ce ON ce.claim_id = c.id AND ce.relationship = 'supports'"
+            " WHERE src.revision_id = r.id AND c.accepted_at IS NOT NULL"
+            ")",
+        ]
+        params: list[Any] = [boundary]
+        if snapshot is not None:
+            clauses.append(
+                "(julianday(r.created_at) < julianday(?) "
+                "OR (julianday(r.created_at) = julianday(?) AND r.id <= ?))"
+            )
+            params.extend([snapshot["at"], snapshot["at"], snapshot["id"]])
+        if after is not None:
+            clauses.append(
+                "(julianday(r.created_at) < julianday(?) "
+                "OR (julianday(r.created_at) = julianday(?) AND r.id < ?))"
+            )
+            params.extend([after["at"], after["at"], after["id"]])
+
+        conn = storage.connect(self.db_path)
+        try:
+            rows = conn.execute(
+                f"""
+                SELECT r.id AS revision_id, r.story_id, r.revision_number,
+                       r.headline, r.summary, r.why_it_matters, r.created_at AS knowledge_at,
+                       s.lifecycle,
+                       (SELECT MAX(d.published_at)
+                          FROM story_revision_documents srd
+                          JOIN documents d ON d.id = srd.document_id
+                         WHERE srd.revision_id = r.id) AS publication_at,
+                       (SELECT COUNT(DISTINCT src.claim_id)
+                          FROM story_revision_claims src
+                          JOIN claims c ON c.id = src.claim_id
+                         WHERE src.revision_id = r.id AND c.accepted_at IS NOT NULL) AS claim_count,
+                       (SELECT COUNT(DISTINCT ce.evidence_span_id)
+                          FROM story_revision_claims src
+                          JOIN claims c ON c.id = src.claim_id
+                          JOIN claim_evidence ce ON ce.claim_id = c.id AND ce.relationship = 'supports'
+                         WHERE src.revision_id = r.id AND c.accepted_at IS NOT NULL) AS supporting_evidence_count
+                  FROM story_revisions r
+                  JOIN stories s ON s.id = r.story_id
+                 WHERE {' AND '.join(clauses)}
+                 ORDER BY julianday(r.created_at) DESC, r.id DESC
+                 LIMIT ?
+                """,
+                [*params, limit + 1],
+            ).fetchall()
+            if not rows:
+                return {
+                    "since": boundary,
+                    "items": [],
+                    "next_cursor": None,
+                    "has_more": False,
+                    "bounded": True,
+                    "limit": limit,
+                }
+            if snapshot is None:
+                snapshot = {"at": normalize_as_of(rows[0]["knowledge_at"]), "id": rows[0]["revision_id"]}
+            has_more = len(rows) > limit
+            selected = rows[:limit]
+            items: list[dict[str, Any]] = []
+            for row in selected:
+                items.append(
+                    {
+                        "id": f"story-revision:{row['revision_id']}",
+                        "revision_id": row["revision_id"],
+                        "knowledge_at": row["knowledge_at"],
+                        "change_type": "material_story_update",
+                        "reason_code": "material_change",
+                        "evidence_backed": True,
+                        "claim_count": int(row["claim_count"]),
+                        "supporting_evidence_count": int(row["supporting_evidence_count"]),
+                        "publication_at": row["publication_at"],
+                        "story": {
+                            "id": row["story_id"],
+                            "headline": row["headline"],
+                            "lifecycle": row["lifecycle"],
+                        },
+                        "summary": row["summary"],
+                        "why_it_matters": row["why_it_matters"],
+                        "watch_context": self._watch_context(
+                            conn,
+                            story_id=row["story_id"],
+                            revision_id=row["revision_id"],
+                        ),
+                        "navigation": {
+                            "story_id": row["story_id"],
+                            "revision_id": row["revision_id"],
+                        },
+                    }
+                )
+            next_cursor = None
+            if has_more:
+                last = selected[-1]
+                next_cursor = self._encode_page_token(
+                    {
+                        "version": 1,
+                        "since": boundary,
+                        "snapshot": snapshot,
+                        "after": {"at": normalize_as_of(last["knowledge_at"]), "id": last["revision_id"]},
+                    }
+                )
+            return {
+                "since": boundary,
+                "items": items,
+                "next_cursor": next_cursor,
+                "has_more": has_more,
+                "bounded": True,
+                "limit": limit,
+            }
+        finally:
+            conn.close()
 
     def eligible_as_of(
         self,

@@ -1,11 +1,16 @@
 from __future__ import annotations
 
 import sqlite3
+from unittest.mock import patch
 
 import pytest
+from fastapi.testclient import TestClient
 
+from newsroom.attention import AttentionService
+from newsroom.app import create_app
 from newsroom.ask import AskService
-from newsroom.domain import CoreService, DomainNotFound, DomainValidation
+from newsroom.config import RuntimeConfig
+from newsroom.domain import CoreService, DomainConflict, DomainNotFound, DomainValidation
 from newsroom.evidence import EvidenceService
 from newsroom.evals.semantic import SemanticCaseRunner
 from newsroom.migrations import apply_migrations
@@ -21,9 +26,164 @@ T1_BEFORE = "2024-12-31T23:59:59Z"
 T1_AFTER = "2025-01-01T00:00:01Z"
 T2 = "2025-02-01T00:00:00Z"
 T2_AFTER = "2025-02-01T00:00:01Z"
+T3 = "2025-03-01T00:00:00Z"
+T3_AFTER = "2025-03-01T00:00:01Z"
 STORY_CORRECTION = "2099-02-01T00:00:00Z"
 STORY_AFTER = "2099-02-01T00:00:01Z"
 STORY_BEFORE = "2098-12-31T23:59:59Z"
+
+
+def _seed_review_user(tmp_db, user_id: str = "usr-review") -> str:
+    conn = sqlite3.connect(tmp_db)
+    conn.execute(
+        """
+        INSERT INTO users(id, username, password_hash, password_algo, created_at, updated_at)
+        VALUES (?, ?, 'test-hash', 'argon2id', ?, ?)
+        """,
+        (user_id, user_id, T1, T1),
+    )
+    conn.commit()
+    conn.close()
+    return user_id
+
+
+def _seed_material_revision(tmp_db, *, known_at: str, published_at: str | None = None, suffix: str = ""):
+    core = CoreService(tmp_db)
+    evidence = EvidenceService(tmp_db)
+    source = core.create_source({"name": f"Review Source {suffix}", "slug": f"review-source-{suffix or 'base'}"})
+    document = core.create_document(
+        {
+            "source_id": source["id"],
+            "canonical_url": f"https://example.test/review-{suffix or 'base'}",
+            "title": f"Review evidence {suffix}".strip(),
+            "published_at": published_at,
+        }
+    )
+    story = core.create_story({"headline": f"Review story {suffix}".strip()})
+    version = evidence.create_document_version(
+        document["id"],
+        {"content_hash": (f"review-{suffix or 'base'}" * 32)[:64], "content_kind": "excerpt", "retrieved_at": known_at},
+    )
+    span = evidence.create_evidence_span(
+        version["id"], {"excerpt": f"Evidence learned at {known_at}.", "created_at": known_at}
+    )
+    claim = evidence.create_claim(
+        story["id"], {"proposition": f"Review proposition {suffix or 'base'}.", "created_at": known_at}
+    )
+    evidence.link_claim_evidence(
+        claim["id"], {"evidence_span_id": span["id"], "relationship": "supports", "created_at": known_at}
+    )
+    evidence.set_claim_state(claim["id"], "supported", "review support", occurred_at=known_at)
+    evidence.accept_claim(claim["id"], accepted_at=known_at)
+    with patch("newsroom.evidence.utc_now", return_value=known_at):
+        revision = evidence.create_story_revision(
+            story["id"],
+            {
+                "headline": story["current_revision"]["headline"],
+                "summary": f"Summary learned at {known_at}.",
+                "why_it_matters": "This is evidence-backed material change.",
+                "material_change": True,
+                "claim_ids": [claim["id"]],
+                "propositions": [{"text": claim["proposition"], "claim_ids": [claim["id"]]}],
+            },
+        )
+    return {"story": story, "revision": revision["current_revision"], "document": document, "claim": claim}
+
+
+def test_review_cursor_is_explicit_monotonic_and_reading_does_not_advance(tmp_db):
+    apply_migrations(tmp_db)
+    user_id = _seed_review_user(tmp_db)
+    first = _seed_material_revision(tmp_db, known_at=T1, suffix="one")
+    later = _seed_material_revision(tmp_db, known_at=T2, suffix="two")
+    attention = AttentionService(tmp_db, clock=lambda: T2_AFTER)
+
+    assert attention.review_cursor(user_id)["cursor"] is None
+    first_read = attention.changes_since(user_id)
+    assert {item["revision_id"] for item in first_read["items"]} == {
+        first["revision"]["id"],
+        later["revision"]["id"],
+    }
+    assert attention.review_cursor(user_id)["cursor"] is None
+
+    advanced = attention.advance_review_cursor(user_id, T1)
+    assert advanced["cursor"] == "2025-01-01T00:00:00.000000Z"
+    assert [item["revision_id"] for item in attention.changes_since(user_id)["items"]] == [later["revision"]["id"]]
+    assert attention.advance_review_cursor(user_id, T1) == advanced
+    with pytest.raises(DomainConflict):
+        attention.advance_review_cursor(user_id, T1_BEFORE)
+    with pytest.raises(DomainValidation, match="future"):
+        attention.advance_review_cursor(user_id, T3)
+
+
+def test_review_changes_use_knowledge_time_and_include_late_arrivals(tmp_db):
+    apply_migrations(tmp_db)
+    user_id = _seed_review_user(tmp_db)
+    late = _seed_material_revision(tmp_db, known_at=T2, published_at=T1, suffix="late")
+    attention = AttentionService(tmp_db, clock=lambda: T3_AFTER)
+
+    result = attention.changes_since(user_id, since=T1)
+
+    assert [item["revision_id"] for item in result["items"]] == [late["revision"]["id"]]
+    assert result["items"][0]["knowledge_at"] == "2025-02-01T00:00:00Z"
+    assert result["items"][0]["publication_at"] == T1
+    assert result["items"][0]["story"]["headline"] == "Review story late"
+    assert result["items"][0]["evidence_backed"] is True
+
+
+def test_review_cursor_normalizes_timezone_offsets_as_utc(tmp_db):
+    apply_migrations(tmp_db)
+    user_id = _seed_review_user(tmp_db)
+    attention = AttentionService(tmp_db, clock=lambda: T2_AFTER)
+
+    advanced = attention.advance_review_cursor(user_id, "2025-02-01T01:00:00+01:00")
+
+    assert advanced["cursor"] == "2025-02-01T00:00:00.000000Z"
+    assert attention.advance_review_cursor(user_id, T2) == advanced
+
+
+def test_review_changes_paginate_stably_with_replay_and_high_water_mark(tmp_db):
+    apply_migrations(tmp_db)
+    user_id = _seed_review_user(tmp_db)
+    seeded = [
+        _seed_material_revision(tmp_db, known_at=T2, suffix=f"page-{index}")
+        for index in range(5)
+    ]
+    attention = AttentionService(tmp_db, clock=lambda: T3_AFTER)
+
+    page_one = attention.changes_since(user_id, since=T1_BEFORE, limit=2)
+    replay = attention.changes_since(user_id, since=T1_BEFORE, limit=2)
+    assert page_one == replay
+    assert page_one["next_cursor"]
+
+    _seed_material_revision(tmp_db, known_at=T3, suffix="new-after-page-one")
+    page_two = attention.changes_since(user_id, limit=2, page_token=page_one["next_cursor"])
+    page_three = attention.changes_since(user_id, limit=2, page_token=page_two["next_cursor"])
+    ids = [item["revision_id"] for page in (page_one, page_two, page_three) for item in page["items"]]
+
+    assert len(ids) == len(set(ids)) == len(seeded)
+    assert set(ids) == {item["revision"]["id"] for item in seeded}
+    assert page_three["next_cursor"] is None
+
+
+def test_review_boundary_api_is_authenticated_csrf_protected_and_explicit(tmp_path):
+    config = RuntimeConfig.for_environment("dev", root=tmp_path / "dev")
+    client = TestClient(create_app(config=config, frontend_dist=tmp_path / "missing-dist"))
+
+    assert client.get("/api/v1/review-boundary").status_code == 401
+    assert client.post(
+        "/api/v1/auth/setup", json={"username": "admin", "password": "a-long-test-password-12345"}
+    ).status_code == 201
+    assert client.post(
+        "/api/v1/auth/login", json={"username": "admin", "password": "a-long-test-password-12345"}
+    ).status_code == 200
+    assert client.get("/api/v1/review-boundary").json()["cursor"] is None
+    assert client.put("/api/v1/review-boundary", json={"cursor": T1}).status_code == 403
+
+    headers = {"X-CSRF-Token": client.cookies.get("newsroom_csrf")}
+    advanced = client.put("/api/v1/review-boundary", json={"cursor": T1}, headers=headers)
+    assert advanced.status_code == 200, advanced.text
+    assert advanced.json()["cursor"] == "2025-01-01T00:00:00.000000Z"
+    assert client.get("/api/v1/review-boundary/changes").status_code == 200
 
 
 def _seed_temporal_claim(tmp_db, *, retract: bool = True):

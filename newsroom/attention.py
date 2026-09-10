@@ -9,10 +9,12 @@ from pathlib import Path
 from typing import Any, Callable
 
 from . import storage
-from .domain import DomainNotFound, DomainValidation, new_id, utc_now
+from .domain import DomainConflict, DomainNotFound, DomainValidation, new_id, utc_now
+from .temporal import TemporalReadService, normalize_as_of
 
 
 ATTENTION_ACTIONS = frozenset({"seen", "snoozed", "not_useful"})
+REVIEW_CURSOR_SETTING_PREFIX = "review_boundary:"
 
 
 def _json(value: Any) -> str:
@@ -181,5 +183,90 @@ class AttentionService:
             decision["snoozed_until"] = snoozed_until
         return {**candidate, "decision": decision}
 
+    @staticmethod
+    def _review_cursor_key(user_id: str) -> str:
+        identifier = str(user_id or "").strip()
+        if not identifier:
+            raise DomainValidation("user_id is required")
+        return f"{REVIEW_CURSOR_SETTING_PREFIX}{identifier}"
 
-__all__ = ["ATTENTION_ACTIONS", "AttentionService"]
+    def _require_review_user(self, conn: sqlite3.Connection, user_id: str) -> str:
+        identifier = str(user_id or "").strip()
+        if not identifier:
+            raise DomainValidation("user_id is required")
+        if conn.execute("SELECT 1 FROM users WHERE id = ? AND disabled_at IS NULL", (identifier,)).fetchone() is None:
+            raise DomainNotFound("review user not found")
+        return identifier
+
+    def review_cursor(self, user_id: str) -> dict[str, Any]:
+        """Read the explicit owner boundary without changing any state."""
+
+        key = self._review_cursor_key(user_id)
+        conn = storage.connect(self.db_path)
+        try:
+            self._require_review_user(conn, user_id)
+            row = conn.execute("SELECT value FROM settings WHERE key = ?", (key,)).fetchone()
+            return {"cursor": row["value"] if row is not None else None}
+        finally:
+            conn.close()
+
+    def advance_review_cursor(self, user_id: str, boundary: str | datetime | None = None) -> dict[str, Any]:
+        """Advance the explicit review boundary monotonically in UTC.
+
+        A missing boundary means the server's current UTC time at the explicit
+        mutation. Client-provided future boundaries are rejected so they cannot
+        hide later knowledge.
+        """
+
+        now = normalize_as_of(self._clock())
+        normalized = normalize_as_of(boundary if boundary is not None else now)
+        if normalized > now:
+            raise DomainValidation("review cursor cannot be in the future")
+        key = self._review_cursor_key(user_id)
+        conn = storage.connect(self.db_path)
+        try:
+            with storage.write_tx(conn):
+                self._require_review_user(conn, user_id)
+                row = conn.execute("SELECT value FROM settings WHERE key = ?", (key,)).fetchone()
+                current = row["value"] if row is not None else None
+                if current is not None:
+                    current = normalize_as_of(current)
+                    if normalized < current:
+                        raise DomainConflict("review cursor cannot move backward")
+                    if normalized == current:
+                        return {"cursor": current}
+                conn.execute(
+                    """
+                    INSERT INTO settings(key, value, updated_at) VALUES (?, ?, ?)
+                    ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at
+                    """,
+                    (key, normalized, now),
+                )
+                return {"cursor": normalized}
+        finally:
+            conn.close()
+
+    def changes_since(
+        self,
+        user_id: str,
+        *,
+        since: str | datetime | None = None,
+        limit: int = 25,
+        page_token: str | None = None,
+    ) -> dict[str, Any]:
+        """Return bounded, replayable material changes without advancing review."""
+
+        current = self.review_cursor(user_id)["cursor"]
+        # A page token carries the original boundary and high-water mark. Do
+        # not replace it with a cursor advanced by a concurrent explicit read.
+        effective_since = since if since is not None or page_token else current
+        result = TemporalReadService(self.db_path, clock=self._clock).meaningful_changes_since(
+            effective_since,
+            limit=limit,
+            page_token=page_token,
+        )
+        result["cursor"] = current
+        return result
+
+
+__all__ = ["ATTENTION_ACTIONS", "AttentionService", "REVIEW_CURSOR_SETTING_PREFIX"]

@@ -895,6 +895,10 @@ class SettingWrite(StrictModel):
     value: str = Field(max_length=4000)
 
 
+class ReviewBoundaryWrite(StrictModel):
+    cursor: Optional[str] = Field(default=None, max_length=64)
+
+
 class ComparisonCreate(StrictModel):
     document_ids: list[str] = Field(min_length=2, max_length=20)
     story_id: Optional[str] = Field(default=None, max_length=200)
@@ -2599,6 +2603,31 @@ def create_domain_router(
     async def list_attention(request: Request, limit: int = Query(100, ge=1, le=500)):
         read_guard(request)
         return attention.list(limit=limit)
+
+    @router.get("/review-boundary")
+    async def review_boundary(request: Request):
+        user = read_guard(request)
+        return attention.review_cursor(user.user_id)
+
+    @router.get("/review-boundary/changes")
+    async def review_boundary_changes(
+        request: Request,
+        since: Optional[str] = Query(default=None, max_length=64),
+        limit: int = Query(25, ge=1, le=100),
+        page_token: Optional[str] = Query(default=None, max_length=2048),
+    ):
+        user = read_guard(request)
+        return attention.changes_since(
+            user.user_id,
+            since=since,
+            limit=limit,
+            page_token=page_token,
+        )
+
+    @router.put("/review-boundary")
+    async def advance_review_boundary(request: Request, payload: ReviewBoundaryWrite):
+        user = write_guard(request)
+        return attention.advance_review_cursor(user.user_id, payload.cursor)
 
     @router.get("/attention/{identifier}")
     async def get_attention(request: Request, identifier: str):
