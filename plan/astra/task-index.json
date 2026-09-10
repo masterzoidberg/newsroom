@@ -116,7 +116,7 @@
     "accept": "Fresh Watch can attach a usable URL/feed or named existing Source without IDs; approval/retry converges on one relationship and does not run acquisition while paused; detach preserves other Watches and Source history.",
     "tests": "Phase24 shared-source/unsafe-url/concurrent approval tests; browser manual/reuse/bad URL/empty/approval failure/retry/detach at desktop and phone.",
     "tier": "2",
-    "status": "READY",
+    "status": "DONE",
     "prompt": "prompts/AST-25-manual-watch-sources.md"
   },
   {
@@ -128,7 +128,7 @@
     "accept": "Chosen cadence persists and is reflected by source Monitors; changing one Watch cannot silently alter another; out-of-range custom input and unsupported fast options give inline recovery.",
     "tests": "Policy validation/shared-policy isolation and schedule tests; browser each preset/custom/error/reload/390px.",
     "tier": "2",
-    "status": "NOT_STARTED",
+    "status": "DONE",
     "prompt": "prompts/AST-26-watch-cadence.md"
   },
   {
@@ -140,7 +140,7 @@
     "accept": "Repeated Start does not create duplicate Monitors/jobs; real persisted outcomes drive visible state and actual last-attempt time; source error/no-evidence/unavailable API gives usable retry/refinement guidance while preserving setup.",
     "tests": "Fixture-backed worker/status outcomes; browser review/back/edit/start/double-submit/no-change/error/recovery and 390px; no network acquisition in tests.",
     "tier": "2",
-    "status": "NOT_STARTED",
+    "status": "DONE",
     "prompt": "prompts/AST-27-start-first-value.md"
   },
   {
@@ -212,7 +212,7 @@
     "accept": "Returning after days gets bounded stable range/new changes; viewing does not silently mark all items seen; future timestamps, late ingestion and timezone changes cannot omit newly known evidence.",
     "tests": "Cursor boundary/late arrival/pagination/repeat visit tests using injected time; no frozen eval changes.",
     "tier": "3",
-    "status": "NOT_STARTED",
+    "status": "READY",
     "prompt": null
   },
   {

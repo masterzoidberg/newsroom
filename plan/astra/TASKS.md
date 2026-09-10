@@ -1,6 +1,6 @@
 # Canonical execution ledger
 
-Rebaseline transitioned 2026-09-09 after automated Gate 0 acceptance at integrated head `18c5ee8bdf56a44218af4ecd6d7e8d9ead68f8c0`. Full backend, frontend, corrected AST-24 browser qualification, focused Windows runtime regressions and installed Windows lifecycle smoke passed in CI run 34412730096 attempt 2. AST-05 engineering and AST-23/24 are DONE on that branch; physical reboot/sign-in and lock/sleep/wake evidence remains pending for release. AST-25 is the sole READY task.
+Rebaseline transitioned 2026-09-09 after automated Gate 0 acceptance at integrated head `18c5ee8bdf56a44218af4ecd6d7e8d9ead68f8c0`. Newsroom Run 1 then completed sequentially on `astra/AST-25-27-first-watch` through code head `35584eb`: AST-25, AST-26 and AST-27 are DONE and Checkpoint C1 passed. The C1 backend run collected 919 tests and completed with exit 0 (918 passed and one documented POSIX-only skip); Ruff and all frontend checks passed. Physical reboot/sign-in and lock/sleep/wake evidence remains pending for release. AST-33 is now the sole READY task.
 
 ## Contract inherited by every future task
 
@@ -47,15 +47,15 @@ Statuses: READY, NOT_STARTED, IN_PROGRESS, DONE, BLOCKED, DEFERRED, SUPERSEDED. 
 | AST-22 | Optionally run a bounded commercial pilot | DEFERRED | AST-18, AST-48 | A |
 | AST-23 | Create a resumable paused Watch setup contract | DONE | AST-05 | 3 |
 | AST-24 | Add Welcome and interest entry without raw IDs | DONE | AST-23 | 2 |
-| AST-25 | Add and reuse Watch Sources by name or URL | READY | AST-24 | 2 |
-| AST-26 | Expose Watch cadence as plain scheduling choices | NOT_STARTED | AST-25 | 2 |
-| AST-27 | Connect review and Start to honest first-value progress | NOT_STARTED | AST-26 | 2 |
+| AST-25 | Add and reuse Watch Sources by name or URL | DONE | AST-24 | 2 |
+| AST-26 | Expose Watch cadence as plain scheduling choices | DONE | AST-25 | 2 |
+| AST-27 | Connect review and Start to honest first-value progress | DONE | AST-26 | 2 |
 | AST-28 | Implement bounded semantic vocabulary capability | NOT_STARTED | AST-11, AST-27 | 3 |
 | AST-29 | Make terminology review understandable in setup | NOT_STARTED | AST-28 | 2 |
 | AST-30 | Decide and freeze fresh-corpus source recommendation contract | NOT_STARTED | AST-29 | A |
 | AST-31 | Implement bounded fresh-corpus source candidates | NOT_STARTED | AST-30 | 3 |
 | AST-32 | Connect recommended Sources and source health to setup | NOT_STARTED | AST-31, AST-25 | 2 |
-| AST-33 | Persist and query the returning-user review boundary | NOT_STARTED | AST-27 | 3 |
+| AST-33 | Persist and query the returning-user review boundary | READY | AST-27 | 3 |
 | AST-34 | Build Watch overview and since-visit Home | NOT_STARTED | AST-33 | 2 |
 | AST-35 | Connect summary through Claim to exact source Evidence | NOT_STARTED | AST-34 | 2 |
 | AST-36 | Create and read Living Reports from named Watch context | NOT_STARTED | AST-35 | 2 |
@@ -303,7 +303,7 @@ Full original task bodies, acceptance and completion evidence are preserved in [
 
 ## AST-25 — Add and reuse Watch Sources by name or URL
 
-- **Status:** READY
+- **Status:** DONE
 - **Outcome / why it matters:** Add and reuse Watch Sources by name or URL. See the mapped user gap in FEATURE_GAP_ANALYSIS and milestone in COMPLETION_ROADMAP.
 - **Dependencies:** AST-24
 - **Exact scope / files:** frontend/src/views/WatchManagementView.tsx; frontend/src/views/AdminViews.tsx; newsroom/domain_api.py; tests/test_phase24_intelligent_monitoring.py
@@ -313,11 +313,11 @@ Full original task bodies, acceptance and completion evidence are preserved in [
 - **Model:** TIER 2; reasoning medium.
 - **Prompt filename:** [prompts/AST-25-manual-watch-sources.md](prompts/AST-25-manual-watch-sources.md)
 - **Non-goals, invariants, browser evidence, rollback, cost and stop condition:** inherited in full from Contract inherited by every future task above.
-- **Completion evidence:** Not executed by this rebaseline. AST-05 has implementation on the unmerged stack but incomplete qualification; all other records describe future work or explicit external gates.
+- **Completion evidence:** DONE on `astra/AST-25-27-first-watch`, commit `232c4df`. Focused phase-24 source coverage passed for unsafe URL rejection, named existing-Source reuse, shared-Source isolation, concurrent approval convergence, detach/history preservation and paused no-acquisition behavior. The AST-25 desktop/390px browser matrix and frontend typecheck/build passed; the final C1 journey retained settled screenshots and persisted-state evidence outside the repository.
 
 ## AST-26 — Expose Watch cadence as plain scheduling choices
 
-- **Status:** NOT_STARTED
+- **Status:** DONE
 - **Outcome / why it matters:** Expose Watch cadence as plain scheduling choices. See the mapped user gap in FEATURE_GAP_ANALYSIS and milestone in COMPLETION_ROADMAP.
 - **Dependencies:** AST-25
 - **Exact scope / files:** frontend/src/views/WatchManagementView.tsx; newsroom/monitoring.py; newsroom/domain_api.py; tests/test_phase08_monitors.py
@@ -327,11 +327,11 @@ Full original task bodies, acceptance and completion evidence are preserved in [
 - **Model:** TIER 2; reasoning medium.
 - **Prompt filename:** [prompts/AST-26-watch-cadence.md](prompts/AST-26-watch-cadence.md)
 - **Non-goals, invariants, browser evidence, rollback, cost and stop condition:** inherited in full from Contract inherited by every future task above.
-- **Completion evidence:** Not executed by this rebaseline. AST-05 has implementation on the unmerged stack but incomplete qualification; all other records describe future work or explicit external gates.
+- **Completion evidence:** DONE on `astra/AST-25-27-first-watch`, commit `778c9b4`. `python -m pytest -q tests/test_phase08_monitors.py` passed (25 tests, one existing HTTPX deprecation warning); cadence persistence, bounds and shared-policy isolation were covered, with frontend typecheck/build and desktop/390px browser checks passing.
 
 ## AST-27 — Connect review and Start to honest first-value progress
 
-- **Status:** NOT_STARTED
+- **Status:** DONE
 - **Outcome / why it matters:** Connect review and Start to honest first-value progress. See the mapped user gap in FEATURE_GAP_ANALYSIS and milestone in COMPLETION_ROADMAP.
 - **Dependencies:** AST-26
 - **Exact scope / files:** frontend/src/views/WatchManagementView.tsx; frontend/src/views/InboxView.tsx; newsroom/domain_api.py; tests/test_phase24_intelligent_monitoring.py
@@ -341,7 +341,7 @@ Full original task bodies, acceptance and completion evidence are preserved in [
 - **Model:** TIER 2; reasoning medium.
 - **Prompt filename:** [prompts/AST-27-start-first-value.md](prompts/AST-27-start-first-value.md)
 - **Non-goals, invariants, browser evidence, rollback, cost and stop condition:** inherited in full from Contract inherited by every future task above.
-- **Completion evidence:** Not executed by this rebaseline. AST-05 has implementation on the unmerged stack but incomplete qualification; all other records describe future work or explicit external gates.
+- **Completion evidence:** DONE on `astra/AST-25-27-first-watch`, commit `35584eb`. The focused AST-27 filter passed (4 tests), the complete phase-24 intelligent-monitoring file passed, and the full C1 backend/frontend gates passed. The final deterministic Playwright journey covered empty workspace → paused Watch → approved manual Source → daily cadence → review → Start → persisted Scheduled/no-result state at measured desktop and 390 CSS-pixel viewports, keyboard focus and 200% document zoom; evidence is retained in `C:\Users\nicol\.codex\visualizations\2026\09\09\01a08890-e8a0-7252-a175-085307980979\astra27-browser-final`.
 
 ## AST-28 — Implement bounded semantic vocabulary capability
 

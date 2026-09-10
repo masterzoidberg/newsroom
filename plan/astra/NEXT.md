@@ -1,17 +1,16 @@
 # Immediate execution queue
 
-Updated 2026-09-09 after automated Gate 0 acceptance at `18c5ee8bdf56a44218af4ecd6d7e8d9ead68f8c0` ([CI run 34412730096](https://github.com/masterzoidberg/newsroom/actions/runs/34412730096), attempt 2). AST-05 engineering, AST-23 and corrected AST-24 are accepted on that integrated branch. Physical reboot/sign-in and lock/sleep/wake evidence remains a release gate; it does not block isolated product development.
+Updated 2026-09-09 after Newsroom Run 1 Checkpoint C1 passed on `astra/AST-25-27-first-watch` at code head `35584eb`. AST-05 engineering, AST-23/24 and AST-25/26/27 are accepted on the branch; the full local backend/frontend qualification and deterministic first-Watch browser journey passed. Physical reboot/sign-in and lock/sleep/wake evidence remains a release gate; it does not block isolated product development.
 
-**Exactly one next task: AST-25 — Add and reuse Watch Sources by name or URL. Status: READY. TIER 2; reasoning medium.**
+**Exactly one next task: AST-33 — Persist and query the returning-user review boundary. Status: READY. TIER 3; reasoning high.**
 
-Prompt: [AST-25-manual-watch-sources](prompts/AST-25-manual-watch-sources.md).
+No AST-33 prompt has been generated yet; it remains the exact next task and is not started by Run 1.
 
-Execute AST-25 from an isolated checkout descended from `astra/AST-05-windows-runtime-cleanup` at accepted head `18c5ee8`. Preserve its integrated AST-05/23/24 ancestry. Do not replay old prompts or merge to main as a side effect; preserve unrelated work and artifacts.
+Run 1 used an isolated checkout descended from `astra/AST-05-windows-runtime-cleanup` at accepted head `18c5ee8`, cherry-picked planning commit `b20fd79`, and completed one bounded commit per AST task without merging or rewriting history. Do not begin Run 2 in this session.
 
-Following queue, all NOT_STARTED:
+Following queue, AST-33 is READY and all other future tasks remain NOT_STARTED unless separately classified below:
 
-1. AST-26 — understandable cadence (Tier 2/medium), after AST-25.
-2. AST-27 — review/Start and truthful first value (Tier 2/medium), after AST-26.
+1. AST-33 — returning-user review boundary (Tier 3/high), after AST-27.
 
 Then AST-06–11 complete managed AI configuration before AST-28–32 add assisted terminology/discovery. This removes the older artificial dependency of basic local onboarding on a finished paid-provider settings screen.
 
@@ -19,6 +18,6 @@ Release blockers: AST-05 still needs physical reboot/sign-in and lock/sleep/wake
 
 ## Gate 0 disposition
 
-Engineering passed with physical evidence pending. Integrated head `18c5ee8` preserves the corrected AST-24 ancestry and fixes the shared spawned-child publication race. CI run 34412730096 attempt 2 completed successfully across backend, frontend, AST-24 browser qualification, focused Windows regressions and installed Windows lifecycle smoke. AST-25 may proceed. Final release qualification must still retain evidence from a physical reboot/sign-in and lock/sleep/wake cycle.
+Engineering passed with physical evidence pending. Integrated head `18c5ee8` preserves the corrected AST-24 ancestry and fixes the shared spawned-child publication race. Run 1 C1 passed on the descendant branch with full local backend/frontend qualification and first-Watch browser/state evidence. Final release qualification must still retain evidence from a physical reboot/sign-in and lock/sleep/wake cycle.
 
 Do not start AST-06 early, broad superseded AST-12–15/19, speculative external discovery before AST-30, paid Ask, commercial pilot, any implementation in this audit session, or any trial promotion/merge/deployment. Do not contact port 8127 or active `phase29-trial` roots, recreate the Watch, reset the observation boundary or start an automation. Recorded boundary and limitations are in CURRENT_STATE.

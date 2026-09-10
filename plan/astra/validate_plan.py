@@ -13,7 +13,7 @@ by_id = {t['id']: t for t in tasks}
 historical = {f'AST-{n:02}' for n in range(1, 5)}
 all_ids = set(by_id) | historical | {'AST-12','AST-13','AST-14','AST-15','AST-19'}
 ready = [t['id'] for t in tasks if t['status'] == 'READY']
-if ready != ['AST-25']: errors.append(f'Unexpected READY tasks: {ready}')
+if ready != ['AST-33']: errors.append(f'Unexpected READY tasks: {ready}')
 if ledger.count('- **Status:** READY') != 1: errors.append('Ledger READY count')
 visited, active = set(), set()
 

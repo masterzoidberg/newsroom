@@ -29,7 +29,7 @@ Do not promote AST-25 from `GATE 0 FAILED`. If only physical evidence is pending
 - [ ] Keep AST-20–22 optional and AST-55 outside the critical path.
 - [ ] Convert AST-47 and AST-48 descriptions to bounded qualification checkpoints.
 - [ ] Split AST-48 reporting into engineering-complete and value-qualified outcomes.
-- [x] Select exactly one READY implementation task: AST-25.
+- [x] Select exactly one READY implementation task for Run 1: AST-25 (completed; the current sole READY task after C1 is AST-33).
 - [ ] Generate one prompt for the next autonomous run from `AUTONOMOUS_EXECUTION_RUNBOOK.md`; do not pre-author dozens of stale task prompts.
 
 ## 4. Validate the adopted plan
@@ -44,4 +44,14 @@ Do not promote AST-25 from `GATE 0 FAILED`. If only physical evidence is pending
 
 ## 5. Start execution
 
-After adoption, begin Run 1 in `AUTONOMOUS_EXECUTION_RUNBOOK.md`. A green C1 permits automatic continuation to Run 2; stop only under the runbook’s mandatory stop conditions or at a user-requested boundary.
+Run 1 was executed sequentially as AST-25 → AST-26 → AST-27 and stopped at the explicitly requested C1 boundary. Run 2 was not started.
+
+## 6. Run 1 / Checkpoint C1
+
+- [x] AST-25, AST-26 and AST-27 each have one bounded implementation commit on `astra/AST-25-27-first-watch`.
+- [x] Full local backend suite passed: `python -m pytest -q`, exit 0; 919 tests were collected, 918 passed and one documented POSIX-only lifecycle test was skipped.
+- [x] Backend Ruff gate passed: `ruff check newsroom tests`, `All checks passed!`.
+- [x] Frontend gates passed from `frontend`: `npm.cmd run lint`, `npm.cmd run typecheck`, and `npm.cmd run build`.
+- [x] Deterministic first-Watch browser journey passed at desktop and measured 390 CSS-pixel viewport, with keyboard focus and 200% zoom evidence; persisted state showed one Watch, Source, relationship and Monitor, no Jobs, no result, and zero paid budget.
+- [x] AST-33 promoted as the sole READY task; no AST-33 implementation was started.
+- [ ] Physical reboot/sign-in and lock/sleep/wake evidence remains pending for release qualification.
