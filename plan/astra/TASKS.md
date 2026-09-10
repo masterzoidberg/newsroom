@@ -415,7 +415,7 @@ Full original task bodies, acceptance and completion evidence are preserved in [
 
 ## AST-33 — Persist and query the returning-user review boundary
 
-- **Status:** NOT_STARTED
+- **Status:** READY
 - **Outcome / why it matters:** Persist and query the returning-user review boundary. See the mapped user gap in FEATURE_GAP_ANALYSIS and milestone in COMPLETION_ROADMAP.
 - **Dependencies:** AST-27
 - **Exact scope / files:** newsroom/attention.py; newsroom/domain_api.py; newsroom/temporal.py; tests/test_phase29_temporal.py
