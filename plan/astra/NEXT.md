@@ -1,10 +1,10 @@
 # Immediate execution queue
 
-Updated 2026-09-10 after AST-33 completed on `astra/AST-25-27-first-watch` at code head `4a7c0f9`. AST-05 engineering, AST-23/24, AST-25/26/27 and AST-33 are accepted on the branch; the AST-33 backend qualification passed. Physical reboot/sign-in and lock/sleep/wake evidence remains a release gate; it does not block isolated product development.
+Updated 2026-09-10 after AST-34 completed on `astra/AST-25-27-first-watch` at code head `0ce903a`. AST-05 engineering, AST-23/24, AST-25/26/27, AST-33 and AST-34 are accepted on the branch; AST-34 frontend and isolated browser qualification passed. Physical reboot/sign-in and lock/sleep/wake evidence remains a release gate; it does not block isolated product development.
 
-**Exactly one next task: AST-34 — Build Watch overview and since-visit Home. Status: READY. TIER 2; reasoning medium.**
+**Exactly one next task: AST-35 — Connect summary through Claim to exact source Evidence. Status: READY. TIER 2; reasoning medium.**
 
-AST-33 is complete. Its backend boundary and paged change query are available for AST-34; no AST-34 implementation has started in this session.
+AST-34 is complete. Its named Watch overview, explicit review-boundary Home, paged material changes and deferred Document navigation are available for AST-35. Do not begin AST-36 or any later task in this session.
 
 Run 1 used an isolated checkout descended from `astra/AST-05-windows-runtime-cleanup` at accepted head `18c5ee8`, cherry-picked planning commit `b20fd79`, and completed one bounded commit per AST task without merging or rewriting history. Do not begin Run 2 in this session.
 
@@ -20,4 +20,4 @@ Release blockers: AST-05 still needs physical reboot/sign-in and lock/sleep/wake
 
 Engineering passed with physical evidence pending. Integrated head `18c5ee8` preserves the corrected AST-24 ancestry and fixes the shared spawned-child publication race. Run 1 C1 passed on the descendant branch with full local backend/frontend qualification and first-Watch browser/state evidence. Final release qualification must still retain evidence from a physical reboot/sign-in and lock/sleep/wake cycle.
 
-Do not start AST-06 early, broad superseded AST-12–15/19, speculative external discovery before AST-30, paid Ask, commercial pilot, AST-34 in this session, or any trial promotion/merge/deployment. Do not contact port 8127 or active `phase29-trial` roots, recreate the Watch, reset the observation boundary or start an automation. Recorded boundary and limitations are in CURRENT_STATE.
+Do not start AST-06 early, broad superseded AST-12–15/19, speculative external discovery before AST-30, paid Ask, commercial pilot, AST-36 or later, or any trial promotion/merge/deployment. Do not contact port 8127 or active `phase29-trial` roots, recreate the Watch, reset the observation boundary or start an automation. Recorded boundary and limitations are in CURRENT_STATE.
