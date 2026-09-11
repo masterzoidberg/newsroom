@@ -502,6 +502,46 @@ def test_briefing_schedule_bounds_missed_intervals_and_keeps_zero_paid_default(t
     assert schedule["id"] == refreshed["id"]
 
 
+def test_briefing_schedule_api_exposes_preferences_and_latest_output(tmp_path):
+    config = RuntimeConfig.for_environment("dev", root=tmp_path / "dev")
+    client = TestClient(create_app(config=config, frontend_dist=tmp_path / "missing-dist"))
+    assert client.get("/api/v1/briefing-schedule").status_code == 401
+    assert client.post(
+        "/api/v1/auth/setup", json={"username": "admin", "password": PASSWORD}
+    ).status_code == 201
+    assert client.post(
+        "/api/v1/auth/login", json={"username": "admin", "password": PASSWORD}
+    ).status_code == 200
+    headers = {"X-CSRF-Token": client.cookies.get("newsroom_csrf")}
+
+    assert client.get("/api/v1/briefing-schedule").json() is None
+    assert client.put(
+        "/api/v1/briefing-schedule",
+        json={"cadence": "daily", "timezone_name": "America/New_York"},
+    ).status_code == 403
+    saved = client.put(
+        "/api/v1/briefing-schedule",
+        json={"cadence": "daily", "timezone_name": "America/New_York"},
+        headers=headers,
+    )
+    assert saved.status_code == 200, saved.text
+    schedule = saved.json()
+    assert schedule["enabled"] is True
+    assert schedule["paused"] is False
+    assert schedule["timezone_name"] == "America/New_York"
+    assert schedule["next_due_at"]
+
+    paused = client.put(
+        "/api/v1/briefing-schedule",
+        json={"enabled": False},
+        headers=headers,
+    )
+    assert paused.status_code == 200
+    assert paused.json()["paused"] is True
+    assert paused.json()["next_due_at"] is None
+    assert client.get("/api/v1/briefings/latest").json() is None
+
+
 def test_schema36_upgrade_and_online_backup_preserve_briefing_schedule(tmp_db, tmp_path):
     apply_migrations(tmp_db)
     conn = storage.connect(tmp_db)

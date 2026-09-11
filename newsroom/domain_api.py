@@ -34,7 +34,7 @@ from .research_questions import (
     ResearchQuestionService,
     research_job_recovery_hook,
 )
-from .reports import AlertService, BriefingService, LivingReportService
+from .reports import AlertService, BriefingScheduleService, BriefingService, LivingReportService
 from .story_evolution import StoryCandidate, StoryEvolutionService
 from .workbench import ComparisonService, DiagnosticsService, SearchService, WorkbenchService
 from .ask import AskService
@@ -503,6 +503,15 @@ class BriefingGenerate(StrictModel):
     period_start: Optional[str] = Field(default=None, max_length=64)
     period_end: Optional[str] = Field(default=None, max_length=64)
     timezone_name: str = Field(default="UTC", min_length=1, max_length=100)
+
+
+class BriefingScheduleWrite(StrictModel):
+    cadence: Optional[str] = Field(default=None, pattern="^(daily|weekly)$")
+    timezone_name: Optional[str] = Field(default=None, min_length=1, max_length=100)
+    scope: Optional[dict[str, Any]] = None
+    monitor_ids: Optional[list[str]] = Field(default=None, max_length=100)
+    enabled: Optional[bool] = None
+    paused: Optional[bool] = None
 
 
 class AlertRuleCreate(StrictModel):
@@ -1033,6 +1042,7 @@ def create_domain_router(
     research = ResearchQuestionService(service.db_path)
     reports = LivingReportService(service.db_path)
     briefings = BriefingService(service.db_path)
+    briefing_schedule = BriefingScheduleService(service.db_path)
     alerts = AlertService(service.db_path)
     search = SearchService(service.db_path)
     comparisons = ComparisonService(service.db_path)
@@ -1885,6 +1895,29 @@ def create_domain_router(
     async def generate_briefing(request: Request, payload: BriefingGenerate):
         write_guard(request)
         return briefings.generate(**payload.model_dump())
+
+    @router.get("/briefings/latest")
+    async def latest_briefing(
+        request: Request,
+        period: Optional[str] = None,
+        timezone_name: Optional[str] = None,
+    ):
+        read_guard(request)
+        return briefings.latest(period=period, timezone_name=timezone_name)
+
+    @router.get("/briefing-schedule")
+    async def get_briefing_schedule(request: Request):
+        read_guard(request)
+        return briefing_schedule.get()
+
+    @router.put("/briefing-schedule")
+    async def save_briefing_schedule(request: Request, payload: BriefingScheduleWrite):
+        write_guard(request)
+        values = payload.model_dump(exclude_none=True)
+        current = briefing_schedule.get()
+        if current is None:
+            return briefing_schedule.create(values)
+        return briefing_schedule.update(current["id"], values)
 
     @router.get("/briefings/{identifier}")
     async def get_briefing(request: Request, identifier: str):

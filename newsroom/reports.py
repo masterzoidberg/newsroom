@@ -876,6 +876,37 @@ class BriefingService:
         finally:
             conn.close()
 
+    def latest(
+        self,
+        *,
+        period: str | None = None,
+        timezone_name: str | None = None,
+    ) -> dict[str, Any] | None:
+        """Return the newest saved briefing matching the optional view filters."""
+
+        if period is not None and period not in BRIEFING_PERIODS:
+            raise DomainValidation("briefing period must be daily or weekly")
+        if timezone_name is not None:
+            _timezone(timezone_name)
+        clauses: list[str] = []
+        params: list[Any] = []
+        if period is not None:
+            clauses.append("period = ?")
+            params.append(period)
+        if timezone_name is not None:
+            clauses.append("timezone_name = ?")
+            params.append(timezone_name)
+        where = f" WHERE {' AND '.join(clauses)}" if clauses else ""
+        conn = storage.connect(self.db_path)
+        try:
+            row = conn.execute(
+                f"SELECT * FROM briefings{where} ORDER BY period_end DESC, created_at DESC, id DESC LIMIT 1",
+                params,
+            ).fetchone()
+            return self._result(conn, row) if row is not None else None
+        finally:
+            conn.close()
+
     def generate(
         self,
         period: str,
