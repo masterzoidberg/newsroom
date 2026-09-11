@@ -47,7 +47,26 @@ type ReviewChangesPage = {
   bounded: boolean;
 };
 
+type BriefingSchedule = {
+  cadence: "daily" | "weekly";
+  timezone_name: string;
+  enabled: boolean;
+  paused: boolean;
+  next_due_at: string | null;
+};
+
 const text = (value: unknown, fallback = "—") => String(value ?? fallback);
+
+function formatInTimezone(value: string | null | undefined, timezone: string): string {
+  if (!value) return "—";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  try {
+    return new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short", timeZone: timezone, timeZoneName: "short" }).format(date);
+  } catch {
+    return formatDate(value);
+  }
+}
 
 function priorityForChange(change: ReviewChange, watches: HomeWatch[]): WatchPriority {
   const priorities = change.watch_context
@@ -93,6 +112,7 @@ function ReviewChangeRow({ change, watches, openView }: { change: ReviewChange; 
 export function InboxView({ openView }: { openView: (view: InboxViewKey) => void }) {
   const [reports, setReports] = useState<Report[]>([]);
   const [briefing, setBriefing] = useState<Briefing | null>(null);
+  const [briefingSchedule, setBriefingSchedule] = useState<BriefingSchedule | null>(null);
   const [attention, setAttention] = useState<AttentionItem[]>([]);
   const [watches, setWatches] = useState<HomeWatch[]>([]);
   const [watchHealth, setWatchHealth] = useState<Record<string, WatchHealth>>({});
@@ -107,11 +127,13 @@ export function InboxView({ openView }: { openView: (view: InboxViewKey) => void
     setLoading(true);
     setError(null);
     try {
-      const [reportResponse, attentionResponse, watchResponse, changesResponse] = await Promise.all([
+      const [reportResponse, attentionResponse, watchResponse, changesResponse, scheduleResponse, latestBriefing] = await Promise.all([
         apiList<Report>("/reports?page_size=50"),
         apiFetch<{ items: AttentionItem[] }>("/attention"),
         apiList<HomeWatch>("/watches?page_size=100"),
         apiFetch<ReviewChangesPage>("/review-boundary/changes?limit=25"),
+        apiFetch<BriefingSchedule | null>("/briefing-schedule"),
+        apiFetch<Briefing | null>("/briefings/latest"),
       ]);
       const healthPairs = await Promise.all(watchResponse.items.map(async (watch) => {
         try { return [watch.id, await apiFetch<WatchHealth>(`/watches/${encodeURIComponent(watch.id)}/health`)] as const; }
@@ -122,6 +144,8 @@ export function InboxView({ openView }: { openView: (view: InboxViewKey) => void
       setWatches(watchResponse.items);
       setWatchHealth(Object.fromEntries(healthPairs.filter((item): item is readonly [string, WatchHealth] => item[1] !== null)));
       setChangesPage(changesResponse);
+      setBriefingSchedule(scheduleResponse);
+      setBriefing(latestBriefing);
     } catch (caught) {
       setError(caught);
     } finally {
@@ -130,6 +154,23 @@ export function InboxView({ openView }: { openView: (view: InboxViewKey) => void
   }, []);
 
   useEffect(() => { void load(); }, [load]);
+
+  useEffect(() => {
+    if (!briefingSchedule?.enabled) return;
+    let cancelled = false;
+    let timer: number | undefined;
+    const poll = async () => {
+      try {
+        const latest = await apiFetch<Briefing | null>(`/briefings/latest?period=${briefingSchedule.cadence}&timezone_name=${encodeURIComponent(briefingSchedule.timezone_name)}`);
+        if (!cancelled) setBriefing(latest);
+      } catch (caught) {
+        if (!cancelled) setError(caught);
+      }
+      if (!cancelled) timer = window.setTimeout(() => void poll(), 10_000);
+    };
+    timer = window.setTimeout(() => void poll(), 10_000);
+    return () => { cancelled = true; if (timer !== undefined) window.clearTimeout(timer); };
+  }, [briefingSchedule?.cadence, briefingSchedule?.enabled, briefingSchedule?.timezone_name]);
 
   async function loadMoreChanges() {
     if (!changesPage?.next_cursor || loadingMore) return;
@@ -158,13 +199,12 @@ export function InboxView({ openView }: { openView: (view: InboxViewKey) => void
     }
   }
 
-  async function refreshBriefing() {
+  async function refreshLatestBriefing() {
     setBriefingWorking(true);
     setError(null);
     try {
-      const timezone_name = Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
-      const result = await apiFetch<Briefing>("/briefings/generate", { method: "POST", body: jsonBody({ period: "daily", timezone_name, monitor_ids: [] }) });
-      setBriefing(result);
+      const query = briefingSchedule ? `?period=${briefingSchedule.cadence}&timezone_name=${encodeURIComponent(briefingSchedule.timezone_name)}` : "";
+      setBriefing(await apiFetch<Briefing | null>(`/briefings/latest${query}`));
     } catch (caught) { setError(caught); } finally { setBriefingWorking(false); }
   }
 
@@ -229,8 +269,8 @@ export function InboxView({ openView }: { openView: (view: InboxViewKey) => void
       <SectionCard title="Attention queue" description="A ranked starting point from unread alerts and material Story corrections.">
         {attention.length ? <div className="alert-list">{attention.slice(0, 6).map((item) => <article className="alert-detail-row" key={item.id}><div><div className="button-row"><Badge tone={item.importance_score >= .85 ? "coral" : "amber"}>{item.reason_code.replace(/_/g, " ")}</Badge><span>{item.importance_score.toFixed(2)} priority</span></div><strong>{String(item.explanation.title ?? item.explanation.reason ?? item.explanation.target_type ?? "Review item")}</strong><p>{String(item.explanation.body ?? item.explanation.reason ?? "This item needs an explicit review decision.")}</p></div><div className="button-row"><button className="quiet-button" type="button" onClick={() => void decideAttention(item.id, "seen")}>Seen</button><button className="quiet-button" type="button" onClick={() => void decideAttention(item.id, "snoozed")}>Snooze</button><button className="secondary-button" type="button" onClick={() => void decideAttention(item.id, "not_useful")}>Not useful</button></div></article>)}</div> : <EmptyState title="No open attention items" description="The current queue is clear. New unread alerts and Story corrections will appear here." />}
       </SectionCard>
-      <SectionCard title="Daily briefing" description="A manually generated briefing remains available separately from the since-visit change boundary." action={<button className="text-button" type="button" onClick={() => void refreshBriefing()} disabled={briefingWorking}>{briefingWorking ? "Refreshing…" : "Refresh briefing"}</button>}>
-        {briefing?.items.length ? <div className="briefing-list">{briefing.items.slice(0, 6).map((item) => <article className="briefing-item" key={item.id}><span className="rank">{String(item.rank).padStart(2, "0")}</span><div><strong>{item.reason || "Material report update"}</strong><p>{item.claim_ids.length} Claim{item.claim_ids.length === 1 ? "" : "s"} · {item.evidence_span_ids.length} exact span{item.evidence_span_ids.length === 1 ? "" : "s"}</p></div><Badge tone={item.importance_score >= .9 ? "coral" : "amber"}>{item.importance_score.toFixed(2)}</Badge></article>)}</div> : <EmptyState title="No briefing loaded" description="Refresh the daily briefing to see the optional ranked projection over existing Reports." />}
+      <SectionCard title="Latest briefing" description={briefingSchedule?.enabled ? `Automatic ${briefingSchedule.cadence} delivery · ${briefingSchedule.timezone_name} · next ${formatInTimezone(briefingSchedule.next_due_at, briefingSchedule.timezone_name)}.` : briefingSchedule ? "Briefings are paused. Existing saved output remains readable, but no new delivery is scheduled." : "No briefing schedule is configured yet."} action={<button className="text-button" type="button" onClick={() => void refreshLatestBriefing()} disabled={briefingWorking}>{briefingWorking ? "Checking…" : "Check latest"}</button>}>
+        {briefing?.items.length ? <div className="briefing-list">{briefing.items.slice(0, 6).map((item) => <article className="briefing-item" key={item.id}><span className="rank">{String(item.rank).padStart(2, "0")}</span><div><strong>{item.reason || "Material report update"}</strong><p>{item.claim_ids.length} Claim{item.claim_ids.length === 1 ? "" : "s"} · {item.evidence_span_ids.length} exact span{item.evidence_span_ids.length === 1 ? "" : "s"}</p></div><Badge tone={item.importance_score >= .9 ? "coral" : "amber"}>{item.importance_score.toFixed(2)}</Badge></article>)}</div> : <EmptyState title={briefingSchedule?.enabled ? "No briefing published yet" : briefingSchedule ? "Briefings are paused" : "Choose a briefing cadence"} description={briefingSchedule?.enabled ? `Newsroom will show the saved output here after the next scheduled job completes. Next delivery: ${formatInTimezone(briefingSchedule.next_due_at, briefingSchedule.timezone_name)}.` : briefingSchedule ? "Resume the schedule from Reports to receive future saved output." : "Open Reports to choose a daily or weekly cadence and delivery timezone."} />}
         <button className="secondary-button" type="button" onClick={() => openView("reports")}>View reports</button>
       </SectionCard>
     </div>
