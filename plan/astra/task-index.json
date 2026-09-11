@@ -248,7 +248,7 @@
     "accept": "Watch opens one correct report without ID input; repeat create converges; no accepted evidence or failed generation preserves last revision and truthful status.",
     "tests": "Report target/duplicate/no-evidence tests; browser create/read/revision/error/390px.",
     "tier": "2",
-    "status": "READY",
+    "status": "DONE",
     "prompt": null
   },
   {
@@ -260,7 +260,7 @@
     "accept": "Due cadence generates one briefing across concurrent ticks/retry; timezone/DST and missed interval catch-up are bounded; paused schedule and zero-paid defaults prevent unwanted work.",
     "tests": "Concurrent scheduler/replay/DST/wake/disable tests and schema36 upgrade/backup preservation.",
     "tier": "3",
-    "status": "NOT_STARTED",
+    "status": "READY",
     "prompt": null
   },
   {

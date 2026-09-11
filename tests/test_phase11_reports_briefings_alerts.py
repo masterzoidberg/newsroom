@@ -11,6 +11,7 @@ from newsroom.app import create_app
 from newsroom.config import RuntimeConfig
 from newsroom.domain import CoreService, DomainConflict, DomainValidation, utc_now
 from newsroom.evidence import EvidenceService
+from newsroom.intelligent_monitoring import WatchService
 from newsroom.migrations import apply_migrations
 from newsroom.monitoring import MonitorService, MonitoringPolicyService
 from newsroom.reports import AlertService, BriefingService, LivingReportService
@@ -75,6 +76,94 @@ def _monitor(db_path, story_id):
             "next_check_at": utc_now(),
         }
     )
+
+
+def _watch(db_path, target_id, *, name="Atlas Watch"):
+    policy = MonitoringPolicyService(db_path).create(
+        {
+            "name": "Phase 11 Watch policy",
+            "allowed_channels": ["direct_http"],
+            "base_cadence_seconds": 60,
+            "min_cadence_seconds": 30,
+            "max_cadence_seconds": 300,
+            "priority": "normal",
+        }
+    )
+    return WatchService(db_path).create(
+        {
+            "name": name,
+            "target_type": "story",
+            "target_id": target_id,
+            "policy_id": policy["id"],
+        }
+    )
+
+
+def test_watch_context_maps_to_one_canonical_report_and_converges_on_retry(tmp_db):
+    apply_migrations(tmp_db)
+    _, _, story, _, _, _ = _accepted_story(tmp_db)
+    watch = _watch(tmp_db, story["id"])
+    reports = LivingReportService(tmp_db)
+
+    assert reports.get_for_watch(watch["id"]) is None
+    first = reports.create_for_watch(
+        watch["id"], {"name": "Atlas Watch report", "timezone_name": "UTC"}
+    )
+    repeated = reports.create_for_watch(
+        watch["id"], {"name": "A different retry name", "timezone_name": "UTC"}
+    )
+
+    assert first["target_type"] == "story"
+    assert first["target_id"] == story["id"]
+    assert repeated["id"] == first["id"]
+    assert repeated["name"] == first["name"]
+    assert reports.get_for_watch(watch["id"])["id"] == first["id"]
+
+
+def test_report_without_accepted_evidence_keeps_no_revision_and_reports_deferred(tmp_db):
+    apply_migrations(tmp_db)
+    core = CoreService(tmp_db)
+    story = core.create_story({"headline": "Waiting for evidence"})
+    watch = _watch(tmp_db, story["id"], name="Waiting Watch")
+    report = LivingReportService(tmp_db).create_for_watch(watch["id"])
+
+    generated = LivingReportService(tmp_db).generate(report["id"])
+
+    assert generated["current_revision"] is None
+    assert generated["generation"]["status"] == "deferred"
+    assert generated["generation"]["reason_code"] == "no_accepted_evidence"
+    assert generated["generation"]["report_id"] == report["id"]
+    assert generated["generation"]["revision_id"] is None
+    assert generated["generation"]["input_identity"]
+    conn = storage.connect(tmp_db)
+    try:
+        assert conn.execute("SELECT COUNT(*) FROM report_revisions").fetchone()[0] == 0
+    finally:
+        conn.close()
+
+
+def test_failed_generation_preserves_the_last_successful_watch_report_revision(tmp_db, monkeypatch):
+    apply_migrations(tmp_db)
+    _, _, story, _, _, _ = _accepted_story(tmp_db)
+    watch = _watch(tmp_db, story["id"])
+    reports = LivingReportService(tmp_db)
+    report = reports.create_for_watch(watch["id"])
+    first = reports.generate(report["id"])
+    first_revision_id = first["current_revision_id"]
+
+    original_collect = reports._collect_sections
+
+    def corrupt_collect(conn, story_ids, claims):
+        sections, _ = original_collect(conn, story_ids, claims)
+        return sections, [{"text": "An unsupported proposition", "claim_ids": ["missing-claim"]}]
+
+    monkeypatch.setattr(reports, "_collect_sections", corrupt_collect)
+    with pytest.raises(DomainConflict, match="material report input changed"):
+        reports.generate(report["id"])
+
+    preserved = reports.get(report["id"])
+    assert preserved["current_revision_id"] == first_revision_id
+    assert preserved["current_revision"]["id"] == first_revision_id
 
 
 def test_living_report_is_versioned_closed_world_and_explains_evidence_causes(tmp_db):

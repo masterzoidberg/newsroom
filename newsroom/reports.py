@@ -16,6 +16,7 @@ from .source_robustness import SourceRobustnessService
 
 
 REPORT_TARGET_TYPES = frozenset({"monitor", "story", "topic", "subject", "source", "research_question"})
+WATCH_REPORT_TARGET_TYPES = REPORT_TARGET_TYPES - {"monitor"}
 REPORT_STATUSES = frozenset({"active", "archived"})
 BRIEFING_PERIODS = frozenset({"daily", "weekly"})
 CAUSE_TYPES = frozenset({"new_primary_evidence", "contradiction", "correction", "corroboration", "material_update"})
@@ -134,6 +135,19 @@ class LivingReportService:
         if row is None or ("deleted_at" in row.keys() and row["deleted_at"] is not None):
             raise DomainNotFound(f"{target_type} report target not found")
 
+    @classmethod
+    def _require_watch_target(cls, conn: sqlite3.Connection, watch_id: str) -> sqlite3.Row:
+        watch = conn.execute(
+            "SELECT id, name, target_type, target_id FROM watches WHERE id = ?",
+            (watch_id,),
+        ).fetchone()
+        if watch is None:
+            raise DomainNotFound("watch not found")
+        if watch["target_type"] not in WATCH_REPORT_TARGET_TYPES:
+            raise DomainValidation("watch target cannot create a living report")
+        cls._require_target(conn, watch["target_type"], watch["target_id"])
+        return watch
+
     def create(self, data: Mapping[str, Any]) -> dict[str, Any]:
         name = _validate_name(data.get("name"))
         target_type = str(data.get("target_type", "")).strip()
@@ -160,6 +174,78 @@ class LivingReportService:
         finally:
             conn.close()
         return self.get(identifier)
+
+    def create_for_watch(
+        self,
+        watch_id: str,
+        data: Mapping[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Create or return the one report for a Watch's canonical target.
+
+        A Watch is intent/configuration; reports remain keyed by the existing
+        canonical target identity.  The insert and duplicate lookup share one
+        transaction so retrying this operation converges under concurrent calls
+        without introducing a Watch-specific report type.
+        """
+        values = dict(data or {})
+        conn = storage.connect(self.db_path)
+        try:
+            with storage.write_tx(conn):
+                watch = self._require_watch_target(conn, watch_id)
+                existing = conn.execute(
+                    "SELECT id FROM living_reports WHERE target_type = ? AND target_id = ?",
+                    (watch["target_type"], watch["target_id"]),
+                ).fetchone()
+                if existing is not None:
+                    identifier = existing["id"]
+                else:
+                    name = _validate_name(
+                        values.get("name") or f"{watch['name']} report"
+                    )
+                    timezone_name = str(values.get("timezone_name", "UTC")).strip() or "UTC"
+                    _timezone(timezone_name)
+                    identifier = new_id("report")
+                    now = utc_now()
+                    try:
+                        conn.execute(
+                            "INSERT INTO living_reports(id, name, target_type, target_id, timezone_name, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                            (
+                                identifier,
+                                name,
+                                watch["target_type"],
+                                watch["target_id"],
+                                timezone_name,
+                                now,
+                                now,
+                            ),
+                        )
+                    except sqlite3.IntegrityError:
+                        # A concurrent caller may have committed the same
+                        # canonical report while this transaction was waiting.
+                        existing = conn.execute(
+                            "SELECT id FROM living_reports WHERE target_type = ? AND target_id = ?",
+                            (watch["target_type"], watch["target_id"]),
+                        ).fetchone()
+                        if existing is None:
+                            raise
+                        identifier = existing["id"]
+        finally:
+            conn.close()
+        return self.get(identifier)
+
+    def get_for_watch(self, watch_id: str) -> dict[str, Any] | None:
+        """Read the report keyed by a Watch's existing canonical target."""
+        conn = storage.connect(self.db_path)
+        try:
+            watch = self._require_watch_target(conn, watch_id)
+            report = conn.execute(
+                "SELECT id FROM living_reports WHERE target_type = ? AND target_id = ?",
+                (watch["target_type"], watch["target_id"]),
+            ).fetchone()
+            identifier = report["id"] if report is not None else None
+        finally:
+            conn.close()
+        return self.get(identifier) if identifier is not None else None
 
     def list(self, *, status: str | None = None, target_type: str | None = None, page: int = 1, page_size: int = 25) -> dict[str, Any]:
         if status is not None and status not in REPORT_STATUSES:
@@ -476,6 +562,31 @@ class LivingReportService:
         current_hash = claim_set_hash(current_claim_ids)
         input_identity = _report_input_identity(sections, propositions)
         previous_revision_id = report["current_revision_id"]
+        if not claims:
+            return {
+                "status": "deferred",
+                "reason_code": "no_accepted_evidence",
+                "report_id": identifier,
+                "revision_id": previous_revision_id,
+                "input_identity": input_identity,
+            }
+        missing_evidence = [
+            claim["id"]
+            for claim in claims
+            if not any(
+                item["relationship"] == "supports"
+                for item in self._claim_evidence(conn, claim["id"])
+            )
+        ]
+        if missing_evidence:
+            return {
+                "status": "deferred",
+                "reason_code": "accepted_evidence_missing",
+                "report_id": identifier,
+                "revision_id": previous_revision_id,
+                "input_identity": input_identity,
+                "detail": f"Accepted Claim evidence is incomplete for {len(missing_evidence)} Claim(s).",
+            }
         previous_revision = None
         if previous_revision_id:
             previous_revision = conn.execute(

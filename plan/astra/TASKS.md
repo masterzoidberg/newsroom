@@ -1,6 +1,6 @@
 # Canonical execution ledger
 
-Rebaseline transitioned 2026-09-09 after automated Gate 0 acceptance at integrated head `18c5ee8bdf56a44218af4ecd6d7e8d9ead68f8c0`. Newsroom Run 1 then completed sequentially on `astra/AST-25-27-first-watch` through AST-35 at code head `800b8f1`. AST-25, AST-26, AST-27, AST-33, AST-34 and AST-35 are DONE; AST-33 completed at code head `4a7c0f9` with the full local backend suite green, AST-34 completed with frontend and isolated browser qualification, and AST-35 completed with frontend, trust-boundary and isolated browser qualification. Physical reboot/sign-in and lock/sleep/wake evidence remains pending for release. AST-36 is now the sole READY task.
+Rebaseline transitioned 2026-09-09 after automated Gate 0 acceptance at integrated head `18c5ee8bdf56a44218af4ecd6d7e8d9ead68f8c0`. Newsroom Run 1 then completed sequentially on `astra/AST-25-27-first-watch` through AST-36 at code head `178debf`. AST-25, AST-26, AST-27, AST-33, AST-34, AST-35 and AST-36 are DONE; AST-33 completed at code head `4a7c0f9` with the full local backend suite green, AST-34 completed with frontend and isolated browser qualification, AST-35 completed with frontend, trust-boundary and isolated browser qualification, and AST-36 completed with backend, frontend, full-suite, eval and isolated browser qualification. Physical reboot/sign-in and lock/sleep/wake evidence remains pending for release. AST-37 is now the sole READY task.
 
 ## Contract inherited by every future task
 
@@ -58,8 +58,8 @@ Statuses: READY, NOT_STARTED, IN_PROGRESS, DONE, BLOCKED, DEFERRED, SUPERSEDED. 
 | AST-33 | Persist and query the returning-user review boundary | DONE | AST-27 | 3 |
 | AST-34 | Build Watch overview and since-visit Home | DONE | AST-33 | 2 |
 | AST-35 | Connect summary through Claim to exact source Evidence | DONE | AST-34 | 2 |
-| AST-36 | Create and read Living Reports from named Watch context | READY | AST-35 | 2 |
-| AST-37 | Add durable user-selected briefing schedules | NOT_STARTED | AST-36 | 3 |
+| AST-36 | Create and read Living Reports from named Watch context | DONE | AST-35 | 2 |
+| AST-37 | Add durable user-selected briefing schedules | READY | AST-36 | 3 |
 | AST-38 | Expose briefing preferences and first intelligence choices | NOT_STARTED | AST-37 | 2 |
 | AST-39 | Make alert triage scoped and complete | NOT_STARTED | AST-38 | 2 |
 | AST-40 | Expose Story changes, disagreements and correction preview | NOT_STARTED | AST-35 | 2 |
@@ -457,7 +457,7 @@ Full original task bodies, acceptance and completion evidence are preserved in [
 
 ## AST-36 — Create and read Living Reports from named Watch context
 
-- **Status:** READY
+- **Status:** DONE
 - **Outcome / why it matters:** Create and read Living Reports from named Watch context. See the mapped user gap in FEATURE_GAP_ANALYSIS and milestone in COMPLETION_ROADMAP.
 - **Dependencies:** AST-35
 - **Exact scope / files:** frontend/src/views/ReportsView.tsx; frontend/src/views/WatchManagementView.tsx; newsroom/reports.py; tests/test_phase11_reports_briefings_alerts.py
@@ -467,11 +467,11 @@ Full original task bodies, acceptance and completion evidence are preserved in [
 - **Model:** TIER 2; reasoning medium.
 - **Prompt filename:** Not generated: outside the six-task horizon. Generate `prompts/AST-36-<bounded-title>.md` after dependencies land; retained old template (if any) is historical only.
 - **Non-goals, invariants, browser evidence, rollback, cost and stop condition:** inherited in full from Contract inherited by every future task above.
-- **Completion evidence:** Not executed by this rebaseline. AST-05 has implementation on the unmerged stack but incomplete qualification; all other records describe future work or explicit external gates.
+- **Completion evidence:** DONE on `astra/AST-25-27-first-watch`, implementation commit `178debf`. `LivingReportService.create_for_watch()` and `get_for_watch()` map a Watch to its existing canonical target and converge on the unique report under retries/concurrent creation; generation defers without creating a revision when no accepted evidence exists, and incomplete evidence preserves the prior revision. `ReportsView.tsx` now selects named Watches without a target-ID field, opens/creates the canonical report, displays the latest successful revision and provenance, reports deferred/no-change/failure states, and explicitly states when the prior revision remains current. `WatchManagementView.tsx` persists the selected Watch and provides an Open Living Report action. `tests/test_phase11_reports_briefings_alerts.py` adds Watch convergence, no-evidence deferral and revision-preservation coverage. No migration was needed. Targeted AST-36 report tests passed (10); full `python -m pytest -q` passed with one documented Windows POSIX-only skip; `python -m compileall -q newsroom tests`, `ruff check newsroom tests`, `python -m newsroom.evals validate`, `python -m newsroom.evals lite-contract`, `npm run lint`, `npm run typecheck`, `npm run build`, and `git diff --check` passed. Isolated production-preview Playwright qualification passed named Watch create/read/revision/failure behavior, no target-ID input, 390 CSS-pixel width with no horizontal overflow, and no unexpected console/page errors; five screenshots are retained outside the repository under `C:\Users\nicol\.codex\visualizations\2026\09\10\01a08962-4ef3-7ea2-b34c-773be3ab03cd\ast36`. No paid calls, external discovery, active-trial contact or runtime data mutation occurred.
 
 ## AST-37 — Add durable user-selected briefing schedules
 
-- **Status:** NOT_STARTED
+- **Status:** READY
 - **Outcome / why it matters:** Add durable user-selected briefing schedules. See the mapped user gap in FEATURE_GAP_ANALYSIS and milestone in COMPLETION_ROADMAP.
 - **Dependencies:** AST-36
 - **Exact scope / files:** newsroom/reports.py; newsroom/jobs.py; newsroom/scheduler.py; newsroom/migrations.py; tests/test_phase11_reports_briefings_alerts.py

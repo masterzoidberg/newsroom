@@ -457,6 +457,12 @@ export function WatchManagementView() {
 
   async function review(path: string, status: "approved" | "rejected") { await action(`${path}/review`, { status }); }
 
+  function openSelectedReport() {
+    if (!selected) return;
+    try { window.localStorage.setItem(SELECTED_WATCH_KEY, selected.id); } catch { /* Reports can still use the current route selection. */ }
+    window.location.hash = "reports";
+  }
+
   if (loading) return <><PageHeader eyebrow="Configure" title="Watches" description="Persistent monitoring intent, approved vocabulary, Sources, and schedules." /><LoadingState label="Loading Watches" />{error && <ErrorState error={error} />}</>;
 
   const setupTitle = watches.length ? "Create another Watch" : "What do you want Newsroom to watch?";
@@ -497,7 +503,7 @@ export function WatchManagementView() {
     </details>
 
     <SectionCard title="Configured Watches" description={`${watches.length} Watch${watches.length === 1 ? "" : "es"}; select one to inspect its durable state.`}>{watches.length ? <div className="resource-list">{watches.map((watch) => <button type="button" className={`resource-row ${selectedId === watch.id ? "selected" : ""}`} key={watch.id} onClick={() => void selectWatch(watch.id)}><span><strong>{text(watch.name, text(watch.target_type))}</strong><small>{text(watch.target_type, "Watch")} · {text(watch.status, "active")}</small></span><Badge tone={watch.status === "active" ? "mint" : "neutral"}>{text(watch.status, "active")}</Badge></button>)}</div> : <EmptyState title="No Watches yet" description="Use the interest form above to save your first paused Watch." />}</SectionCard>
-    {selected && health && <WatchDetail watch={selected} health={health} name={editName} setName={setEditName} term={term} setTerm={setTerm} kind={kind} setKind={setKind} working={working} onSave={saveName} onAddTerm={addTerm} onAddSource={addSourceCandidate} onDetachSource={detachSource} onUpdateCadence={updateCadence} onAction={action} onReview={review} />}
+    {selected && health && <WatchDetail watch={selected} health={health} name={editName} setName={setEditName} term={term} setTerm={setTerm} kind={kind} setKind={setKind} working={working} onSave={saveName} onAddTerm={addTerm} onAddSource={addSourceCandidate} onDetachSource={detachSource} onUpdateCadence={updateCadence} onAction={action} onReview={review} onOpenReport={openSelectedReport} />}
   </>;
 }
 
@@ -662,7 +668,7 @@ function SourceSetup({ working, onCreate }: { working: boolean; onCreate: (input
   </SectionCard>;
 }
 
-function WatchDetail({ watch, health, name, setName, term, setTerm, kind, setKind, working, onSave, onAddTerm, onAddSource, onDetachSource, onUpdateCadence, onAction, onReview }: { watch: Watch; health: Health; name: string; setName: (value: string) => void; term: string; setTerm: (value: string) => void; kind: string; setKind: (value: string) => void; working: boolean; onSave: (event: FormEvent) => void; onAddTerm: (event: FormEvent) => Promise<void>; onAddSource: (input: SourceCandidateInput) => Promise<void>; onDetachSource: (sourceId: string) => Promise<void>; onUpdateCadence: (seconds: number) => Promise<void>; onAction: (path: string, body?: unknown) => Promise<void>; onReview: (path: string, status: "approved" | "rejected") => Promise<void> }) {
+function WatchDetail({ watch, health, name, setName, term, setTerm, kind, setKind, working, onSave, onAddTerm, onAddSource, onDetachSource, onUpdateCadence, onAction, onReview, onOpenReport }: { watch: Watch; health: Health; name: string; setName: (value: string) => void; term: string; setTerm: (value: string) => void; kind: string; setKind: (value: string) => void; working: boolean; onSave: (event: FormEvent) => void; onAddTerm: (event: FormEvent) => Promise<void>; onAddSource: (input: SourceCandidateInput) => Promise<void>; onDetachSource: (sourceId: string) => Promise<void>; onUpdateCadence: (seconds: number) => Promise<void>; onAction: (path: string, body?: unknown) => Promise<void>; onReview: (path: string, status: "approved" | "rejected") => Promise<void>; onOpenReport: () => void }) {
   const vocabulary = watch.vocabulary ?? [];
   const primaryTerms = watch.primary_terms ?? [];
   const candidates = watch.source_candidates ?? [];
@@ -674,7 +680,7 @@ function WatchDetail({ watch, health, name, setName, term, setTerm, kind, setKin
   const progressTone = progress?.state === "ready" || progress?.state === "no-change" ? "mint" : progress?.state === "error" ? "coral" : progress?.state === "deferred" || progress?.state === "irrelevant" ? "amber" : "neutral";
   return <>
     {isUnstartedDraft && <SectionCard title="Setup saved" description="This Watch is paused and is not collecting yet."><div className="button-row"><Badge tone="neutral">Paused</Badge><Badge tone="amber">Next: Add Sources</Badge></div><p className="muted">Your approved primary terms are stored. Source selection is the next setup step; starting collection comes later after Sources and cadence are reviewed.</p></SectionCard>}
-    <SectionCard title={text(watch.name)} description={`${text(watch.target_type, "Watch")} monitoring intent`} action={<div className="button-row"><Badge tone={health.status === "active" ? "mint" : "neutral"}>{health.status}</Badge>{health.status === "active" && <button className="quiet-button" type="button" onClick={() => void onAction("pause")} disabled={working}>Pause</button>}{canResume && <button className="primary-button" type="button" onClick={() => void onAction("resume")} disabled={working}>{health.status === "paused" ? "Start Watch" : "Resume Watch"}</button>}{sources.length > 0 && <button className="secondary-button" type="button" onClick={() => void onAction("vocabulary/suggest", { limit: 20 })} disabled={working}>Suggest vocabulary</button>}</div>}>
+    <SectionCard title={text(watch.name)} description={`${text(watch.target_type, "Watch")} monitoring intent`} action={<div className="button-row"><Badge tone={health.status === "active" ? "mint" : "neutral"}>{health.status}</Badge><button className="secondary-button" type="button" onClick={onOpenReport} disabled={working}>Open Living Report</button>{health.status === "active" && <button className="quiet-button" type="button" onClick={() => void onAction("pause")} disabled={working}>Pause</button>}{canResume && <button className="primary-button" type="button" onClick={() => void onAction("resume")} disabled={working}>{health.status === "paused" ? "Start Watch" : "Resume Watch"}</button>}{sources.length > 0 && <button className="secondary-button" type="button" onClick={() => void onAction("vocabulary/suggest", { limit: 20 })} disabled={working}>Suggest vocabulary</button>}</div>}>
       <div className="stats-grid"><Stat label="Active Sources" value={health.active_source_count} tone="mint" /><Stat label="Pending terms" value={health.pending_vocabulary_suggestion_count} tone="amber" /><Stat label="Pending Sources" value={health.pending_source_candidate_count} tone="amber" /><Stat label="Last successful collection" value={health.last_success ? formatDate(health.last_success) : watch.status === "paused" ? "Not started" : "None yet"} /><Stat label="Next run" value={formatDate(text(health.next_scheduled_run, "Not scheduled"))} /></div>
       <form className="inline-form" onSubmit={onSave}><label htmlFor="selected-watch-name">Edit name</label><input id="selected-watch-name" value={name} onChange={(event) => setName(event.target.value)} /><button className="secondary-button" type="submit" disabled={working}>Save</button></form>
       {health.last_error && <p className="status-note">Recent error: {health.last_error}</p>}
