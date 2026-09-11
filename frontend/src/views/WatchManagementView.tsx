@@ -1,5 +1,5 @@
 import { FormEvent, useCallback, useEffect, useState } from "react";
-import { apiFetch, apiList, formatDate, isApiUnavailable, jsonBody, shortId } from "../lib/api";
+import { ApiError, apiFetch, apiList, formatDate, isApiUnavailable, jsonBody, shortId } from "../lib/api";
 import type { CollectionRecord } from "../lib/types";
 import { Badge, EmptyState, ErrorState, LoadingState, PageHeader, SectionCard, Stat } from "../components/ViewPrimitives";
 import { queueDocumentNavigation } from "./DocumentView";
@@ -61,6 +61,8 @@ type SetupDraft = {
   term_draft: string;
   name_touched: boolean;
   term_touched: boolean;
+  create_report: boolean;
+  enable_briefing: boolean;
 };
 
 type SetupSubmission = {
@@ -68,6 +70,15 @@ type SetupSubmission = {
   interest: string;
   name: string;
   primary_terms: string[];
+  create_report: boolean;
+  enable_briefing: boolean;
+};
+
+type BriefingSchedule = {
+  cadence: "daily" | "weekly";
+  timezone_name: string;
+  enabled: boolean;
+  paused: boolean;
 };
 
 type PausedWatchDraft = {
@@ -105,6 +116,8 @@ function freshSetupDraft(): SetupDraft {
     term_draft: "",
     name_touched: false,
     term_touched: false,
+    create_report: false,
+    enable_briefing: false,
   };
 }
 
@@ -131,6 +144,8 @@ function loadStoredSetupDraft(): SetupDraft {
       term_draft: typeof saved.term_draft === "string" && saved.term_draft.length <= MAX_PRIMARY_TERM_LENGTH ? saved.term_draft : "",
       name_touched: saved.name_touched === true,
       term_touched: saved.term_touched === true,
+      create_report: saved.create_report === true,
+      enable_briefing: saved.enable_briefing === true,
     };
   } catch {
     return freshSetupDraft();
@@ -154,6 +169,8 @@ function loadStoredPendingSubmission(): SetupSubmission | null {
       interest: saved.interest,
       name: saved.name,
       primary_terms: primaryTerms,
+      create_report: saved.create_report === true,
+      enable_briefing: saved.enable_briefing === true,
     };
   } catch {
     return null;
@@ -177,6 +194,8 @@ function submissionFromDraft(draft: SetupDraft): SetupSubmission {
     interest: draft.interest.trim(),
     name: draft.name.trim(),
     primary_terms: draft.primary_terms.map((item) => item.trim()),
+    create_report: draft.create_report,
+    enable_briefing: draft.enable_briefing,
   };
 }
 
@@ -343,8 +362,31 @@ export function WatchManagementView() {
     try {
       const result = await apiFetch<PausedWatchDraft>("/watches/setup", {
         method: "POST",
-        body: jsonBody(submission),
+        body: jsonBody({ request_id: submission.request_id, interest: submission.interest, name: submission.name, primary_terms: submission.primary_terms }),
       });
+      const optionalWarnings: string[] = [];
+      if (submission.create_report) {
+        try {
+          const savedWatch = await apiFetch<Watch>(`/watches/${encodeURIComponent(result.watch_id)}`);
+          await apiFetch("/reports", {
+            method: "POST",
+            body: jsonBody({ name: `${text(savedWatch.name, "Watch")} report`, target_type: savedWatch.target_type, target_id: savedWatch.target_id, timezone_name: Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC" }),
+          });
+        } catch (caught) {
+          if (!(caught instanceof ApiError && caught.status === 409)) optionalWarnings.push("The Living Report choice could not be saved; open Reports to retry it.");
+        }
+      }
+      if (submission.enable_briefing) {
+        try {
+          const currentSchedule = await apiFetch<BriefingSchedule | null>("/briefing-schedule");
+          await apiFetch("/briefing-schedule", {
+            method: "PUT",
+            body: jsonBody(currentSchedule ? { enabled: true } : { cadence: "daily", timezone_name: Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC", enabled: true }),
+          });
+        } catch {
+          optionalWarnings.push("The briefing choice could not be saved; open Reports to enable it.");
+        }
+      }
       try {
         window.localStorage.setItem(SELECTED_WATCH_KEY, result.watch_id);
         window.sessionStorage.removeItem(SETUP_DRAFT_KEY);
@@ -352,7 +394,8 @@ export function WatchManagementView() {
       } catch { /* The server draft remains canonical even without browser storage. */ }
       setPendingSubmission(null);
       setSelectedId(result.watch_id);
-      setSetupSaved(result.resumed ? "Recovered the same saved paused Watch. Next: Add Sources." : "Setup saved as a paused Watch. Nothing is collecting yet. Next: Add Sources.");
+      const savedMessage = result.resumed ? "Recovered the same saved paused Watch. Next: Add Sources." : "Setup saved as a paused Watch. Nothing is collecting yet. Next: Add Sources.";
+      setSetupSaved([savedMessage, submission.create_report ? "Living Report preference saved." : "", submission.enable_briefing ? "Daily briefing preference saved." : "", ...optionalWarnings].filter(Boolean).join(" "));
       setSetupDraft(freshSetupDraft());
       await load(result.watch_id);
     } catch (caught) {
@@ -483,6 +526,13 @@ export function WatchManagementView() {
         <p id="primary-term-help" className="status-note">Confirm at least one exact term. Newsroom will not invent or preapprove synonyms in this step.</p>
         <div className="button-row"><button className="secondary-button" type="button" onClick={addPrimaryTerm} disabled={working || !setupDraft.term_draft.trim() || setupDraft.primary_terms.length >= MAX_PRIMARY_TERMS}>Confirm primary term</button></div>
         {setupDraft.primary_terms.length > 0 && <div className="resource-list" aria-label="Confirmed primary terms">{setupDraft.primary_terms.map((primaryTerm, index) => <div className="resource-row" key={`${normalizedTerm(primaryTerm)}-${index}`}><span><strong>{primaryTerm}</strong><small>Confirmed primary monitoring term</small></span><button className="quiet-button" type="button" onClick={() => removePrimaryTerm(index)} disabled={working} aria-label={`Remove primary term ${primaryTerm}`}>Remove</button></div>)}</div>}
+        <fieldset className="stack-form">
+          <legend>First intelligence choices <span className="muted">(optional)</span></legend>
+          <label><input style={{ width: "auto", minHeight: "auto", marginRight: "8px" }} type="checkbox" checked={setupDraft.create_report} onChange={(event) => setSetupDraft((current) => ({ ...current, create_report: event.target.checked }))} disabled={working} />Create a Living Report for this Watch</label>
+          <p className="status-note">Creates a durable report now; its first revision appears only after accepted evidence-backed Claims exist.</p>
+          <label><input style={{ width: "auto", minHeight: "auto", marginRight: "8px" }} type="checkbox" checked={setupDraft.enable_briefing} onChange={(event) => setSetupDraft((current) => ({ ...current, enable_briefing: event.target.checked }))} disabled={working} />Enable a daily workspace briefing</label>
+          <p className="status-note">Enables the zero-paid briefing schedule in your browser’s local timezone. Configure weekly cadence or another timezone in Reports.</p>
+        </fieldset>
         {setupValidation && <p className="status-note" role="alert">{setupValidation}</p>}
         {pendingSubmission && <div className="state-panel error-panel" role={setupError !== null ? "alert" : "status"}><strong>{setupError !== null ? "Could not confirm this save." : "A previous save still needs confirmation."}</strong>{setupError !== null && <p>{setupError instanceof Error ? setupError.message : "The request failed."}</p>}{isApiUnavailable(setupError) && <p>Use your installed Start Newsroom launcher to start the local service, reload this page, and retry. The exact submitted request is retained in this tab.</p>}<p>Retry will resend the original submitted Watch named <strong>{pendingSubmission.name}</strong> with the same approved scope. Later edits in this form are kept separate until that save is resolved.</p><button className="secondary-button" type="button" onClick={() => void retryPendingSetup()} disabled={working}>Retry the same save</button></div>}
         {setupError !== null && !pendingSubmission && <div className="state-panel error-panel" role="alert"><strong>Could not save this Watch.</strong><p>{setupError instanceof Error ? setupError.message : "The request failed."}</p>{isApiUnavailable(setupError) && <p>Use your installed Start Newsroom launcher to start the local service, reload this page, and retry.</p>}</div>}
