@@ -1,6 +1,6 @@
 # Canonical execution ledger
 
-Rebaseline transitioned 2026-09-09 after automated Gate 0 acceptance at integrated head `18c5ee8bdf56a44218af4ecd6d7e8d9ead68f8c0`. Newsroom Run 1 then completed sequentially on `astra/AST-25-27-first-watch` through AST-36 at code head `178debf`. AST-25, AST-26, AST-27, AST-33, AST-34, AST-35 and AST-36 are DONE; AST-33 completed at code head `4a7c0f9` with the full local backend suite green, AST-34 completed with frontend and isolated browser qualification, AST-35 completed with frontend, trust-boundary and isolated browser qualification, and AST-36 completed with backend, frontend, full-suite, eval and isolated browser qualification. Physical reboot/sign-in and lock/sleep/wake evidence remains pending for release. AST-37 is now the sole READY task.
+Rebaseline transitioned 2026-09-09 after automated Gate 0 acceptance at integrated head `18c5ee8bdf56a44218af4ecd6d7e8d9ead68f8c0`. Newsroom Run 1 then completed sequentially on `astra/AST-25-27-first-watch` through AST-38 at code head `e47a45e`. AST-25, AST-26, AST-27, AST-33, AST-34, AST-35, AST-36, AST-37 and AST-38 are DONE; AST-33 completed at code head `4a7c0f9` with the full local backend suite green, AST-34 completed with frontend and isolated browser qualification, AST-35 completed with frontend, trust-boundary and isolated browser qualification, AST-36 completed with backend, frontend, full-suite, eval and isolated browser qualification, AST-37 completed with backend, migration, full-suite, eval and frontend build qualification, and AST-38 completed with API, frontend, full-suite, eval and isolated browser qualification. Physical reboot/sign-in and lock/sleep/wake evidence remains pending for release. AST-39 is now the sole READY task.
 
 ## Contract inherited by every future task
 
@@ -59,9 +59,9 @@ Statuses: READY, NOT_STARTED, IN_PROGRESS, DONE, BLOCKED, DEFERRED, SUPERSEDED. 
 | AST-34 | Build Watch overview and since-visit Home | DONE | AST-33 | 2 |
 | AST-35 | Connect summary through Claim to exact source Evidence | DONE | AST-34 | 2 |
 | AST-36 | Create and read Living Reports from named Watch context | DONE | AST-35 | 2 |
-| AST-37 | Add durable user-selected briefing schedules | READY | AST-36 | 3 |
-| AST-38 | Expose briefing preferences and first intelligence choices | NOT_STARTED | AST-37 | 2 |
-| AST-39 | Make alert triage scoped and complete | NOT_STARTED | AST-38 | 2 |
+| AST-37 | Add durable user-selected briefing schedules | DONE | AST-36 | 3 |
+| AST-38 | Expose briefing preferences and first intelligence choices | DONE | AST-37 | 2 |
+| AST-39 | Make alert triage scoped and complete | READY | AST-38 | 2 |
 | AST-40 | Expose Story changes, disagreements and correction preview | NOT_STARTED | AST-35 | 2 |
 | AST-41 | Support question-first Watches and contextual research | NOT_STARTED | AST-29, AST-35 | 3 |
 | AST-42 | Make search, saved and history discoverable by name | NOT_STARTED | AST-35, AST-41 | 2 |
@@ -471,7 +471,7 @@ Full original task bodies, acceptance and completion evidence are preserved in [
 
 ## AST-37 — Add durable user-selected briefing schedules
 
-- **Status:** READY
+- **Status:** DONE
 - **Outcome / why it matters:** Add durable user-selected briefing schedules. See the mapped user gap in FEATURE_GAP_ANALYSIS and milestone in COMPLETION_ROADMAP.
 - **Dependencies:** AST-36
 - **Exact scope / files:** newsroom/reports.py; newsroom/jobs.py; newsroom/scheduler.py; newsroom/migrations.py; tests/test_phase11_reports_briefings_alerts.py
@@ -481,25 +481,25 @@ Full original task bodies, acceptance and completion evidence are preserved in [
 - **Model:** TIER 3; reasoning high.
 - **Prompt filename:** Not generated: outside the six-task horizon. Generate `prompts/AST-37-<bounded-title>.md` after dependencies land; retained old template (if any) is historical only.
 - **Non-goals, invariants, browser evidence, rollback, cost and stop condition:** inherited in full from Contract inherited by every future task above.
-- **Completion evidence:** Not executed by this rebaseline. AST-05 has implementation on the unmerged stack but incomplete qualification; all other records describe future work or explicit external gates.
+- **Completion evidence:** DONE on `astra/AST-25-27-first-watch`, implementation commit `fe03963`. Added schema 37's single-row `briefing_schedules` record with cadence, owner timezone, bounded Monitor scope, enabled/paused state and next due time. `BriefingScheduleService` advances local calendar boundaries with DST-safe timezone handling, atomically enqueues zero-budget `briefing_generate` Jobs, bounds missed-interval catch-up to three periods, skips paused schedules, and executes through the existing worker handler and `BriefingService`. `JobService` now coalesces active briefing work by schedule/period identity; replay regenerates the same unique briefing without duplication. `tests/test_phase11_reports_briefings_alerts.py` covers persistence, concurrent ticks, replay, pause/resume, DST, bounded wake catch-up, zero-paid payloads, schema-36 upgrade and online backup restore. Existing migration/handler compatibility assertions were advanced to schema 37. `python -m compileall -q newsroom tests`, `ruff check newsroom tests`, full `python -m pytest -q` (844 passed; one documented POSIX-only skip), `python -m newsroom.evals validate`, `python -m newsroom.evals lite-contract`, `npm run lint`, `npm run typecheck`, `npm run build`, and `git diff --check` passed. No paid calls, external discovery, active-trial contact or runtime data mutation occurred. Physical reboot/sign-in and lock/sleep/wake remain release gates outside this backend task.
 
 ## AST-38 — Expose briefing preferences and first intelligence choices
 
-- **Status:** NOT_STARTED
+- **Status:** DONE
 - **Outcome / why it matters:** Expose briefing preferences and first intelligence choices. See the mapped user gap in FEATURE_GAP_ANALYSIS and milestone in COMPLETION_ROADMAP.
 - **Dependencies:** AST-37
-- **Exact scope / files:** frontend/src/views/ReportsView.tsx; frontend/src/views/WatchManagementView.tsx; frontend/src/views/InboxView.tsx
-- **Implementation approach:** Add named periodic briefing cadence/timezone controls and read latest saved briefing; introduce onboarding intelligence preferences for report/briefing with actual supported semantics. Keep acquisition cadence distinct.
+- **Exact scope / files:** frontend/src/views/ReportsView.tsx; frontend/src/views/WatchManagementView.tsx; frontend/src/views/InboxView.tsx. Required integration correction: newsroom/domain_api.py; newsroom/reports.py; tests/test_phase11_reports_briefings_alerts.py.
+- **Implementation approach:** Add named periodic briefing cadence/timezone controls and read latest saved briefing; introduce onboarding intelligence preferences for report/briefing with actual supported semantics. Keep acquisition cadence distinct. During inspection, AST-37's durable service had no authenticated API route, so the smallest necessary integration correction added schedule read/write and latest-briefing reads without changing schedule semantics.
 - **Acceptance criteria:** Chosen preference persists and scheduled output appears without manual refresh; disabled/no-output schedule gives clear state; timezone and next delivery are visible.
 - **Tests / verification:** Browser schedule/disable/reload/latest/empty/error/timezone/mobile with fake clock and job fixtures.
 - **Model:** TIER 2; reasoning medium.
 - **Prompt filename:** Not generated: outside the six-task horizon. Generate `prompts/AST-38-<bounded-title>.md` after dependencies land; retained old template (if any) is historical only.
 - **Non-goals, invariants, browser evidence, rollback, cost and stop condition:** inherited in full from Contract inherited by every future task above.
-- **Completion evidence:** Not executed by this rebaseline. AST-05 has implementation on the unmerged stack but incomplete qualification; all other records describe future work or explicit external gates.
+- **Completion evidence:** DONE on `astra/AST-25-27-first-watch`, code commits `9fe4622`, `88c6ea2`, `74c4c3d` and `e47a45e`. Added authenticated/CSRF-protected briefing schedule read/write routes and a latest-saved-briefing read over the existing AST-37 service; focused API coverage verifies empty state, persistence, timezone, disable state and CSRF rejection. `ReportsView.tsx` now exposes daily/weekly cadence, IANA timezone choices, enable/pause, server-owned next delivery and persisted latest output with bounded refresh polling. `WatchManagementView.tsx` adds resumable first-intelligence choices for a canonical Living Report and a zero-paid daily workspace briefing, executing them only after the paused Watch save and retaining truthful optional-action warnings. `InboxView.tsx` reads the latest saved briefing, polls enabled schedules, and distinguishes unconfigured, paused, scheduled-but-empty and populated states without manual generation. `python -m pytest -q tests/test_phase11_reports_briefings_alerts.py` passed; full `python -m pytest -q --disable-warnings` exited 0 with 932 collected and one reported POSIX-only SIGSTOP skip; `ruff check newsroom tests`, `python -m newsroom.evals validate`, `python -m newsroom.evals lite-contract`, `npm run lint`, `npm run typecheck`, `npm run build`, and `git diff --check` passed. Isolated Playwright fixture qualification passed schedule save/pause, latest output, onboarding choices, desktop and asserted 390px no-overflow checks; settled screenshots are retained outside the repository at `C:\Users\nicol\.codex\visualizations\2026\09\11\01a0919d-c948-71d3-b54f-1273fda91ef9\ast38`. No paid calls, external discovery, active-trial contact or runtime data mutation occurred. Physical reboot/sign-in and lock/sleep/wake remain release gates outside this task.
 
 ## AST-39 — Make alert triage scoped and complete
 
-- **Status:** NOT_STARTED
+- **Status:** READY
 - **Outcome / why it matters:** Make alert triage scoped and complete. See the mapped user gap in FEATURE_GAP_ANALYSIS and milestone in COMPLETION_ROADMAP.
 - **Dependencies:** AST-38
 - **Exact scope / files:** frontend/src/views/AlertsView.tsx; newsroom/reports.py; tests/test_phase11_reports_briefings_alerts.py

@@ -38,7 +38,7 @@ Baseline and checks: [AUDIT_EVIDENCE.md](AUDIT_EVIDENCE.md). Status describes th
 | Evidence promotion | DONE | `evidence_promotion.py`, phase22 trust tests; exact unique matches, full provenance, atomic immutable evidence/Claim proposals; no truth guarantee. |
 | Claims | MOSTLY DONE | `evidence.py`, `story_automation.py`; acceptance and evidence histories; operator explanation of supported vs true needs care. |
 | Story resolution/evolution | MOSTLY DONE | `automatic_story_resolution.py`, `story_evolution.py`, `story_corrections.py`; conservative deferral/correction/time semantics; representative yield unknown. |
-| Reports | MOSTLY DONE | `reports.py`, `report_automation.py`; evidence-bound revisions and correction propagation; real user usefulness pending. |
+| Reports | MOSTLY DONE | `reports.py`, `report_automation.py`; evidence-bound revisions, correction propagation, durable user-selected briefing schedules and latest-output reads; real user usefulness remains pending. |
 | Alerts | MOSTLY DONE | `alert_automation.py`, report causes and in-app delivery/dedupe; optional browser delivery is not OS push while app is closed. |
 | Research Questions | MOSTLY DONE | `research_questions.py`, durable pursuit/reassessment, hypotheses/gaps; manual ID-heavy UI and sparse real-use evidence. |
 | Autonomous research | PARTIAL | bounded candidate/retrieval workflows and budgets exist; local planner is intentionally empty, external discovery is constrained. |
@@ -74,7 +74,7 @@ Baseline and checks: [AUDIT_EVIDENCE.md](AUDIT_EVIDENCE.md). Status describes th
 | Responsive/mobile | MOSTLY DONE | breakpoints, wrapping/table containers; isolated desktop/390px empty route checks; AST-04 fixed its desktop sidebar recovery-panel containment after screenshot review; physical phone unqualified. |
 | PWA | PARTIAL | manifest/service worker/install event present; fixed shell cache version and unconditional HTML fallback need update/error verification. |
 | Offline | PARTIAL | API excluded from service-worker cache; shell only, auth bootstrap may return to login; AST-04 distinguishes browser network from local API availability but does not make evidence offline-readable. |
-| Onboarding | PARTIAL | setup/login available; no complete first-Watch journey without IDs. |
+| Onboarding | PARTIAL | setup/login and no-ID paused Watch flow are available; first intelligence choices can create a canonical Living Report and enable the zero-paid workspace briefing, while Sources/Start and complete first-value qualification remain separate steps. |
 | Loading/empty/error | MOSTLY DONE | shared accessible primitives; generic error text and retry coverage vary. AST-04 adds explicit local-service unavailable/stopped recovery guidance instead of treating browser network as service truth. |
 | Light/System preference | NOT STARTED | not required for first milestone; keep dark-only with coherent theme tokens. |
 

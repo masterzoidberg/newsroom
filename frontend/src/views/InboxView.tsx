@@ -127,14 +127,15 @@ export function InboxView({ openView }: { openView: (view: InboxViewKey) => void
     setLoading(true);
     setError(null);
     try {
-      const [reportResponse, attentionResponse, watchResponse, changesResponse, scheduleResponse, latestBriefing] = await Promise.all([
+      const [reportResponse, attentionResponse, watchResponse, changesResponse, scheduleResponse] = await Promise.all([
         apiList<Report>("/reports?page_size=50"),
         apiFetch<{ items: AttentionItem[] }>("/attention"),
         apiList<HomeWatch>("/watches?page_size=100"),
         apiFetch<ReviewChangesPage>("/review-boundary/changes?limit=25"),
         apiFetch<BriefingSchedule | null>("/briefing-schedule"),
-        apiFetch<Briefing | null>("/briefings/latest"),
       ]);
+      const briefingQuery = scheduleResponse ? `?period=${scheduleResponse.cadence}&timezone_name=${encodeURIComponent(scheduleResponse.timezone_name)}` : "";
+      const latestBriefing = await apiFetch<Briefing | null>(`/briefings/latest${briefingQuery}`);
       const healthPairs = await Promise.all(watchResponse.items.map(async (watch) => {
         try { return [watch.id, await apiFetch<WatchHealth>(`/watches/${encodeURIComponent(watch.id)}/health`)] as const; }
         catch { return [watch.id, null] as const; }

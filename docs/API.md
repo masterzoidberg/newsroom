@@ -102,7 +102,13 @@ Phase 11 adds authenticated, evidence-bound output paths:
 - `POST /briefings/generate` creates or returns a deterministic daily or weekly
   briefing for selected Monitors. The request may provide an IANA timezone and
   an explicit UTC window; repeated requests for the same period are idempotent.
-  `GET /briefings/{id}` returns ranked material report items.
+  `GET /briefings/{id}` returns ranked material report items. `GET
+  /briefings/latest` reads the newest saved briefing, optionally filtered by
+  period and timezone.
+- `GET/PUT /briefing-schedule` reads or saves the single owner-selected
+  periodic schedule. The response includes the cadence, IANA timezone, paused
+  state, bounded Monitor scope and next delivery time; the route does not
+  expose credentials or enqueue work directly.
 - `GET/POST /alert-rules` and `PATCH /alert-rules/{id}` manage targeted or
   global rules for primary evidence, contradiction, correction, corroboration,
   and material-update events.

@@ -260,7 +260,7 @@
     "accept": "Due cadence generates one briefing across concurrent ticks/retry; timezone/DST and missed interval catch-up are bounded; paused schedule and zero-paid defaults prevent unwanted work.",
     "tests": "Concurrent scheduler/replay/DST/wake/disable tests and schema36 upgrade/backup preservation.",
     "tier": "3",
-    "status": "READY",
+    "status": "DONE",
     "prompt": null
   },
   {
@@ -272,7 +272,7 @@
     "accept": "Chosen preference persists and scheduled output appears without manual refresh; disabled/no-output schedule gives clear state; timezone and next delivery are visible.",
     "tests": "Browser schedule/disable/reload/latest/empty/error/timezone/mobile with fake clock and job fixtures.",
     "tier": "2",
-    "status": "NOT_STARTED",
+    "status": "DONE",
     "prompt": null
   },
   {
@@ -284,7 +284,7 @@
     "accept": "Rule-matching 0.5\u20130.85 alerts are reachable; scope/threshold edits persist; denial of browser notifications retains in-app history without duplicate alerts.",
     "tests": "Threshold/scope/dedupe tests; browser all/important/history/acknowledge/permission-denied/390px.",
     "tier": "2",
-    "status": "NOT_STARTED",
+    "status": "READY",
     "prompt": null
   },
   {
