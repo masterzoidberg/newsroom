@@ -1,6 +1,6 @@
 import { FormEvent, useCallback, useEffect, useState } from "react";
 import { ApiError, apiFetch, apiList, formatDate, jsonBody, shortId } from "../lib/api";
-import type { Report, ReportRevision } from "../lib/types";
+import type { Briefing, Report, ReportRevision } from "../lib/types";
 import { Badge, EmptyState, ErrorState, LoadingState, PageHeader, SectionCard } from "../components/ViewPrimitives";
 
 const label = (value: string) => value.split("_").join(" ");
@@ -21,6 +21,34 @@ type ReportGeneration = {
 };
 
 type ReportRecord = Report & { generation?: ReportGeneration };
+
+type BriefingSchedule = {
+  id: number;
+  cadence: "daily" | "weekly";
+  timezone_name: string;
+  scope: { monitor_ids: string[] };
+  enabled: boolean;
+  paused: boolean;
+  next_due_at: string | null;
+};
+
+const localTimezone = () => Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
+const briefingTimezones = () => Array.from(new Set([localTimezone(), "UTC", "America/New_York", "America/Los_Angeles", "Europe/London", "Asia/Tokyo"]));
+
+function formatInTimezone(value: string | null | undefined, timezone: string): string {
+  if (!value) return "—";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  try {
+    return new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short", timeZone: timezone, timeZoneName: "short" }).format(date);
+  } catch {
+    return formatDate(value);
+  }
+}
+
+function briefingCadenceLabel(cadence: BriefingSchedule["cadence"]): string {
+  return cadence === "daily" ? "Every day" : "Every week";
+}
 
 function readSelectedWatchId(): string {
   try { return window.localStorage.getItem("newsroom.selected-watch.v1") ?? ""; } catch { return ""; }
@@ -49,6 +77,36 @@ export function ReportsView() {
   const [error, setError] = useState<unknown>(null);
   const [working, setWorking] = useState(false);
   const [loading, setLoading] = useState(true);
+  const [schedule, setSchedule] = useState<BriefingSchedule | null>(null);
+  const [latestBriefing, setLatestBriefing] = useState<Briefing | null>(null);
+  const [scheduleCadence, setScheduleCadence] = useState<BriefingSchedule["cadence"]>("daily");
+  const [scheduleTimezone, setScheduleTimezone] = useState(localTimezone);
+  const [scheduleLoading, setScheduleLoading] = useState(true);
+  const [scheduleWorking, setScheduleWorking] = useState(false);
+  const [scheduleError, setScheduleError] = useState<unknown>(null);
+
+  const loadLatestBriefing = useCallback(async (savedSchedule: BriefingSchedule | null) => {
+    const query = savedSchedule ? `?period=${savedSchedule.cadence}&timezone_name=${encodeURIComponent(savedSchedule.timezone_name)}` : "";
+    setLatestBriefing(await apiFetch<Briefing | null>(`/briefings/latest${query}`));
+  }, []);
+
+  const loadSchedule = useCallback(async () => {
+    setScheduleLoading(true);
+    setScheduleError(null);
+    try {
+      const savedSchedule = await apiFetch<BriefingSchedule | null>("/briefing-schedule");
+      setSchedule(savedSchedule);
+      if (savedSchedule) {
+        setScheduleCadence(savedSchedule.cadence);
+        setScheduleTimezone(savedSchedule.timezone_name);
+      }
+      await loadLatestBriefing(savedSchedule);
+    } catch (caught) {
+      setScheduleError(caught);
+    } finally {
+      setScheduleLoading(false);
+    }
+  }, [loadLatestBriefing]);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -79,6 +137,24 @@ export function ReportsView() {
   }, []);
 
   useEffect(() => { void load(); }, [load]);
+  useEffect(() => { void loadSchedule(); }, [loadSchedule]);
+
+  useEffect(() => {
+    if (!schedule?.enabled) return;
+    let cancelled = false;
+    let timer: number | undefined;
+    const poll = async () => {
+      try {
+        const latest = await apiFetch<Briefing | null>(`/briefings/latest?period=${schedule.cadence}&timezone_name=${encodeURIComponent(schedule.timezone_name)}`);
+        if (!cancelled) setLatestBriefing(latest);
+      } catch (caught) {
+        if (!cancelled) setScheduleError(caught);
+      }
+      if (!cancelled) timer = window.setTimeout(() => void poll(), 10_000);
+    };
+    timer = window.setTimeout(() => void poll(), 10_000);
+    return () => { cancelled = true; if (timer !== undefined) window.clearTimeout(timer); };
+  }, [schedule?.cadence, schedule?.enabled, schedule?.timezone_name]);
 
   async function openReport(report: ReportRecord): Promise<void> {
     setSelected(report);
@@ -181,6 +257,39 @@ export function ReportsView() {
     }
   }
 
+  async function saveBriefingSchedule(event: FormEvent): Promise<void> {
+    event.preventDefault();
+    setScheduleWorking(true);
+    setScheduleError(null);
+    try {
+      const saved = await apiFetch<BriefingSchedule>("/briefing-schedule", {
+        method: "PUT",
+        body: jsonBody({ cadence: scheduleCadence, timezone_name: scheduleTimezone, enabled: true }),
+      });
+      setSchedule(saved);
+      setScheduleCadence(saved.cadence);
+      setScheduleTimezone(saved.timezone_name);
+      await loadLatestBriefing(saved);
+    } catch (caught) {
+      setScheduleError(caught);
+    } finally {
+      setScheduleWorking(false);
+    }
+  }
+
+  async function pauseBriefingSchedule(): Promise<void> {
+    setScheduleWorking(true);
+    setScheduleError(null);
+    try {
+      const saved = await apiFetch<BriefingSchedule>("/briefing-schedule", { method: "PUT", body: jsonBody({ enabled: false }) });
+      setSchedule(saved);
+    } catch (caught) {
+      setScheduleError(caught);
+    } finally {
+      setScheduleWorking(false);
+    }
+  }
+
   if (loading) return <><PageHeader eyebrow="Review" title="Reports" description="Versioned status pages grounded in exact accepted Claims." /><LoadingState label="Loading Living Reports" />{error && <ErrorState error={error} />}</>;
 
   const selectedWatch = watches.find((watch) => watch.id === selectedWatchId);
@@ -188,6 +297,26 @@ export function ReportsView() {
   return <>
     <PageHeader eyebrow="Review / evidence-bound" title="Living Reports" description="Inspect the latest successful revision for a named Watch, including what changed and the exact evidence behind it." />
     {error && <ErrorState error={error} retry={() => void load()} />}
+    <SectionCard title="Briefing preferences" description="Choose a durable workspace briefing cadence and timezone. This is separate from each Watch's acquisition cadence." action={schedule?.enabled ? <Badge tone="mint">Enabled</Badge> : <Badge tone="neutral">{schedule ? "Paused" : "Not configured"}</Badge>}>
+      {scheduleLoading ? <LoadingState label="Loading briefing preferences" /> : scheduleError ? <ErrorState error={scheduleError} retry={() => void loadSchedule()} /> : <>
+        <form className="stack-form" onSubmit={(event) => void saveBriefingSchedule(event)}>
+          <label htmlFor="briefing-cadence">Briefing cadence</label>
+          <select id="briefing-cadence" name="briefing_cadence" value={scheduleCadence} onChange={(event) => setScheduleCadence(event.target.value as BriefingSchedule["cadence"])} disabled={scheduleWorking}>
+            <option value="daily">Every day</option>
+            <option value="weekly">Every week</option>
+          </select>
+          <label htmlFor="briefing-timezone">Delivery timezone</label>
+          <select id="briefing-timezone" name="briefing_timezone" value={scheduleTimezone} onChange={(event) => setScheduleTimezone(event.target.value)} disabled={scheduleWorking}>
+            {briefingTimezones().map((timezone) => <option value={timezone} key={timezone}>{timezone}{timezone === localTimezone() ? " (local)" : ""}</option>)}
+          </select>
+          <p className="status-note">{schedule?.enabled ? `Next delivery: ${formatInTimezone(schedule.next_due_at, schedule.timezone_name)}.` : schedule ? "Briefings are paused. Saving these choices resumes the schedule." : "No delivery is scheduled until you save a cadence."} {schedule?.scope.monitor_ids.length ? `${schedule.scope.monitor_ids.length} selected Monitor${schedule.scope.monitor_ids.length === 1 ? "" : "s"} are in scope.` : "The briefing includes all eligible Monitor reports."}</p>
+          <div className="button-row"><button className="primary-button" type="submit" disabled={scheduleWorking}>{scheduleWorking ? "Saving…" : schedule?.enabled ? "Save preferences" : "Enable briefing"}</button>{schedule?.enabled && <button className="secondary-button" type="button" onClick={() => void pauseBriefingSchedule()} disabled={scheduleWorking}>Pause briefings</button>}</div>
+        </form>
+        <SectionCard title="Latest saved briefing" description={latestBriefing ? `${briefingCadenceLabel(latestBriefing.period)} · ${latestBriefing.timezone_name} · saved for ${formatInTimezone(latestBriefing.period_end, latestBriefing.timezone_name)}` : "Scheduled output is read from persisted briefing state."}>
+          {latestBriefing?.items.length ? <div className="briefing-list">{latestBriefing.items.slice(0, 6).map((item) => <article className="briefing-item" key={item.id}><span className="rank">{String(item.rank).padStart(2, "0")}</span><div><strong>{item.reason || "Material report update"}</strong><p>{item.claim_ids.length} Claim{item.claim_ids.length === 1 ? "" : "s"} · {item.evidence_span_ids.length} exact span{item.evidence_span_ids.length === 1 ? "" : "s"}</p></div><Badge tone={item.importance_score >= .9 ? "coral" : "amber"}>{item.importance_score.toFixed(2)}</Badge></article>)}</div> : <EmptyState title={schedule?.enabled ? "No briefing published yet" : "No briefing output"} description={schedule?.enabled ? `The next saved delivery is ${formatInTimezone(schedule.next_due_at, schedule.timezone_name)}. A briefing appears after an eligible scheduled job completes.` : schedule ? "Resume the schedule to receive future briefings. Existing output will remain available when it matches the selected cadence and timezone." : "Save a briefing cadence to begin receiving scheduled output."} />}
+        </SectionCard>
+      </>}
+    </SectionCard>
     <div className="content-grid reports-layout">
       <SectionCard title="Create or open a report" description="Choose a named Watch. Newsroom maps it to the existing canonical target; no target ID is required here.">
         {watches.length ? <form className="stack-form" onSubmit={(event) => void create(event)}>
