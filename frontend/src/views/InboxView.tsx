@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { apiFetch, apiList, formatDate, jsonBody, shortId } from "../lib/api";
 import type { AttentionItem, Briefing, Report } from "../lib/types";
 import { Badge, EmptyState, ErrorState, LoadingState, PageHeader, SectionCard, Stat } from "../components/ViewPrimitives";
+import { queueStoryNavigation } from "./StoryEvidenceView";
 
 type InboxViewKey = "alerts" | "reports" | "stories" | "monitors" | "documents";
 type WatchPriority = "urgent" | "high" | "normal" | "low";
@@ -84,7 +85,7 @@ function ReviewChangeRow({ change, watches, openView }: { change: ReviewChange; 
       <small>{watchNames} · {change.claim_count} Claim{change.claim_count === 1 ? "" : "s"} · {change.supporting_evidence_count} supporting evidence span{change.supporting_evidence_count === 1 ? "" : "s"}{change.publication_at ? ` · published ${formatDate(change.publication_at)}` : ""} · {change.story.lifecycle}</small>
     </div>
     <div className="button-row">
-      <a className="secondary-button" href="#stories" onClick={() => openView("stories")} aria-label={`Open Story review for ${change.story.headline}`}>Open Story review</a>
+      <a className="secondary-button" href="#stories" onClick={() => { queueStoryNavigation({ storyId: change.story.id }); openView("stories"); }} aria-label={`Open Story review for ${change.story.headline}`}>Open Story review</a>
     </div>
   </article>;
 }

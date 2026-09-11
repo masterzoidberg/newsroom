@@ -37,6 +37,14 @@ export type ClaimEvidence = {
   source: { id: string; name: string; slug: string };
 };
 
+export type StoryEvidenceRevision = {
+  id: string;
+  revision_number: number;
+  headline: string;
+  claim_set_hash: string | null;
+  claim_ids: string[];
+};
+
 export type Claim = {
   id: string;
   proposition: string;
@@ -56,6 +64,25 @@ export type Claim = {
     candidate_claim_index: number | null;
   };
   evidence: ClaimEvidence[];
+};
+
+export type StoryEvidenceResponse = {
+  story: { id: string; lifecycle?: string; deleted_at?: string | null };
+  claims: Claim[];
+  revisions: StoryEvidenceRevision[];
+};
+
+export type StoryNavigationContext = {
+  storyId: string;
+  claimId?: string;
+};
+
+export type DocumentNavigationContext = {
+  documentId: string;
+  documentVersionId?: string;
+  evidenceSpanId?: string;
+  returnStoryId?: string;
+  returnClaimId?: string;
 };
 
 export type StoryRevision = {
@@ -258,7 +285,22 @@ export type DocumentRecord = {
   first_seen_at?: string;
 };
 
-export type DocumentVersion = { id: string; retrieved_at: string; content_hash: string; content_kind: string };
+export type DocumentVersion = {
+  id: string;
+  document_id?: string;
+  retrieved_at: string;
+  content_hash: string;
+  content_kind: string;
+};
+
+export type EvidenceSpan = {
+  id: string;
+  document_version_id?: string;
+  document_version?: { id: string };
+  excerpt: string;
+  locator_type?: string | null;
+  locator_value?: string | null;
+};
 
 export type Timeline = { events?: Array<Record<string, unknown>>; revisions?: Array<Record<string, unknown>> };
 

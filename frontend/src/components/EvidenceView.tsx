@@ -1,47 +1,16 @@
-import { FormEvent, useState } from "react";
+import { formatDate, shortId } from "../lib/api";
+import type { Claim, ClaimEvidence, StoryEvidenceResponse } from "../lib/types";
+import { Badge, EmptyState } from "./ViewPrimitives";
 
-type EvidenceItem = {
-  id: string;
-  relationship: "supports" | "contradicts" | "contextualizes";
-  excerpt: string;
-  locator_type: string | null;
-  locator_value: string | null;
-  document_version: {
-    id: string;
-    retrieved_at: string;
-    content_hash: string;
-  };
-  document: {
-    canonical_url: string;
-    title: string;
-  };
-  source: {
-    name: string;
-    slug: string;
-  };
+type EvidenceViewProps = {
+  ledger: StoryEvidenceResponse;
+  selectedClaimId?: string;
+  dependencyGroupCount?: number;
+  onSelectClaim?: (claimId: string) => void;
+  onOpenEvidence?: (claim: Claim, evidence: ClaimEvidence) => void;
 };
 
-type Claim = {
-  id: string;
-  proposition: string;
-  importance: "major" | "relevant" | "peripheral";
-  state: string;
-  accepted: boolean;
-  evidence: EvidenceItem[];
-};
-
-type EvidenceResponse = {
-  claims: Claim[];
-  revisions: Array<{
-    id: string;
-    revision_number: number;
-    headline: string;
-    claim_set_hash: string | null;
-    claim_ids: string[];
-  }>;
-};
-
-function relationshipLabel(relationship: EvidenceItem["relationship"]): string {
+function relationshipLabel(relationship: ClaimEvidence["relationship"]): string {
   return relationship === "supports"
     ? "Supports"
     : relationship === "contradicts"
@@ -49,109 +18,39 @@ function relationshipLabel(relationship: EvidenceItem["relationship"]): string {
       : "Contextualizes";
 }
 
-export function EvidenceView() {
-  const [storyId, setStoryId] = useState("");
-  const [ledger, setLedger] = useState<EvidenceResponse | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [loading, setLoading] = useState(false);
+function claimLabel(claim: Claim): { label: string; tone: "mint" | "amber" | "coral" | "neutral" } {
+  if (claim.accepted) return { label: "Accepted for synthesis", tone: "mint" };
+  if (claim.state === "pending") return { label: "Pending review · not verified", tone: "amber" };
+  if (claim.state === "superseded") return { label: "Superseded · historical only", tone: "neutral" };
+  if (claim.state === "disputed") return { label: "Disputed · not verified", tone: "coral" };
+  if (claim.state === "unsubstantiated") return { label: "Unsubstantiated · not verified", tone: "coral" };
+  return { label: `${claim.state} · not verified`, tone: "coral" };
+}
 
-  async function loadEvidence(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    const identifier = storyId.trim();
-    if (!identifier) {
-      setError("Enter a Story ID to inspect its evidence.");
-      return;
-    }
-    setLoading(true);
-    setError(null);
-    try {
-      const response = await fetch(`/api/v1/stories/${encodeURIComponent(identifier)}/evidence`);
-      const body = await response.json();
-      if (!response.ok) throw new Error(body?.error?.message ?? "Evidence could not be loaded.");
-      setLedger(body as EvidenceResponse);
-    } catch (caught) {
-      setLedger(null);
-      setError(caught instanceof Error ? caught.message : "Evidence could not be loaded.");
-    } finally {
-      setLoading(false);
-    }
-  }
+export function EvidenceView({ ledger, selectedClaimId, dependencyGroupCount, onSelectClaim, onOpenEvidence }: EvidenceViewProps) {
+  if (ledger.claims.length === 0) return <EmptyState title="No current Claims" description="This Story has no current Claims. No factual statement is treated as verified." />;
 
-  return (
-    <section className="evidence-panel" aria-labelledby="evidence-heading">
-      <div className="section-heading">
-        <div>
-          <p className="eyebrow">Evidence ledger</p>
-          <h2 id="evidence-heading">Inspect why a Story says what it says.</h2>
-        </div>
-        <p className="section-note">Read-only view · exact spans · versioned provenance</p>
-      </div>
-
-      <form className="evidence-form" onSubmit={loadEvidence}>
-        <label htmlFor="story-id">Story ID</label>
-        <div className="evidence-form-row">
-          <input
-            id="story-id"
-            name="story_id"
-            value={storyId}
-            onChange={(event) => setStoryId(event.target.value)}
-            placeholder="st_…"
-            autoComplete="off"
-            spellCheck={false}
-          />
-          <button type="submit" disabled={loading}>
-            {loading ? "Loading…" : "Inspect evidence"}
-          </button>
-        </div>
-      </form>
-
-      {error && <p className="evidence-message error" role="alert">{error}</p>}
-      {!ledger && !error && (
-        <p className="evidence-message" role="status">
-          Load a Story to see accepted Claims, contradictions, and their exact source spans.
-        </p>
-      )}
-      {ledger && ledger.claims.length === 0 && (
-        <p className="evidence-message" role="status">This Story has no Claims yet.</p>
-      )}
-      {ledger && ledger.claims.length > 0 && (
-        <div className="claim-list" role="list" aria-label="Story claims">
-          {ledger.claims.map((claim) => (
-            <article className="claim-card" key={claim.id} role="listitem">
-              <div className="claim-header">
-                <div>
-                  <span className={`state-badge state-${claim.state}`}>{claim.state}</span>
-                  <span className="importance-label">{claim.importance} importance</span>
-                </div>
-                <code>{claim.id}</code>
-              </div>
-              <h3>{claim.proposition}</h3>
-              <p className="claim-meta">{claim.accepted ? "Accepted for synthesis" : "Not accepted for synthesis"}</p>
-              {claim.evidence.length === 0 ? (
-                <p className="claim-meta">No evidence linked.</p>
-              ) : (
-                <ul className="evidence-list">
-                  {claim.evidence.map((item) => (
-                    <li key={item.id} className={`evidence-item relationship-${item.relationship}`}>
-                      <div className="evidence-item-header">
-                        <strong>{relationshipLabel(item.relationship)}</strong>
-                        <span>{item.source.name} · Version {item.document_version.id}</span>
-                      </div>
-                      <blockquote>{item.excerpt}</blockquote>
-                      <p className="evidence-provenance">
-                        {item.document.title} · {item.locator_type ?? "document"}: {item.locator_value ?? "exact span"}{" "}
-                        <a href={item.document.canonical_url} target="_blank" rel="noreferrer">
-                          Open source
-                        </a>
-                      </p>
-                    </li>
-                  ))}
-                </ul>
-              )}
-            </article>
-          ))}
-        </div>
-      )}
-    </section>
-  );
+  return <>
+    {dependencyGroupCount !== undefined && <p className="status-note" role="status">Corroboration records {dependencyGroupCount} known source-dependency group{dependencyGroupCount === 1 ? "" : "s"}; multiple sources do not automatically mean independent confirmation.</p>}
+    <div className="claim-list" role="list" aria-label="Story claims">
+      {ledger.claims.map((claim) => {
+        const status = claimLabel(claim);
+        return <article className={`claim-card ${selectedClaimId === claim.id ? "claim-card-selected" : ""}`} id={`claim-${claim.id}`} key={claim.id} role="listitem" aria-label={`Claim ${claim.proposition}`}>
+          <div className="claim-header">
+            <span><Badge tone={status.tone}>{status.label}</Badge><small>{claim.importance} importance</small></span>
+            <code>{shortId(claim.id)}</code>
+          </div>
+          <div className="claim-title-row"><h3>{claim.proposition}</h3>{onSelectClaim && <button className="quiet-button" type="button" onClick={() => onSelectClaim(claim.id)} aria-pressed={selectedClaimId === claim.id}>{selectedClaimId === claim.id ? "Selected Claim" : "Select Claim"}</button>}</div>
+          <p className="claim-provenance">{status.label}{claim.accepted_at ? ` · accepted ${formatDate(claim.accepted_at)}` : ""}{claim.provenance.origin === "manual" ? " · manual provenance; automated verification identity unavailable" : ""}</p>
+          {(claim.provenance.article_analysis_id || claim.provenance.promotion_identity) && <p className="claim-provenance">Analysis {shortId(claim.provenance.article_analysis_id)} · promotion {shortId(claim.provenance.promotion_identity)}{claim.provenance.candidate_claim_index !== null ? ` · candidate ${claim.provenance.candidate_claim_index}` : ""}</p>}
+          {claim.evidence.length ? <ul className="evidence-list">{claim.evidence.map((item) => <li key={item.id} className={`evidence-item relationship-${item.relationship}`}>
+            <div className="evidence-item-header"><strong>{relationshipLabel(item.relationship)}</strong><span>{item.source.name} · DocumentVersion {shortId(item.document_version.id)}</span></div>
+            <blockquote>{item.excerpt}</blockquote>
+            <p className="evidence-provenance">{item.document.title} · {item.locator_type ?? "document"}: {item.locator_value ?? "exact span"} · retrieved {item.document_version.retrieved_at ? new Date(item.document_version.retrieved_at).toLocaleString() : "—"}</p>
+            <div className="button-row"><a className="quiet-button" href={item.document.canonical_url} target="_blank" rel="noreferrer">Open source</a>{onOpenEvidence && <button className="secondary-button" type="button" onClick={() => onOpenEvidence(claim, item)}>Inspect exact DocumentVersion</button>}</div>
+          </li>)}</ul> : <p className="muted">No EvidenceSpan is linked; this Claim cannot be source-verified.</p>}
+        </article>;
+      })}
+    </div>
+  </>;
 }

@@ -1,23 +1,59 @@
-import { FormEvent, useState } from "react";
-import { apiFetch, formatDate, jsonBody, shortId } from "../lib/api";
-import type { Claim, DuplicateSuggestion, Story, StoryCorrection, StoryLineage, Timeline } from "../lib/types";
+import { FormEvent, useEffect, useState } from "react";
+import { ApiError, apiFetch, formatDate, jsonBody, shortId } from "../lib/api";
+import type { Claim, DuplicateSuggestion, Story, StoryCorrection, StoryEvidenceResponse, StoryLineage, StoryNavigationContext, Timeline } from "../lib/types";
+import { EvidenceView } from "../components/EvidenceView";
 import { Badge, EmptyState, ErrorState, LoadingState, PageHeader, SectionCard } from "../components/ViewPrimitives";
+import { queueDocumentNavigation } from "./DocumentView";
 
-type EvidenceResponse = { claims: Claim[]; revisions: Array<{ id: string; revision_number: number; headline: string; claim_set_hash: string | null; claim_ids: string[] }> };
 type Corroboration = { publication_count?: number; distinct_source_count?: number; dependency_group_count?: number; largest_group_share?: number; dependency_groups?: Array<Record<string, unknown>> };
 type MergePreview = { source: Story; destination: Story; source_claim_count: number; destination_claim_count: number; expected_claim_moves: string[]; watch_consequences: Array<{ id: string; kind: string; name: string }>; expected_current_state_fingerprint?: string };
 type SplitPreview = { source: Story; claims: Array<{ id: string; proposition: string; importance: string; state: string }>; expected_claim_ids: string[]; current_document_ids: string[]; current_entity_ids: string[] };
 
+const STORY_NAVIGATION_KEY = "newsroom.story.inspect.v1";
+
+export function queueStoryNavigation(context: StoryNavigationContext) {
+  const storyId = context.storyId.trim();
+  if (!storyId) return;
+  try {
+    window.sessionStorage.setItem(STORY_NAVIGATION_KEY, JSON.stringify({
+      storyId,
+      ...(context.claimId?.trim() ? { claimId: context.claimId.trim() } : {}),
+    }));
+  } catch { /* The Story ID remains available in the current view. */ }
+}
+
+function readStoryNavigation(): StoryNavigationContext | null {
+  try {
+    const raw = window.sessionStorage.getItem(STORY_NAVIGATION_KEY);
+    if (!raw) return null;
+    const saved = JSON.parse(raw) as Partial<StoryNavigationContext>;
+    if (typeof saved.storyId !== "string" || !saved.storyId.trim()) return null;
+    return {
+      storyId: saved.storyId.trim(),
+      ...(typeof saved.claimId === "string" && saved.claimId.trim() ? { claimId: saved.claimId.trim() } : {}),
+    };
+  } catch { return null; }
+}
+
+function contextualError(caught: unknown, label: string, identifier: string): unknown {
+  if (caught instanceof ApiError && caught.status === 404) {
+    return new Error(`${label} ${shortId(identifier)} is unavailable. The link may be stale or the record may have been deleted; no evidence is shown as verified.`);
+  }
+  return caught;
+}
+
 export function StoryEvidenceView() {
-  const [storyId, setStoryId] = useState("");
+  const [initialContext] = useState(readStoryNavigation);
+  const [storyId, setStoryId] = useState(initialContext?.storyId ?? "");
   const [story, setStory] = useState<Story | null>(null);
-  const [ledger, setLedger] = useState<EvidenceResponse | null>(null);
+  const [ledger, setLedger] = useState<StoryEvidenceResponse | null>(null);
   const [timeline, setTimeline] = useState<Timeline | null>(null);
   const [corroboration, setCorroboration] = useState<Corroboration | null>(null);
   const [corrections, setCorrections] = useState<StoryCorrection[]>([]);
   const [lineage, setLineage] = useState<StoryLineage | null>(null);
   const [duplicates, setDuplicates] = useState<DuplicateSuggestion[]>([]);
-  const [selectedClaimId, setSelectedClaimId] = useState("");
+  const [selectedClaimId, setSelectedClaimId] = useState(initialContext?.claimId ?? "");
+  const [missingClaimId, setMissingClaimId] = useState("");
   const [targetStoryId, setTargetStoryId] = useState("");
   const [mergePreview, setMergePreview] = useState<MergePreview | null>(null);
   const [splitPreview, setSplitPreview] = useState<SplitPreview | null>(null);
@@ -28,34 +64,65 @@ export function StoryEvidenceView() {
   const [loading, setLoading] = useState(false);
   const [working, setWorking] = useState(false);
 
-  async function load(identifier: string) {
+  async function load(identifier: string, requestedClaimId = "") {
     setLoading(true); setError(null); setMergePreview(null); setSplitPreview(null);
+    setMissingClaimId("");
     try {
       const encoded = encodeURIComponent(identifier);
       const [storyResult, evidenceResult, timelineResult, corroborationResult, correctionResult, lineageResult] = await Promise.all([
         apiFetch<Story>(`/stories/${encoded}`),
-        apiFetch<EvidenceResponse>(`/stories/${encoded}/evidence`),
+        apiFetch<StoryEvidenceResponse>(`/stories/${encoded}/evidence`),
         apiFetch<Timeline>(`/stories/${encoded}/timeline`),
         apiFetch<Corroboration>(`/stories/${encoded}/corroboration`),
         apiFetch<{ items: StoryCorrection[] }>(`/stories/${encoded}/corrections`),
         apiFetch<StoryLineage>(`/stories/${encoded}/lineage`),
       ]);
+      const requestedClaimExists = requestedClaimId.length > 0 && evidenceResult.claims.some((claim) => claim.id === requestedClaimId);
+      const nextClaimId = requestedClaimExists ? requestedClaimId : evidenceResult.claims[0]?.id ?? "";
       setStory(storyResult); setLedger(evidenceResult); setTimeline(timelineResult); setCorroboration(corroborationResult); setCorrections(correctionResult.items); setLineage(lineageResult);
-      setSelectedClaimId(evidenceResult.claims[0]?.id ?? "");
+      setStoryId(identifier);
+      setSelectedClaimId(nextClaimId);
+      if (requestedClaimId && !requestedClaimExists) setMissingClaimId(requestedClaimId);
+      queueStoryNavigation({ storyId: storyResult.id, claimId: requestedClaimId || nextClaimId || undefined });
       if (storyResult.lifecycle !== "archived") {
         try { setDuplicates((await apiFetch<{ items: DuplicateSuggestion[] }>(`/stories/${encoded}/duplicates`)).items); } catch { setDuplicates([]); }
       } else setDuplicates([]);
-    } catch (caught) { setStory(null); setLedger(null); setError(caught); }
+    } catch (caught) {
+      setStory(null); setLedger(null); setTimeline(null); setCorroboration(null); setCorrections([]); setLineage(null); setDuplicates([]);
+      setError(contextualError(caught, "Story", identifier));
+    }
     finally { setLoading(false); }
   }
+
+  useEffect(() => {
+    if (initialContext?.storyId) void load(initialContext.storyId, initialContext.claimId ?? "");
+  }, []);
 
   async function inspect(event: FormEvent) { event.preventDefault(); const identifier = storyId.trim(); if (!identifier) { setError(new Error("Enter a Story ID to inspect.")); return; } await load(identifier); }
 
   async function runCorrection(action: () => Promise<unknown>) {
     setWorking(true); setError(null);
-    try { await action(); if (story) await load(story.id); }
+    try { await action(); if (story) await load(story.id, selectedClaimId); }
     catch (caught) { setError(caught); }
     finally { setWorking(false); }
+  }
+
+  function selectClaim(claimId: string) {
+    setSelectedClaimId(claimId);
+    if (story) queueStoryNavigation({ storyId: story.id, claimId });
+    window.requestAnimationFrame(() => document.getElementById(`claim-${claimId}`)?.scrollIntoView({ behavior: "smooth", block: "center" }));
+  }
+
+  function openEvidence(claim: Claim, evidence: Claim["evidence"][number]) {
+    if (!story) return;
+    queueStoryNavigation({ storyId: story.id, claimId: claim.id });
+    queueDocumentNavigation(evidence.document.id, {
+      documentVersionId: evidence.document_version.id,
+      evidenceSpanId: evidence.evidence_span_id,
+      returnStoryId: story.id,
+      returnClaimId: claim.id,
+    });
+    window.location.hash = "documents";
   }
 
   async function reassign() {
@@ -105,15 +172,15 @@ export function StoryEvidenceView() {
   const summary = story?.current_revision?.summary ?? story?.summary ?? "No summary recorded.";
   return <>
     <PageHeader eyebrow="Review / provenance" title="Story & evidence" description="Inspect Claims, exact spans, corrections, lineage, and current Story membership." />
-    <SectionCard title="Open a Story" description="Correction actions preserve evidence provenance and append a durable history.">
+    <SectionCard title="Open a Story" description="Home, Watch results, and saved review context can open this path without re-entering an ID. Manual entry remains available for recovery.">
       <form className="inline-form" onSubmit={inspect}><label htmlFor="story-id">Story ID</label><input id="story-id" name="story_id" autoComplete="off" value={storyId} onChange={(event) => setStoryId(event.target.value)} placeholder="st_…" /><button className="primary-button" type="submit" disabled={loading}>{loading ? "Inspecting…" : "Inspect Story"}</button></form>
     </SectionCard>
     {loading && <LoadingState label="Following provenance" />}{error && <ErrorState error={error} />}
     {story && ledger && <>
-      <section className="story-summary"><div><p className="eyebrow">{story.lifecycle === "archived" ? "Historical Story" : "Current Story"}</p><h2>{headline}</h2><p>{summary}</p></div><div className="story-summary-meta"><Badge tone={story.lifecycle === "developing" ? "amber" : "mint"}>{story.lifecycle}</Badge><span>{shortId(story.id)}</span></div></section>
+      <section className="story-summary"><div><p className="eyebrow">{story.lifecycle === "archived" ? "Historical Story" : "Current Story"}</p><h2>{headline}</h2><p>{summary}</p>{ledger.claims.length > 0 && <button className="secondary-button" type="button" onClick={() => selectClaim(selectedClaimId || ledger.claims[0].id)}>Review summary Claims</button>}</div><div className="story-summary-meta"><Badge tone={story.lifecycle === "developing" ? "amber" : "mint"}>{story.lifecycle}</Badge><span>{shortId(story.id)}</span></div></section>
       <div className="stat-grid"><div className="stat-card"><span>Current Claims</span><strong>{ledger.claims.length}</strong></div><div className="stat-card stat-mint"><span>Accepted</span><strong>{ledger.claims.filter((claim) => claim.accepted).length}</strong></div><div className="stat-card stat-coral"><span>Contradictions</span><strong>{ledger.claims.flatMap((claim) => claim.evidence).filter((item) => item.relationship === "contradicts").length}</strong></div><div className="stat-card"><span>Distinct Sources</span><strong>{corroboration?.distinct_source_count ?? "—"}</strong><small>{corroboration?.dependency_group_count ?? "—"} known dependency groups</small></div></div>
 
-      <SectionCard title="Claims and exact spans" description="Current membership is distinct from historical Story Document observations.">{ledger.claims.length ? <div className="claim-list">{ledger.claims.map((claim) => <article className="claim-card" key={claim.id}><div className="claim-header"><span><Badge tone={claim.accepted ? "mint" : claim.state === "disputed" ? "coral" : "amber"}>{claim.accepted ? "accepted" : claim.state}</Badge><small>{claim.importance} importance</small></span><code>{shortId(claim.id)}</code></div><h3>{claim.proposition}</h3>{claim.evidence.length ? <ul className="evidence-list">{claim.evidence.map((item) => <li key={item.id} className={`evidence-item relationship-${item.relationship}`}><div className="evidence-item-header"><strong>{item.relationship}</strong><span>{item.source.name} · {shortId(item.document_version.id)}</span></div><blockquote>{item.excerpt}</blockquote><p className="evidence-provenance">{item.document.title} · {item.locator_type ?? "document"}: {item.locator_value ?? "exact span"} · <a href={item.document.canonical_url} target="_blank" rel="noreferrer">Open source</a></p></li>)}</ul> : <p className="muted">No evidence linked.</p>}</article>)}</div> : <EmptyState title="No current Claims" description="This Story has no current Claims." />}</SectionCard>
+      <SectionCard title="Claims and exact spans" description="Current membership is distinct from historical Story Document observations.">{missingClaimId && <p className="status-note" role="status">Claim {shortId(missingClaimId)} is no longer in this Story’s current evidence ledger. The stale link is retained for explanation, not treated as verified.</p>}<EvidenceView ledger={ledger} selectedClaimId={selectedClaimId} dependencyGroupCount={corroboration?.dependency_group_count} onSelectClaim={selectClaim} onOpenEvidence={openEvidence} /></SectionCard>
 
       <SectionCard title="Story correction actions" description="Human corrections require an expected current Story when moving Claims, so stale approvals are rejected.">
         <div className="stack-form"><label htmlFor="correction-claim">Claim</label><select id="correction-claim" value={selectedClaimId} onChange={(event) => setSelectedClaimId(event.target.value)}><option value="">Select a Claim</option>{ledger.claims.map((claim) => <option value={claim.id} key={claim.id}>{shortId(claim.id)} · {claim.proposition}</option>)}</select><label htmlFor="correction-target">Destination Story ID</label><input id="correction-target" value={targetStoryId} onChange={(event) => setTargetStoryId(event.target.value)} placeholder="st_…" /><label htmlFor="correction-reason">Reason</label><input id="correction-reason" value={reason} onChange={(event) => setReason(event.target.value)} placeholder="Why is this correction needed?" /><div className="button-row"><button className="secondary-button" type="button" onClick={() => void reassign()} disabled={working || !selectedClaimId || !targetStoryId.trim()}>Move Claim</button><button className="quiet-button" type="button" onClick={() => void unassign()} disabled={working || !selectedClaimId}>Unassign Claim</button></div><label htmlFor="extract-headline">Extract selected Claim into new Story</label><input id="extract-headline" value={extractHeadline} onChange={(event) => setExtractHeadline(event.target.value)} placeholder="New Story headline" /><button className="secondary-button" type="button" onClick={() => void extract()} disabled={working || !selectedClaimId || !extractHeadline.trim()}>Extract Claim</button></div>
