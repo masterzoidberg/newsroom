@@ -21,9 +21,9 @@ class SchedulerProcess:
         self.scheduler = scheduler or SchedulerService(db_path)
         self.research_questions = research_questions or ResearchQuestionService(db_path)
 
-    def run_once(self) -> dict:
-        result = self.scheduler.tick()
-        result["research_pursuit"] = self.research_questions.pursue_due()
+    def run_once(self, *, now: str | None = None) -> dict:
+        result = self.scheduler.tick(now=now)
+        result["research_pursuit"] = self.research_questions.pursue_due(now=now)
         return result
 
     def run_forever(self, stop_event: threading.Event, *, interval_seconds: float = 30.0) -> None:

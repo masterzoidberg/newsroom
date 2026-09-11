@@ -123,7 +123,7 @@ def test_schema32_history_and_hypothesis_gap_survive_upgrade(tmp_path):
 
     result = apply_migrations(db_path)
 
-    assert result.current_version == 36
+    assert result.current_version == 37
     conn = sqlite3.connect(db_path)
     conn.row_factory = sqlite3.Row
     try:
@@ -167,7 +167,7 @@ def test_schema32_history_and_hypothesis_gap_survive_upgrade(tmp_path):
 
 def test_fresh_and_schema34_migrations_are_idempotent(tmp_path):
     fresh = tmp_path / "fresh.sqlite"
-    assert apply_migrations(fresh).current_version == 36
+    assert apply_migrations(fresh).current_version == 37
     assert apply_migrations(fresh).applied_versions == ()
 
     schema34 = tmp_path / "schema34.sqlite"
@@ -213,7 +213,7 @@ def test_fresh_and_schema34_migrations_are_idempotent(tmp_path):
         conn.close()
 
     result = apply_migrations(schema34)
-    assert result.applied_versions == (35, 36)
+    assert result.applied_versions == (35, 36, 37)
     assert apply_migrations(schema34).applied_versions == ()
 
 

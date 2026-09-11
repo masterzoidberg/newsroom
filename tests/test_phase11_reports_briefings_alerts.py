@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sqlite3
+import threading
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -12,10 +13,17 @@ from newsroom.config import RuntimeConfig
 from newsroom.domain import CoreService, DomainConflict, DomainValidation, utc_now
 from newsroom.evidence import EvidenceService
 from newsroom.intelligent_monitoring import WatchService
+from newsroom.jobs import BRIEFING_GENERATE_JOB_TYPE, JobService, SchedulerService
 from newsroom.migrations import apply_migrations
 from newsroom.monitoring import MonitorService, MonitoringPolicyService
-from newsroom.reports import AlertService, BriefingService, LivingReportService
+from newsroom.reports import (
+    AlertService,
+    BriefingScheduleService,
+    BriefingService,
+    LivingReportService,
+)
 from newsroom.story_evolution import StoryEvolutionService
+from newsroom.worker import WorkerProcess
 
 
 PASSWORD = "a-long-test-password-12345"
@@ -375,6 +383,158 @@ def test_daily_briefing_is_timezone_aware_ranked_and_deduplicated(tmp_db):
             monitor_ids=[monitor["id"]],
             timezone_name="Not/A_Timezone",
         )
+
+
+def test_briefing_schedule_is_durable_timezone_aware_and_pauseable(tmp_db):
+    apply_migrations(tmp_db)
+    _, _, story, _, _, _ = _accepted_story(tmp_db)
+    monitor = _monitor(tmp_db, story["id"])
+    schedules = BriefingScheduleService(tmp_db)
+
+    schedule = schedules.create(
+        {
+            "cadence": "daily",
+            "timezone_name": "America/New_York",
+            "scope": {"monitor_ids": [monitor["id"]]},
+        },
+        now="2026-11-01T03:59:00Z",
+    )
+
+    assert schedule["cadence"] == "daily"
+    assert schedule["timezone_name"] == "America/New_York"
+    assert schedule["scope"] == {"monitor_ids": [monitor["id"]]}
+    assert schedule["next_due_at"] == "2026-11-01T04:00:00Z"
+    assert schedule["paused"] is False
+
+    paused = schedules.pause(now="2026-11-01T04:00:00Z")
+    assert paused["paused"] is True
+    assert paused["next_due_at"] is None
+    assert SchedulerService(tmp_db).tick(now="2026-11-01T04:00:00Z")["briefing_job_ids"] == []
+
+    resumed = schedules.resume(now="2026-11-01T05:01:00Z")
+    assert resumed["paused"] is False
+    assert resumed["next_due_at"] == "2026-11-02T05:00:00Z"
+
+
+def test_due_briefing_schedule_coalesces_concurrent_ticks_and_replay(tmp_db):
+    apply_migrations(tmp_db)
+    _, _, story, _, _, _ = _accepted_story(tmp_db)
+    monitor = _monitor(tmp_db, story["id"])
+    schedules = BriefingScheduleService(tmp_db)
+    schedule = schedules.create(
+        {
+            "cadence": "daily",
+            "timezone_name": "UTC",
+            "scope": {"monitor_ids": [monitor["id"]]},
+        },
+        now="2026-08-16T11:00:00Z",
+    )
+    due = schedule["next_due_at"]
+    barrier = threading.Barrier(2)
+    results = []
+
+    def tick():
+        barrier.wait()
+        results.append(SchedulerService(tmp_db).tick(now=due))
+
+    first = threading.Thread(target=tick)
+    second = threading.Thread(target=tick)
+    first.start()
+    second.start()
+    first.join()
+    second.join()
+
+    conn = storage.connect(tmp_db)
+    try:
+        jobs = conn.execute(
+            "SELECT * FROM jobs WHERE job_type = ?", (BRIEFING_GENERATE_JOB_TYPE,)
+        ).fetchall()
+    finally:
+        conn.close()
+    assert len(jobs) == 1
+    assert sum(len(result["briefing_job_ids"]) for result in results) == 1
+
+    worker = WorkerProcess(
+        tmp_db,
+        schedules.handlers(),
+        worker_id="briefing-worker",
+        queue=JobService(tmp_db),
+    )
+    finished = worker.run_once(now=due)
+    assert finished["status"] == "succeeded"
+    replay = JobService(tmp_db).rerun(finished["id"])
+    worker.run_once(now=due)
+
+    conn = storage.connect(tmp_db)
+    try:
+        assert conn.execute("SELECT COUNT(*) FROM briefings").fetchone()[0] == 1
+        assert conn.execute(
+            "SELECT COUNT(*) FROM jobs WHERE job_type = ?", (BRIEFING_GENERATE_JOB_TYPE,)
+        ).fetchone()[0] == 2
+    finally:
+        conn.close()
+    assert replay["job_type"] == BRIEFING_GENERATE_JOB_TYPE
+
+
+def test_briefing_schedule_bounds_missed_intervals_and_keeps_zero_paid_default(tmp_db):
+    apply_migrations(tmp_db)
+    schedules = BriefingScheduleService(tmp_db)
+    schedule = schedules.create(
+        {"cadence": "daily", "timezone_name": "UTC"},
+        now="2026-08-01T12:00:00Z",
+    )
+    result = SchedulerService(tmp_db).tick(now="2026-08-16T12:00:00Z")
+
+    assert result["briefing_enqueued"] == 3
+    assert result["briefing_missed"] > 0
+    refreshed = schedules.get()
+    assert refreshed["next_due_at"] > "2026-08-16T12:00:00Z"
+    conn = storage.connect(tmp_db)
+    try:
+        rows = conn.execute(
+            "SELECT payload_json FROM jobs WHERE job_type = ? ORDER BY created_at",
+            (BRIEFING_GENERATE_JOB_TYPE,),
+        ).fetchall()
+    finally:
+        conn.close()
+    assert len(rows) == 3
+    assert all('"paid_requests":0' in row[0] for row in rows)
+    assert schedule["id"] == refreshed["id"]
+
+
+def test_schema36_upgrade_and_online_backup_preserve_briefing_schedule(tmp_db, tmp_path):
+    apply_migrations(tmp_db)
+    conn = storage.connect(tmp_db)
+    try:
+        with storage.write_tx(conn):
+            conn.execute("INSERT INTO app_meta(key, value) VALUES ('schedule_test', 'preserved')")
+            conn.execute("DROP INDEX briefing_schedules_due_idx")
+            conn.execute("DROP TABLE briefing_schedules")
+            conn.execute("DELETE FROM schema_migrations WHERE version = 37")
+            conn.execute("UPDATE app_meta SET value = '36' WHERE key = 'schema_version'")
+    finally:
+        conn.close()
+
+    upgraded = apply_migrations(tmp_db)
+    assert upgraded.applied_versions == (37,)
+    schedule = BriefingScheduleService(tmp_db).create(
+        {"cadence": "weekly", "timezone_name": "America/New_York"},
+        now="2026-03-08T07:01:00Z",
+    )
+    assert schedule["next_due_at"] == "2026-03-09T04:00:00Z"
+
+    backup = storage.online_backup(tmp_path / "briefing-schedule.db", source_path=tmp_db)
+    restored = tmp_path / "briefing-schedule-restored.db"
+    storage.restore_backup(backup, restored)
+    assert BriefingScheduleService(restored).get() == schedule
+    conn = storage.connect(restored)
+    try:
+        assert conn.execute(
+            "SELECT value FROM app_meta WHERE key = 'schedule_test'"
+        ).fetchone()[0] == "preserved"
+    finally:
+        conn.close()
+    assert storage.integrity_check(restored) == "ok"
 
 
 def test_report_and_alert_api_require_authentication_and_csrf(tmp_path):

@@ -70,6 +70,7 @@ AUTOMATIC_ALERT_STAGE_JOB_TYPE = "automatic_alert_stage"
 WATCH_SOURCE_DISCOVERY_JOB_TYPE = "watch_source_discovery"
 WATCH_VOCABULARY_SUGGESTION_JOB_TYPE = "watch_vocabulary_suggestion"
 STORY_CORRECTION_RECONCILIATION_JOB_TYPE = "story_correction_reconcile"
+BRIEFING_GENERATE_JOB_TYPE = "briefing_generate"
 
 RecoveryHook = Callable[[sqlite3.Connection, sqlite3.Row, str], None]
 CompletionHook = Callable[[sqlite3.Connection, sqlite3.Row, str, Mapping[str, Any] | None], None]
@@ -230,6 +231,39 @@ def _active_document_version_process_id_tx(conn: sqlite3.Connection, document_ve
         (document_version_id, DOCUMENT_VERSION_PROCESS_JOB_TYPE),
     ).fetchone()
     return row[0] if row is not None else None
+
+
+def _resolve_briefing_identity(job_type: str, payload: Mapping[str, Any]) -> tuple[str, str] | None:
+    """Return the canonical schedule/period identity for briefing work."""
+
+    if job_type != BRIEFING_GENERATE_JOB_TYPE:
+        return None
+    schedule_id = str(payload.get("schedule_id") or "").strip()
+    period_start = str(payload.get("period_start") or "").strip()
+    if not schedule_id or not period_start:
+        raise DomainValidation("briefing jobs require schedule_id and period_start")
+    if not str(payload.get("period_end") or "").strip():
+        raise DomainValidation("briefing jobs require period_end")
+    return schedule_id, period_start
+
+
+def _active_briefing_job_id_tx(
+    conn: sqlite3.Connection,
+    schedule_id: str,
+    period_start: str,
+) -> str | None:
+    """Find active briefing work by payload identity, independent of key."""
+
+    rows = conn.execute(
+        "SELECT id, payload_json FROM jobs WHERE job_type = ? AND status IN ('queued', 'running')",
+        (BRIEFING_GENERATE_JOB_TYPE,),
+    ).fetchall()
+    for row in rows:
+        payload = _decode(row["payload_json"], {})
+        identity = _resolve_briefing_identity(BRIEFING_GENERATE_JOB_TYPE, payload)
+        if identity == (schedule_id, period_start):
+            return row["id"]
+    return None
 
 
 def _timestamp(value: str | datetime | None = None) -> str:
@@ -1112,34 +1146,21 @@ class JobService:
         conn = storage.connect(self.db_path)
         try:
             with storage.write_tx(conn):
-                if idempotency_key:
-                    existing = conn.execute("SELECT id FROM jobs WHERE idempotency_key = ?", (idempotency_key,)).fetchone()
-                    if existing:
-                        identifier = existing[0]
-                    else:
-                        self._enqueue_check_tx(conn, job_type, monitor_id, document_version_id, decoded)
-                        conn.execute(
-                            """
-                            INSERT INTO jobs
-                                (id, job_type, payload_json, idempotency_key, monitor_id,
-                                 research_question_id, document_version_id, priority,
-                                 max_attempts, run_id, created_at, updated_at)
-                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                            """,
-                            (identifier, job_type, encoded, idempotency_key, monitor_id, research_question_id, document_version_id, priority, max_attempts, run_id, now, now),
-                        )
-                else:
-                    self._enqueue_check_tx(conn, job_type, monitor_id, document_version_id, decoded)
-                    conn.execute(
-                        """
-                        INSERT INTO jobs
-                            (id, job_type, payload_json, idempotency_key, monitor_id,
-                             research_question_id, document_version_id, priority,
-                             max_attempts, run_id, created_at, updated_at)
-                        VALUES (?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?)
-                        """,
-                        (identifier, job_type, encoded, monitor_id, research_question_id, document_version_id, priority, max_attempts, run_id, now, now),
-                    )
+                identifier = self._enqueue_tx(
+                    conn,
+                    job_type,
+                    decoded,
+                    encoded,
+                    idempotency_key=idempotency_key,
+                    monitor_id=monitor_id,
+                    research_question_id=research_question_id,
+                    document_version_id=document_version_id,
+                    priority=priority,
+                    max_attempts=max_attempts,
+                    run_id=run_id,
+                    now=now,
+                    identifier=identifier,
+                )
         except sqlite3.IntegrityError as exc:
             if idempotency_key:
                 return self.get_by_idempotency(idempotency_key)
@@ -1147,6 +1168,49 @@ class JobService:
         finally:
             conn.close()
         return self.get(identifier)
+
+    def _enqueue_tx(
+        self,
+        conn: sqlite3.Connection,
+        job_type: str,
+        payload: Mapping[str, Any],
+        encoded: str,
+        *,
+        idempotency_key: str | None = None,
+        monitor_id: str | None = None,
+        research_question_id: str | None = None,
+        document_version_id: str | None = None,
+        priority: int = 0,
+        max_attempts: int = 3,
+        run_id: str | None = None,
+        now: str,
+        identifier: str | None = None,
+    ) -> str:
+        """Insert a validated job while the caller owns a write transaction."""
+
+        if idempotency_key:
+            existing = conn.execute(
+                "SELECT id FROM jobs WHERE idempotency_key = ?", (idempotency_key,)
+            ).fetchone()
+            if existing:
+                return existing[0]
+        self._enqueue_check_tx(conn, job_type, monitor_id, document_version_id, payload)
+        identifier = identifier or new_id("job")
+        conn.execute(
+            """
+            INSERT INTO jobs
+                (id, job_type, payload_json, idempotency_key, monitor_id,
+                 research_question_id, document_version_id, priority,
+                 max_attempts, run_id, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                identifier, job_type, encoded, idempotency_key, monitor_id,
+                research_question_id, document_version_id, priority, max_attempts,
+                run_id, now, now,
+            ),
+        )
+        return identifier
 
     def _enqueue_check_tx(
         self,
@@ -1178,6 +1242,14 @@ class JobService:
             if active_id is not None:
                 raise JobConflict(
                     f"document version {canonical_dv} already has an active processing obligation ({active_id})"
+                )
+        briefing_identity = _resolve_briefing_identity(job_type, payload)
+        if briefing_identity:
+            active_id = _active_briefing_job_id_tx(conn, *briefing_identity)
+            if active_id is not None:
+                raise JobConflict(
+                    "briefing schedule period already has an active obligation "
+                    f"({active_id})"
                 )
 
     def get_by_idempotency(self, idempotency_key: str) -> dict[str, Any]:
@@ -1652,6 +1724,14 @@ class SchedulerService:
         timestamp = _timestamp(now)
         if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 500:
             raise DomainValidation("scheduler limit must be between 1 and 500")
+        # Briefings have their own durable cadence and identity.  Scheduling
+        # them here keeps one scheduler tick as the only producer while the
+        # separate Monitor cadence remains unchanged.
+        from .reports import BriefingScheduleService
+
+        briefing_result = BriefingScheduleService(self.db_path).schedule_due(
+            now=timestamp, limit=limit
+        )
         conn = storage.connect(self.db_path)
         try:
             with storage.write_tx(conn):
@@ -1711,6 +1791,10 @@ class SchedulerService:
                         "coalesced_skipped_active": 0,
                         "auto_disabled": 0,
                         "scheduled_at": timestamp,
+                        "briefing_job_ids": briefing_result["job_ids"],
+                        "briefing_enqueued": briefing_result["enqueued"],
+                        "briefing_coalesced": briefing_result["coalesced"],
+                        "briefing_missed": briefing_result["missed"],
                     }
                 job_ids: list[str] = []
                 coalesced = 0
@@ -1797,6 +1881,10 @@ class SchedulerService:
                     "coalesced_skipped_active": coalesced,
                     "auto_disabled": 0,
                     "scheduled_at": timestamp,
+                    "briefing_job_ids": briefing_result["job_ids"],
+                    "briefing_enqueued": briefing_result["enqueued"],
+                    "briefing_coalesced": briefing_result["coalesced"],
+                    "briefing_missed": briefing_result["missed"],
                 }
         finally:
             conn.close()
@@ -1809,6 +1897,7 @@ __all__ = [
     "AUTOMATIC_ALERT_STAGE_JOB_TYPE",
     "AUTOMATIC_STORY_STAGE_JOB_TYPE",
     "AUTOMATIC_REPORT_STAGE_JOB_TYPE",
+    "BRIEFING_GENERATE_JOB_TYPE",
     "WATCH_SOURCE_DISCOVERY_JOB_TYPE",
     "WATCH_VOCABULARY_SUGGESTION_JOB_TYPE",
     "DOCUMENT_VERSION_PROCESS_JOB_TYPE",

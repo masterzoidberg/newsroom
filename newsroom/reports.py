@@ -70,6 +70,36 @@ def _timezone(name: str) -> ZoneInfo:
         raise DomainValidation("timezone is invalid") from exc
 
 
+def _period_boundary(period: str, zone: ZoneInfo, local_date) -> datetime:
+    """Return a local-midnight period boundary with the zone reapplied.
+
+    Constructing the datetime from the calendar date is intentional. Adding a
+    timedelta to an aware ``datetime`` can retain the old UTC offset across a
+    DST transition, which would move a scheduled local midnight by an hour.
+    """
+
+    if period == "weekly":
+        local_date -= timedelta(days=local_date.weekday())
+    return datetime.combine(local_date, datetime.min.time(), tzinfo=zone)
+
+
+def _next_period_boundary(period: str, timezone_name: str, value: str | datetime) -> str:
+    zone = _timezone(timezone_name)
+    current = datetime.fromisoformat(_timestamp(value).replace("Z", "+00:00")).astimezone(zone)
+    days = 7 if period == "weekly" else 1
+    boundary = _period_boundary(period, zone, current.date() + timedelta(days=days))
+    return _timestamp(boundary)
+
+
+def _next_period_start(period: str, timezone_name: str, now: str | datetime) -> str:
+    zone = _timezone(timezone_name)
+    current = datetime.fromisoformat(_timestamp(now).replace("Z", "+00:00")).astimezone(zone)
+    boundary = _period_boundary(period, zone, current.date())
+    if boundary <= current:
+        boundary = _period_boundary(period, zone, current.date() + timedelta(days=7 if period == "weekly" else 1))
+    return _timestamp(boundary)
+
+
 def _validate_name(value: Any, label: str = "name", maximum: int = 200) -> str:
     result = str(value or "").strip()
     if not result or len(result) > maximum:
@@ -808,12 +838,11 @@ class BriefingService:
             raise DomainValidation("briefing period must be daily or weekly")
         zone = _timezone(timezone_name)
         current = datetime.fromisoformat(_timestamp(now).replace("Z", "+00:00")).astimezone(zone)
-        start = current.replace(hour=0, minute=0, second=0, microsecond=0)
-        if period == "weekly":
-            start -= timedelta(days=start.weekday())
-            end = start + timedelta(days=7)
-        else:
-            end = start + timedelta(days=1)
+        start_date = current.date()
+        start = _period_boundary(period, zone, start_date)
+        if start > current:
+            start = _period_boundary(period, zone, start_date - timedelta(days=7 if period == "weekly" else 1))
+        end = _period_boundary(period, zone, start.date() + timedelta(days=7 if period == "weekly" else 1))
         return _timestamp(start), _timestamp(end)
 
     @staticmethod
@@ -947,6 +976,348 @@ class BriefingService:
         finally:
             conn.close()
         return self.get(identifier)
+
+
+class BriefingScheduleService:
+    """Persist and enqueue the single owner-selected briefing schedule."""
+
+    schedule_id = 1
+    max_catch_up = 3
+    max_scope = 100
+
+    def __init__(self, db_path: str | Path):
+        self.db_path = Path(db_path)
+        self.briefings = BriefingService(db_path)
+
+    @staticmethod
+    def _identifier(identifier: int | str | None = None) -> int:
+        value = BriefingScheduleService.schedule_id if identifier is None else identifier
+        if isinstance(value, bool) or str(value).strip() != "1":
+            raise DomainValidation("briefing schedule identifier is invalid")
+        return BriefingScheduleService.schedule_id
+
+    @staticmethod
+    def _scope(conn: sqlite3.Connection, value: Any) -> dict[str, list[str]]:
+        if value is None:
+            monitor_ids: Any = []
+        elif isinstance(value, Mapping):
+            if set(value) - {"monitor_ids"}:
+                raise DomainValidation("briefing schedule scope has unknown fields")
+            monitor_ids = value.get("monitor_ids", [])
+        elif isinstance(value, list):
+            monitor_ids = value
+        else:
+            raise DomainValidation("briefing schedule scope must be an object")
+        if not isinstance(monitor_ids, list) or len(monitor_ids) > BriefingScheduleService.max_scope:
+            raise DomainValidation("briefing schedule monitor_ids cannot exceed 100 items")
+        normalized = []
+        for monitor_id in monitor_ids:
+            identifier = str(monitor_id).strip()
+            if not identifier or len(identifier) > 200:
+                raise DomainValidation("briefing schedule monitor_id is invalid")
+            normalized.append(identifier)
+        normalized = _unique(normalized)
+        missing = [
+            identifier
+            for identifier in normalized
+            if conn.execute("SELECT 1 FROM monitors WHERE id = ?", (identifier,)).fetchone() is None
+        ]
+        if missing:
+            raise DomainNotFound("briefing schedule monitor not found")
+        return {"monitor_ids": normalized}
+
+    @staticmethod
+    def _result(row: sqlite3.Row) -> dict[str, Any]:
+        result = dict(row)
+        result["scope"] = _decode(result.pop("scope_json"), {"monitor_ids": []})
+        result["enabled"] = bool(result["enabled"])
+        result["paused"] = not result["enabled"]
+        return result
+
+    @staticmethod
+    def _validated(
+        conn: sqlite3.Connection,
+        data: Mapping[str, Any],
+        *,
+        existing: sqlite3.Row | None = None,
+        now: str,
+    ) -> dict[str, Any]:
+        allowed = {
+            "cadence",
+            "timezone_name",
+            "scope",
+            "monitor_ids",
+            "next_due_at",
+            "enabled",
+            "paused",
+        }
+        unknown = set(data) - allowed
+        if unknown:
+            raise DomainValidation("unknown briefing schedule field")
+        old = dict(existing) if existing is not None else {}
+        cadence = str(data.get("cadence", old.get("cadence", "daily"))).strip()
+        if cadence not in BRIEFING_PERIODS:
+            raise DomainValidation("briefing schedule cadence must be daily or weekly")
+        timezone_name = str(data.get("timezone_name", old.get("timezone_name", "UTC"))).strip()
+        _timezone(timezone_name)
+        if "scope" in data and "monitor_ids" in data:
+            raise DomainValidation("briefing schedule scope and monitor_ids are mutually exclusive")
+        if "scope" in data:
+            raw_scope = data["scope"]
+        elif "monitor_ids" in data:
+            raw_scope = {"monitor_ids": data["monitor_ids"]}
+        elif existing is not None:
+            raw_scope = _decode(existing["scope_json"], {"monitor_ids": []})
+        else:
+            raw_scope = {"monitor_ids": []}
+        scope = BriefingScheduleService._scope(conn, raw_scope)
+
+        old_enabled = bool(old.get("enabled", True))
+        enabled = bool(data.get("enabled", old_enabled))
+        if "paused" in data:
+            paused = bool(data["paused"])
+            if "enabled" in data and enabled == paused:
+                raise DomainValidation("briefing schedule enabled and paused conflict")
+            enabled = not paused
+
+        changed_period = existing is None or cadence != old.get("cadence") or timezone_name != old.get("timezone_name")
+        if "next_due_at" in data:
+            next_due_at = None if data["next_due_at"] is None else _timestamp(data["next_due_at"])
+        elif enabled and (not old_enabled or changed_period or not old.get("next_due_at")):
+            next_due_at = _next_period_start(cadence, timezone_name, now)
+        elif enabled:
+            next_due_at = old.get("next_due_at")
+        else:
+            next_due_at = None
+        if not enabled:
+            next_due_at = None
+        return {
+            "cadence": cadence,
+            "timezone_name": timezone_name,
+            "scope_json": _encode(scope),
+            "enabled": int(enabled),
+            "next_due_at": next_due_at,
+        }
+
+    def get(self, identifier: int | str | None = None) -> dict[str, Any] | None:
+        identifier = self._identifier(identifier)
+        conn = storage.connect(self.db_path)
+        try:
+            row = conn.execute("SELECT * FROM briefing_schedules WHERE id = ?", (identifier,)).fetchone()
+            return self._result(row) if row is not None else None
+        finally:
+            conn.close()
+
+    def create(
+        self,
+        data: Mapping[str, Any] | None = None,
+        *,
+        now: str | datetime | None = None,
+    ) -> dict[str, Any]:
+        timestamp = _timestamp(now)
+        conn = storage.connect(self.db_path)
+        try:
+            with storage.write_tx(conn):
+                if conn.execute("SELECT 1 FROM briefing_schedules WHERE id = 1").fetchone() is not None:
+                    raise DomainConflict("briefing schedule already exists")
+                values = self._validated(conn, data or {}, now=timestamp)
+                conn.execute(
+                    """
+                    INSERT INTO briefing_schedules
+                        (id, cadence, timezone_name, scope_json, enabled,
+                         next_due_at, created_at, updated_at)
+                    VALUES (1, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        values["cadence"], values["timezone_name"], values["scope_json"],
+                        values["enabled"], values["next_due_at"], timestamp, timestamp,
+                    ),
+                )
+        finally:
+            conn.close()
+        result = self.get()
+        assert result is not None
+        return result
+
+    def update(
+        self,
+        identifier: int | str | Mapping[str, Any] | None = None,
+        data: Mapping[str, Any] | None = None,
+        *,
+        now: str | datetime | None = None,
+    ) -> dict[str, Any]:
+        if isinstance(identifier, Mapping) and data is None:
+            data = identifier
+            identifier = None
+        schedule_id = self._identifier(identifier)
+        timestamp = _timestamp(now)
+        conn = storage.connect(self.db_path)
+        try:
+            with storage.write_tx(conn):
+                existing = conn.execute("SELECT * FROM briefing_schedules WHERE id = ?", (schedule_id,)).fetchone()
+                if existing is None:
+                    raise DomainNotFound("briefing schedule not found")
+                values = self._validated(conn, data or {}, existing=existing, now=timestamp)
+                conn.execute(
+                    """
+                    UPDATE briefing_schedules
+                    SET cadence = ?, timezone_name = ?, scope_json = ?, enabled = ?,
+                        next_due_at = ?, updated_at = ?
+                    WHERE id = ?
+                    """,
+                    (
+                        values["cadence"], values["timezone_name"], values["scope_json"],
+                        values["enabled"], values["next_due_at"], timestamp, schedule_id,
+                    ),
+                )
+        finally:
+            conn.close()
+        result = self.get(schedule_id)
+        assert result is not None
+        return result
+
+    def pause(self, identifier: int | str | None = None, *, now: str | datetime | None = None) -> dict[str, Any]:
+        return self.update(identifier, {"enabled": False}, now=now)
+
+    def resume(self, identifier: int | str | None = None, *, now: str | datetime | None = None) -> dict[str, Any]:
+        return self.update(identifier, {"enabled": True}, now=now)
+
+    def schedule_due(
+        self,
+        *,
+        now: str | datetime | None = None,
+        limit: int = 100,
+    ) -> dict[str, Any]:
+        """Atomically advance due periods and enqueue bounded work.
+
+        The schedule row and its jobs are written in one SQLite transaction.
+        This means a concurrent scheduler either observes the old due period or
+        the already-advanced period, never a half-claimed interval.
+        """
+
+        from .jobs import (
+            BRIEFING_GENERATE_JOB_TYPE,
+            JobConflict,
+            JobService,
+            _active_briefing_job_id_tx,
+        )
+
+        timestamp = _timestamp(now)
+        if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 500:
+            raise DomainValidation("briefing schedule limit must be between 1 and 500")
+        queue = JobService(self.db_path)
+        conn = storage.connect(self.db_path)
+        try:
+            with storage.write_tx(conn):
+                row = conn.execute(
+                    "SELECT * FROM briefing_schedules WHERE id = 1 AND enabled = 1 AND next_due_at IS NOT NULL AND next_due_at <= ?",
+                    (timestamp,),
+                ).fetchone()
+                if row is None:
+                    return {
+                        "schedule_id": self.schedule_id,
+                        "job_ids": [],
+                        "enqueued": 0,
+                        "coalesced": 0,
+                        "missed": 0,
+                        "scheduled_at": timestamp,
+                    }
+                due = _timestamp(row["next_due_at"])
+                scope = _decode(row["scope_json"], {"monitor_ids": []})
+                job_ids: list[str] = []
+                coalesced = 0
+                processed = 0
+                missed = 0
+                while due <= timestamp and processed < self.max_catch_up and len(job_ids) < limit:
+                    period_end = _next_period_boundary(row["cadence"], row["timezone_name"], due)
+                    payload = {
+                        "schedule_id": self.schedule_id,
+                        "period": row["cadence"],
+                        "timezone_name": row["timezone_name"],
+                        "period_start": due,
+                        "period_end": period_end,
+                        "monitor_ids": scope.get("monitor_ids", []),
+                        "budget": {
+                            "acquisition_units": 0,
+                            "local_model_units": 0,
+                            "paid_requests": 0,
+                            "usd": 0.0,
+                        },
+                    }
+                    encoded = _encode(payload)
+                    idempotency_key = f"briefing:{self.schedule_id}:{due}"
+                    existing_job = conn.execute(
+                        "SELECT id FROM jobs WHERE idempotency_key = ?", (idempotency_key,)
+                    ).fetchone()
+                    try:
+                        job_id = queue._enqueue_tx(
+                            conn,
+                            BRIEFING_GENERATE_JOB_TYPE,
+                            payload,
+                            encoded,
+                            idempotency_key=idempotency_key,
+                            priority=0,
+                            max_attempts=3,
+                            now=timestamp,
+                        )
+                    except JobConflict:
+                        active_id = _active_briefing_job_id_tx(
+                            conn, str(self.schedule_id), due
+                        )
+                        if active_id is None:
+                            raise
+                        job_id = active_id
+                        coalesced += 1
+                    if existing_job is not None:
+                        coalesced += 1
+                    job_ids.append(job_id)
+                    processed += 1
+                    due = period_end
+                if due <= timestamp and processed >= self.max_catch_up:
+                    missed += 1
+                    due = _next_period_start(row["cadence"], row["timezone_name"], timestamp)
+                elif due <= timestamp and len(job_ids) >= limit:
+                    # Leave the unprocessed due period in place for the next
+                    # bounded tick rather than dropping work.
+                    pass
+                conn.execute(
+                    "UPDATE briefing_schedules SET next_due_at = ?, updated_at = ? WHERE id = 1",
+                    (due, timestamp),
+                )
+                return {
+                    "schedule_id": self.schedule_id,
+                    "job_ids": job_ids,
+                    "enqueued": len(job_ids) - coalesced,
+                    "coalesced": coalesced,
+                    "missed": missed,
+                    "scheduled_at": timestamp,
+                }
+        finally:
+            conn.close()
+
+    def handle_job(self, job: Mapping[str, Any]) -> dict[str, Any]:
+        from .jobs import BRIEFING_GENERATE_JOB_TYPE
+
+        if job.get("job_type") != BRIEFING_GENERATE_JOB_TYPE:
+            raise DomainValidation("briefing handler received an unsupported job")
+        payload = job.get("payload") or {}
+        if not isinstance(payload, Mapping) or str(payload.get("schedule_id")) != "1":
+            raise DomainValidation("briefing job has an invalid schedule identity")
+        schedule = self.get()
+        if schedule is None or schedule["paused"]:
+            return {"status": "skipped", "reason": "schedule_paused"}
+        return self.briefings.generate(
+            payload["period"],
+            monitor_ids=list(payload.get("monitor_ids", [])),
+            period_start=payload["period_start"],
+            period_end=payload["period_end"],
+            timezone_name=payload["timezone_name"],
+        )
+
+    def handlers(self) -> dict[str, Any]:
+        from .jobs import BRIEFING_GENERATE_JOB_TYPE
+
+        return {BRIEFING_GENERATE_JOB_TYPE: self.handle_job}
 
 
 class AlertService:
@@ -1433,4 +1804,10 @@ class AlertService:
 ReportService = LivingReportService
 
 
-__all__ = ["AlertService", "BriefingService", "LivingReportService", "ReportService"]
+__all__ = [
+    "AlertService",
+    "BriefingScheduleService",
+    "BriefingService",
+    "LivingReportService",
+    "ReportService",
+]

@@ -23,7 +23,7 @@ from newsroom.acquisition import (
 )
 from newsroom import storage
 from newsroom.domain import CoreService
-from newsroom.migrations import apply_migrations, migration_status
+from newsroom.migrations import CURRENT_SCHEMA_VERSION, apply_migrations, migration_status
 from newsroom.app import create_app
 from newsroom.config import RuntimeConfig
 from fastapi.testclient import TestClient
@@ -61,9 +61,9 @@ ATOM_FIXTURE = b"""
 
 
 def test_phase06_migration_is_idempotent_and_adds_acquisition_tables(tmp_db):
-    assert apply_migrations(tmp_db).applied_versions == tuple(range(1, 37))
+    assert apply_migrations(tmp_db).applied_versions == tuple(range(1, CURRENT_SCHEMA_VERSION + 1))
     assert apply_migrations(tmp_db).applied_versions == ()
-    assert migration_status(tmp_db) == tuple(range(1, 37))
+    assert migration_status(tmp_db) == tuple(range(1, CURRENT_SCHEMA_VERSION + 1))
 
     conn = storage.connect(tmp_db)
     try:

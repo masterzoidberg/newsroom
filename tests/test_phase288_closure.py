@@ -422,7 +422,7 @@ def test_schema36_history_field_and_query_execution_columns_are_truthful(tmp_pat
 
     result = apply_migrations(db)
 
-    assert result.current_version == 36
+    assert result.current_version == 37
     conn = sqlite3.connect(db)
     columns = {row[1] for row in conn.execute("PRAGMA table_info(blind_spot_review_history)")}
     query_columns = {row[1] for row in conn.execute("PRAGMA table_info(research_task_queries)")}

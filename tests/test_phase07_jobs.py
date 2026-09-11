@@ -11,7 +11,7 @@ from newsroom.jobs import (
     JobService,
     SchedulerService,
 )
-from newsroom.migrations import apply_migrations, migration_status
+from newsroom.migrations import CURRENT_SCHEMA_VERSION, apply_migrations, migration_status
 from newsroom.app import create_app
 from newsroom.config import RuntimeConfig
 from newsroom.worker import RetryableJobFailure, WorkerProcess
@@ -51,9 +51,9 @@ def _policy_and_monitor(db_path, *, target_id="src_1", next_check_at=T0, cadence
 
 
 def test_phase07_migration_adds_budget_and_scheduler_state_idempotently(tmp_db):
-    assert apply_migrations(tmp_db).applied_versions == tuple(range(1, 37))
+    assert apply_migrations(tmp_db).applied_versions == tuple(range(1, 38))
     assert apply_migrations(tmp_db).applied_versions == ()
-    assert migration_status(tmp_db) == tuple(range(1, 37))
+    assert migration_status(tmp_db) == tuple(range(1, CURRENT_SCHEMA_VERSION + 1))
 
     conn = storage.connect(tmp_db)
     try:

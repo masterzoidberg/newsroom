@@ -3687,6 +3687,33 @@ MIGRATION_0036_CHECKSUM = hashlib.sha256(
 ).hexdigest()
 
 
+# 0037: persist the single owner-selected periodic briefing schedule.  The
+# schedule is deliberately separate from Monitor cadence and report revision
+# state; its scope is a bounded JSON projection of selected Monitor IDs.
+MIGRATION_0037_STATEMENTS: tuple[str, ...] = (
+    """
+    CREATE TABLE briefing_schedules (
+        id INTEGER PRIMARY KEY CHECK (id = 1),
+        cadence TEXT NOT NULL CHECK (cadence IN ('daily', 'weekly')),
+        timezone_name TEXT NOT NULL,
+        scope_json TEXT NOT NULL DEFAULT '{\"monitor_ids\":[]}',
+        enabled INTEGER NOT NULL DEFAULT 1 CHECK (enabled IN (0, 1)),
+        next_due_at TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+    )
+    """,
+    "CREATE INDEX briefing_schedules_due_idx ON briefing_schedules(enabled, next_due_at)",
+)
+
+MIGRATION_0037_CHECKSUM = hashlib.sha256(
+    "\n".join(MIGRATION_0037_STATEMENTS).encode("utf-8")
+).hexdigest()
+
+
+CURRENT_SCHEMA_VERSION = 37
+
+
 @dataclass(frozen=True)
 class MigrationResult:
     applied_versions: tuple[int, ...]
@@ -3770,6 +3797,7 @@ def apply_migrations(db_path: Optional[str | Path] = None) -> MigrationResult:
                 34: MIGRATION_0034_STATEMENTS,
                 35: MIGRATION_0035_STATEMENTS,
                 36: MIGRATION_0036_STATEMENTS,
+                37: MIGRATION_0037_STATEMENTS,
             }
             for version, statements in migrations.items():
                 if version in existing:

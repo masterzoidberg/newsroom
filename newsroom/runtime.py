@@ -56,6 +56,7 @@ from .research_questions import (
     ResearchQuestionExecutionService,
     research_job_recovery_hook,
 )
+from .reports import BriefingScheduleService
 from .scheduler import SchedulerProcess
 from .story_automation import (
     AutomaticStoryStageExecutionService,
@@ -162,6 +163,7 @@ def build_worker_handlers(db_path: str | Path) -> dict[str, Any]:
         AutomaticReportStageExecutionService(db_path).handlers(),
         AutomaticAlertStageExecutionService(db_path).handlers(),
         WatchMaintenanceService(db_path).handlers(),
+        BriefingScheduleService(db_path).handlers(),
     )
 
 
