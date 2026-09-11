@@ -1,6 +1,6 @@
 # Canonical execution ledger
 
-Rebaseline transitioned 2026-09-09 after automated Gate 0 acceptance at integrated head `18c5ee8bdf56a44218af4ecd6d7e8d9ead68f8c0`. Newsroom Run 1 then completed sequentially on `astra/AST-25-27-first-watch` through AST-34 at code head `0ce903a`. AST-25, AST-26, AST-27, AST-33 and AST-34 are DONE; AST-33 completed at code head `4a7c0f9` with the full local backend suite green, and AST-34 completed with frontend and isolated browser qualification. Physical reboot/sign-in and lock/sleep/wake evidence remains pending for release. AST-35 is now the sole READY task.
+Rebaseline transitioned 2026-09-09 after automated Gate 0 acceptance at integrated head `18c5ee8bdf56a44218af4ecd6d7e8d9ead68f8c0`. Newsroom Run 1 then completed sequentially on `astra/AST-25-27-first-watch` through AST-35 at code head `800b8f1`. AST-25, AST-26, AST-27, AST-33, AST-34 and AST-35 are DONE; AST-33 completed at code head `4a7c0f9` with the full local backend suite green, AST-34 completed with frontend and isolated browser qualification, and AST-35 completed with frontend, trust-boundary and isolated browser qualification. Physical reboot/sign-in and lock/sleep/wake evidence remains pending for release. AST-36 is now the sole READY task.
 
 ## Contract inherited by every future task
 
@@ -57,8 +57,8 @@ Statuses: READY, NOT_STARTED, IN_PROGRESS, DONE, BLOCKED, DEFERRED, SUPERSEDED. 
 | AST-32 | Connect recommended Sources and source health to setup | NOT_STARTED | AST-31, AST-25 | 2 |
 | AST-33 | Persist and query the returning-user review boundary | DONE | AST-27 | 3 |
 | AST-34 | Build Watch overview and since-visit Home | DONE | AST-33 | 2 |
-| AST-35 | Connect summary through Claim to exact source Evidence | READY | AST-34 | 2 |
-| AST-36 | Create and read Living Reports from named Watch context | NOT_STARTED | AST-35 | 2 |
+| AST-35 | Connect summary through Claim to exact source Evidence | DONE | AST-34 | 2 |
+| AST-36 | Create and read Living Reports from named Watch context | READY | AST-35 | 2 |
 | AST-37 | Add durable user-selected briefing schedules | NOT_STARTED | AST-36 | 3 |
 | AST-38 | Expose briefing preferences and first intelligence choices | NOT_STARTED | AST-37 | 2 |
 | AST-39 | Make alert triage scoped and complete | NOT_STARTED | AST-38 | 2 |
@@ -443,7 +443,7 @@ Full original task bodies, acceptance and completion evidence are preserved in [
 
 ## AST-35 — Connect summary through Claim to exact source Evidence
 
-- **Status:** READY
+- **Status:** DONE
 - **Outcome / why it matters:** Connect summary through Claim to exact source Evidence. See the mapped user gap in FEATURE_GAP_ANALYSIS and milestone in COMPLETION_ROADMAP.
 - **Dependencies:** AST-34
 - **Exact scope / files:** frontend/src/views/StoryEvidenceView.tsx; frontend/src/components/EvidenceView.tsx; frontend/src/views/DocumentView.tsx; frontend/src/lib/types.ts
@@ -453,11 +453,11 @@ Full original task bodies, acceptance and completion evidence are preserved in [
 - **Model:** TIER 2; reasoning medium.
 - **Prompt filename:** Not generated: outside the six-task horizon. Generate `prompts/AST-35-<bounded-title>.md` after dependencies land; retained old template (if any) is historical only.
 - **Non-goals, invariants, browser evidence, rollback, cost and stop condition:** inherited in full from Contract inherited by every future task above.
-- **Completion evidence:** Not executed by this rebaseline. AST-05 has implementation on the unmerged stack but incomplete qualification; all other records describe future work or explicit external gates.
+- **Completion evidence:** DONE on `astra/AST-25-27-first-watch`, implementation commit `800b8f1`. `InboxView.tsx` now passes the persisted Story context from the since-visit summary action; `StoryEvidenceView.tsx` loads contextual Story/Claim selection on entry and reload, preserves it for browser back, and queues Claim→Document navigation; `EvidenceView.tsx` renders accepted/pending/disputed/superseded/manual qualification, analysis/promotion identity, source dependency caveats, exact excerpts and source-version actions; `DocumentView.tsx` directly loads the requested DocumentVersion and EvidenceSpan, rejects cross-document targets, preserves return-to-Claim context, and explains stale/deleted/missing artifacts without substituting a latest version. Shared response/navigation contracts are in `frontend/src/lib/types.ts`. `pnpm lint`, `pnpm typecheck`, `pnpm build`, `git diff --check`, `python -m pytest -q tests/test_phase22_3_trust_boundary.py tests/test_phase23e_compatibility.py` (26 passed), and the isolated Playwright fixture passed. Browser evidence is retained outside the repository at `C:\Users\nicol\.codex\ast35-browser-artifacts`: known Claim/span/source chain, reload/back, pending/disputed, stale Claim, deleted DocumentVersion, missing EvidenceSpan, loading, empty, API-error/recovery, 390 CSS-pixel overflow, keyboard focus, effective-200% viewport, and no page errors; desktop, phone and state screenshots are present. The fixture used an ephemeral loopback static server with mocked API responses and did not contact the active trial; `paid_calls=0` and `external_discovery_requests=0`. `pnpm format` and `pnpm types` are unavailable because this package defines no such scripts; the defined TypeScript checks passed. CI status is unqueried. Physical phone, installed lifecycle and external value gates remain separate release boundaries. The one-line `InboxView.tsx` change is required to pass the AST-34 Home Story action’s known Story ID into this task’s scoped contextual view.
 
 ## AST-36 — Create and read Living Reports from named Watch context
 
-- **Status:** NOT_STARTED
+- **Status:** READY
 - **Outcome / why it matters:** Create and read Living Reports from named Watch context. See the mapped user gap in FEATURE_GAP_ANALYSIS and milestone in COMPLETION_ROADMAP.
 - **Dependencies:** AST-35
 - **Exact scope / files:** frontend/src/views/ReportsView.tsx; frontend/src/views/WatchManagementView.tsx; newsroom/reports.py; tests/test_phase11_reports_briefings_alerts.py

@@ -236,7 +236,7 @@
     "accept": "A factual summary link opens its Claim and correct exact source version; reload/back preserves context; unsupported/pending/legacy states never look verified true.",
     "tests": "Browser known Claim/span/source chain, stale/deleted identifier, missing artifact and phone/keyboard; phase22 trust tests.",
     "tier": "2",
-    "status": "READY",
+    "status": "DONE",
     "prompt": null
   },
   {
@@ -248,7 +248,7 @@
     "accept": "Watch opens one correct report without ID input; repeat create converges; no accepted evidence or failed generation preserves last revision and truthful status.",
     "tests": "Report target/duplicate/no-evidence tests; browser create/read/revision/error/390px.",
     "tier": "2",
-    "status": "NOT_STARTED",
+    "status": "READY",
     "prompt": null
   },
   {
