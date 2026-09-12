@@ -21,6 +21,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_valida
 
 from . import storage
 from .domain import utc_now
+from .jobs import BudgetExhausted, BudgetService
 
 
 ModelT = TypeVar("ModelT", bound="AIModel")
@@ -743,6 +744,7 @@ class TelemetryEvent:
     estimated_cost_usd: float = 0.0
     escalation_reason: str | None = None
     error_code: str | None = None
+    reservation_id: str | None = None
 
 
 class TelemetrySink(Protocol):
@@ -768,6 +770,11 @@ class SQLiteTelemetrySink:
         self.invocation_id = invocation_id
 
     def record(self, event: TelemetryEvent) -> None:
+        if event.reservation_id is not None:
+            # Durable paid reservations are already represented by one
+            # provider_usage row. AIRouter finalizes that row before emitting
+            # this event, so inserting another row would double-count it.
+            return
         metadata = {
             "confidence": event.confidence,
             "compute_units": event.compute_units,
@@ -841,11 +848,25 @@ class AIRouter:
         paid: CapabilityBundle | None = None,
         policy: RoutePolicy | None = None,
         telemetry: list[TelemetryEvent] | TelemetrySink | None = None,
+        budget_service: BudgetService | None = None,
+        db_path: str | Path | None = None,
+        paid_admission_reserved: bool = False,
+        job_id: str | None = None,
+        monitor_id: str | None = None,
+        research_question_id: str | None = None,
     ):
+        if budget_service is not None and db_path is not None:
+            raise ValueError("provide budget_service or db_path, not both")
         self.local = local
         self.paid = paid or CapabilityBundle()
         self.policy = policy or RoutePolicy()
         self.telemetry = telemetry if telemetry is not None else []
+        inferred_db_path = telemetry.db_path if isinstance(telemetry, SQLiteTelemetrySink) else None
+        self.budget_service = budget_service or BudgetService(db_path or inferred_db_path) if (budget_service or db_path or inferred_db_path) else None
+        self.paid_admission_reserved = paid_admission_reserved
+        self.budget_job_id = job_id
+        self.budget_monitor_id = monitor_id
+        self.budget_research_question_id = research_question_id
         self._paid_calls = 0
         self._paid_cost = 0.0
         self._work_paid_calls: dict[str, int] = {}
@@ -915,10 +936,30 @@ class AIRouter:
         if not self.policy.paid_enabled or provider is None:
             self._record_blocked(capability, work_id, reason, "paid_disabled")
             return None
-        if not self._reserve_paid(work_id):
-            self._record_blocked(capability, work_id, reason, "paid_budget_exhausted")
-            return None
-        return self._call_provider(capability, provider, call, "paid", work_id, reason)
+        reservation_id: str | None = None
+        if not self.paid_admission_reserved:
+            if self.budget_service is not None:
+                try:
+                    reservation = self.budget_service.reserve_paid_capability(
+                        capability=capability,
+                        work_id=work_id,
+                        estimated_cost_usd=self.policy.paid_request_cost_usd,
+                        max_paid_calls=self.policy.max_paid_calls,
+                        max_paid_cost_usd=self.policy.max_paid_cost_usd,
+                        max_paid_calls_per_work=self.policy.max_paid_calls_per_work,
+                        max_paid_cost_usd_per_work=self.policy.max_paid_cost_usd_per_work,
+                        job_id=self.budget_job_id,
+                        monitor_id=self.budget_monitor_id,
+                        research_question_id=self.budget_research_question_id,
+                    )
+                except BudgetExhausted as exc:
+                    self._record_blocked(capability, work_id, reason, exc.reason)
+                    return None
+                reservation_id = str(reservation["id"])
+            elif not self._reserve_paid(work_id):
+                self._record_blocked(capability, work_id, reason, "paid_budget_exhausted")
+                return None
+        return self._call_provider(capability, provider, call, "paid", work_id, reason, reservation_id=reservation_id)
 
     def _reserve_paid(self, work_id: str | None) -> bool:
         if self._paid_calls >= self.policy.max_paid_calls:
@@ -944,6 +985,8 @@ class AIRouter:
         route: str,
         work_id: str | None,
         escalation_reason: str | None,
+        *,
+        reservation_id: str | None = None,
     ) -> Any:
         started = time.monotonic()
         executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="newsroom-ai")
@@ -953,13 +996,22 @@ class AIRouter:
             result = _validated(_OUTPUT_TYPES[capability], raw)
         except FutureTimeout as exc:
             future.cancel()
-            self._record_failure(capability, route, provider, work_id, escalation_reason, "timeout", started)
+            self._record_failure(
+                capability, route, provider, work_id, escalation_reason, "timeout", started,
+                reservation_id=reservation_id,
+            )
             raise AITimeout(f"{capability} provider timed out") from exc
         except AIValidationError as exc:
-            self._record_failure(capability, route, provider, work_id, escalation_reason, "invalid_output", started)
+            self._record_failure(
+                capability, route, provider, work_id, escalation_reason, "invalid_output", started,
+                reservation_id=reservation_id,
+            )
             raise
         except Exception as exc:  # provider errors must not cross the domain boundary
-            self._record_failure(capability, route, provider, work_id, escalation_reason, "provider_error", started)
+            self._record_failure(
+                capability, route, provider, work_id, escalation_reason, "provider_error", started,
+                reservation_id=reservation_id,
+            )
             raise AIProviderError(f"{capability} provider failed") from exc
         finally:
             executor.shutdown(wait=False, cancel_futures=True)
@@ -978,22 +1030,23 @@ class AIRouter:
             estimated_cost = float(actual_cost)
         else:
             estimated_cost = self.policy.paid_request_cost_usd if route == "paid" else 0.0
-        self._emit_telemetry(
-            TelemetryEvent(
-                capability=capability,
-                route=route,
-                provider=provider_name,
-                model=provider_model,
-                outcome="low_confidence" if confidence is not None and confidence < self.policy.min_confidence else "succeeded",
-                work_id=work_id,
-                confidence=confidence,
-                decision_signal=signal,
-                latency_ms=max(0, int((time.monotonic() - started) * 1000)),
-                token_units=token_units,
-                estimated_cost_usd=estimated_cost,
-                escalation_reason=escalation_reason,
-            ),
+        event = TelemetryEvent(
+            capability=capability,
+            route=route,
+            provider=provider_name,
+            model=provider_model,
+            outcome="low_confidence" if confidence is not None and confidence < self.policy.min_confidence else "succeeded",
+            work_id=work_id,
+            confidence=confidence,
+            decision_signal=signal,
+            latency_ms=max(0, int((time.monotonic() - started) * 1000)),
+            token_units=token_units,
+            estimated_cost_usd=estimated_cost,
+            escalation_reason=escalation_reason,
+            reservation_id=reservation_id,
         )
+        self._finalize_paid_reservation(event)
+        self._emit_telemetry(event)
         return result
 
     def _record_failure(
@@ -1005,20 +1058,43 @@ class AIRouter:
         escalation_reason: str | None,
         error_code: str,
         started: float,
+        *,
+        reservation_id: str | None = None,
     ) -> None:
-        self._emit_telemetry(
-            TelemetryEvent(
-                capability=capability,
-                route=route,
-                provider=getattr(provider, "provider_name", None) or type(provider).__name__,
-                model=getattr(provider, "model_name", None) or type(provider).__name__,
-                outcome="failed",
-                work_id=work_id,
-                latency_ms=max(0, int((time.monotonic() - started) * 1000)),
-                estimated_cost_usd=self.policy.paid_request_cost_usd if route == "paid" else 0.0,
-                escalation_reason=escalation_reason,
-                error_code=error_code,
-            ),
+        event = TelemetryEvent(
+            capability=capability,
+            route=route,
+            provider=getattr(provider, "provider_name", None) or type(provider).__name__,
+            model=getattr(provider, "model_name", None) or type(provider).__name__,
+            outcome="failed",
+            work_id=work_id,
+            latency_ms=max(0, int((time.monotonic() - started) * 1000)),
+            estimated_cost_usd=self.policy.paid_request_cost_usd if route == "paid" else 0.0,
+            escalation_reason=escalation_reason,
+            error_code=error_code,
+            reservation_id=reservation_id,
+        )
+        self._finalize_paid_reservation(event)
+        self._emit_telemetry(event)
+
+    def _finalize_paid_reservation(self, event: TelemetryEvent) -> None:
+        if self.budget_service is None or event.reservation_id is None:
+            return
+        self.budget_service.finalize_paid_capability(
+            event.reservation_id,
+            provider=event.provider,
+            token_units=event.token_units,
+            latency_ms=event.latency_ms,
+            outcome=event.outcome,
+            metadata={
+                "confidence": event.confidence,
+                "decision_signal": event.decision_signal,
+                "error_code": event.error_code,
+                "escalation_reason": event.escalation_reason,
+                "model": event.model,
+                "route": event.route,
+                "work_id": event.work_id,
+            },
         )
 
     def _record_blocked(self, capability: str, work_id: str | None, reason: str, error_code: str) -> None:

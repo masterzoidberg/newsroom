@@ -681,6 +681,215 @@ class BudgetService:
             float(row["cost"] or 0.0) + legacy_cost,
         )
 
+    @staticmethod
+    def _paid_capability_usage_value(row: sqlite3.Row) -> tuple[float, float, str]:
+        """Return request, cost, and work-key values for a generic paid row."""
+        try:
+            outcome = json.loads(row["outcome"] or "{}")
+        except (TypeError, ValueError, json.JSONDecodeError):
+            outcome = None
+        if isinstance(outcome, Mapping) and outcome.get("status") == "blocked":
+            return 0.0, 0.0, ""
+        work_key = "__unattributed__"
+        if isinstance(outcome, Mapping):
+            candidate = outcome.get("work_key") or outcome.get("work_id")
+            if candidate is not None and str(candidate).strip():
+                work_key = str(candidate).strip()
+        return 1.0, float(row["estimated_cost_usd"] or 0.0), work_key
+
+    def _paid_capability_usage_tx(self, conn: sqlite3.Connection) -> tuple[float, float, dict[str, tuple[float, float]]]:
+        """Read durable generic paid usage under the caller's write lock.
+
+        Article Analysis rows linked to ``analysis_invocations`` are excluded:
+        their dedicated invocation ledger is already the authoritative
+        reservation. Legacy unlinked paid rows remain conservative usage.
+        """
+        rows = conn.execute(
+            """
+            SELECT * FROM provider_usage
+            WHERE request_type = 'ai:paid' AND invocation_id IS NULL
+            """
+        ).fetchall()
+        requests = 0.0
+        cost = 0.0
+        per_work: dict[str, tuple[float, float]] = {}
+        for row in rows:
+            row_requests, row_cost, work_key = self._paid_capability_usage_value(row)
+            requests += row_requests
+            cost += row_cost
+            if row_requests:
+                previous_requests, previous_cost = per_work.get(work_key, (0.0, 0.0))
+                per_work[work_key] = (previous_requests + row_requests, previous_cost + row_cost)
+        return requests, cost, per_work
+
+    def reserve_paid_capability(
+        self,
+        *,
+        capability: str,
+        work_id: str | None,
+        estimated_cost_usd: float,
+        max_paid_calls: int,
+        max_paid_cost_usd: float,
+        max_paid_calls_per_work: int,
+        max_paid_cost_usd_per_work: float,
+        purpose: str = "background",
+        allow_test: bool = False,
+        job_id: str | None = None,
+        monitor_id: str | None = None,
+        research_question_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Atomically reserve one generic paid AI capability call.
+
+        The existing provider-usage ledger doubles as the durable reservation
+        record for capabilities without a domain-specific invocation table.
+        A reservation is inserted before provider execution and remains
+        budget-consuming on process loss or provider failure. Connection tests
+        require an explicit per-call allowance and never change the shared
+        background ``paid_enabled`` switch.
+        """
+        capability = str(capability).strip()
+        if not capability:
+            raise DomainValidation("paid capability is required")
+        if purpose not in {"background", "connection_test"}:
+            raise DomainValidation("invalid paid capability purpose")
+        estimated_cost_usd = _nonnegative_float(estimated_cost_usd, "estimated_cost_usd")
+        max_paid_calls = _nonnegative_int(max_paid_calls, "max_paid_calls")
+        max_paid_cost_usd = _nonnegative_float(max_paid_cost_usd, "max_paid_cost_usd")
+        max_paid_calls_per_work = _nonnegative_int(max_paid_calls_per_work, "max_paid_calls_per_work")
+        max_paid_cost_usd_per_work = _nonnegative_float(
+            max_paid_cost_usd_per_work, "max_paid_cost_usd_per_work"
+        )
+        now = utc_now()
+        work_key = str(work_id).strip() if work_id is not None and str(work_id).strip() else "__unattributed__"
+        identifier = new_id("ai-reservation")
+        conn = storage.connect(self.db_path)
+        try:
+            with storage.write_tx(conn):
+                if purpose == "background" and not self._paid_enabled_tx(conn):
+                    raise BudgetExhausted("paid dispatch is disabled", reason="paid_disabled")
+                if purpose == "connection_test" and not allow_test:
+                    raise BudgetExhausted(
+                        "connection-test paid admission requires explicit authorization",
+                        reason="test_not_authorized",
+                    )
+                used_requests, used_cost, per_work = self._paid_capability_usage_tx(conn)
+                if used_requests + 1 > max_paid_calls:
+                    raise BudgetExhausted(
+                        "configured paid capability request limit exhausted",
+                        reason="paid_budget_exhausted",
+                    )
+                if used_cost + estimated_cost_usd > max_paid_cost_usd + 1e-12:
+                    raise BudgetExhausted(
+                        "configured paid capability USD limit exhausted",
+                        reason="paid_budget_exhausted",
+                    )
+                work_requests, work_cost = per_work.get(work_key, (0.0, 0.0))
+                if work_requests + 1 > max_paid_calls_per_work:
+                    raise BudgetExhausted(
+                        "configured paid capability per-work request limit exhausted",
+                        reason="paid_budget_exhausted",
+                    )
+                if work_cost + estimated_cost_usd > max_paid_cost_usd_per_work + 1e-12:
+                    raise BudgetExhausted(
+                        "configured paid capability per-work USD limit exhausted",
+                        reason="paid_budget_exhausted",
+                    )
+                self._check_analysis_budget_limits_tx(
+                    conn,
+                    monitor_id=str(monitor_id or ""),
+                    job_id=job_id,
+                    research_question_id=research_question_id,
+                    request_cost_usd=estimated_cost_usd,
+                    now=now,
+                )
+                outcome = json.dumps(
+                    {
+                        "purpose": purpose,
+                        "status": "reserved",
+                        "work_id": work_id,
+                        "work_key": work_key,
+                    },
+                    sort_keys=True,
+                )
+                conn.execute(
+                    """
+                    INSERT INTO provider_usage
+                        (id, job_id, monitor_id, research_question_id, capability,
+                         provider, request_type, query_units, token_units,
+                         estimated_cost_usd, latency_ms, outcome, created_at,
+                         invocation_id)
+                    VALUES (?, ?, ?, ?, ?, NULL, 'ai:paid', 1, NULL, ?, NULL, ?, ?, NULL)
+                    """,
+                    (
+                        identifier,
+                        job_id,
+                        monitor_id,
+                        research_question_id,
+                        capability,
+                        estimated_cost_usd,
+                        outcome,
+                        now,
+                    ),
+                )
+        finally:
+            conn.close()
+        return {
+            "id": identifier,
+            "state": "reserved",
+            "capability": capability,
+            "work_id": work_id,
+            "purpose": purpose,
+        }
+
+    def finalize_paid_capability(
+        self,
+        reservation_id: str,
+        *,
+        provider: str | None,
+        token_units: int | None,
+        latency_ms: int,
+        outcome: str,
+        metadata: Mapping[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Finalize a generic paid reservation without releasing its cost."""
+        reservation_id = str(reservation_id).strip()
+        outcome = str(outcome).strip()
+        if not reservation_id or not outcome:
+            raise DomainValidation("paid reservation finalization requires an id and outcome")
+        if token_units is not None:
+            token_units = _nonnegative_int(token_units, "token_units")
+        if isinstance(latency_ms, bool) or not isinstance(latency_ms, int) or latency_ms < 0:
+            raise DomainValidation("latency_ms must be a nonnegative integer")
+        payload = dict(metadata or {})
+        payload["status"] = outcome
+        now = utc_now()
+        conn = storage.connect(self.db_path)
+        try:
+            with storage.write_tx(conn):
+                row = conn.execute(
+                    "SELECT * FROM provider_usage WHERE id = ? AND request_type = 'ai:paid' AND invocation_id IS NULL",
+                    (reservation_id,),
+                ).fetchone()
+                if row is None:
+                    raise DomainNotFound("paid capability reservation not found")
+                previous = _decode(row["outcome"], {})
+                if isinstance(previous, Mapping):
+                    merged = dict(previous)
+                    merged.update(payload)
+                    payload = merged
+                conn.execute(
+                    """
+                    UPDATE provider_usage
+                    SET provider = ?, token_units = ?, latency_ms = ?, outcome = ?
+                    WHERE id = ?
+                    """,
+                    (provider, token_units, latency_ms, json.dumps(payload, sort_keys=True), reservation_id),
+                )
+                updated = conn.execute("SELECT * FROM provider_usage WHERE id = ?", (reservation_id,)).fetchone()
+        finally:
+            conn.close()
+        return dict(updated)
+
     def _authorize_paid_analysis_tx(
         self,
         conn: sqlite3.Connection,
@@ -720,6 +929,7 @@ class BudgetService:
         *,
         monitor_id: str,
         job_id: str | None,
+        research_question_id: str | None = None,
         request_cost_usd: float,
         now: str,
     ) -> None:
@@ -727,6 +937,8 @@ class BudgetService:
         specs = [("global", "")]
         if monitor is not None and monitor["policy_id"]:
             specs.append(("policy", monitor["policy_id"]))
+        if research_question_id:
+            specs.append(("research_question", research_question_id))
         if job_id:
             specs.append(("job", job_id))
         for scope_type, scope_id in specs:
@@ -744,7 +956,7 @@ class BudgetService:
                 conn,
                 conn.execute(
                     "SELECT ? AS id, ? AS monitor_id, ? AS research_question_id",
-                    (job_id, monitor_id, None),
+                    (job_id, monitor_id, research_question_id),
                 ).fetchone(),
                 "lifetime",
                 now,

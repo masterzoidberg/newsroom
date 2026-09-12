@@ -13,7 +13,15 @@ import pytest
 
 from newsroom import storage
 from newsroom.acquisition import AcquisitionBlocked, AcquisitionPolicy, UrllibHttpTransport
-from newsroom.ai import AIProviderError, AIDisabled, ArticleAnalysisRequest
+from newsroom.ai import (
+    AIProviderError,
+    AIDisabled,
+    AIRouter,
+    ArticleAnalysisRequest,
+    CapabilityBundle,
+    RoutePolicy,
+    SQLiteTelemetrySink,
+)
 from newsroom.article_analysis import (
     AnalysisProviderConfig,
     ArticleAnalysisService,
@@ -25,7 +33,7 @@ from newsroom.content_artifacts import ContentArtifactService, normalized_text_h
 from newsroom.domain import CoreService, DomainValidation
 from newsroom.document_processing import DocumentProcessingExecutionService, enqueue_document_version_processing_tx
 from newsroom.integrity import check_database
-from newsroom.jobs import BudgetService, JobService
+from newsroom.jobs import BudgetExhausted, BudgetService, JobService
 from newsroom.migrations import CURRENT_SCHEMA_VERSION, apply_migrations, migration_status
 from newsroom.monitoring import (
     DocumentVersionRelevanceService,
@@ -71,6 +79,23 @@ class CountingProvider:
         if self.error is not None:
             raise self.error
         return dict(VALID_OUTPUT)
+
+
+class CountingRelevanceProvider:
+    model_name = "test-paid-relevance-model"
+
+    def __init__(self, *, gate: threading.Event | None = None, error: BaseException | None = None):
+        self.calls = 0
+        self.gate = gate
+        self.error = error
+
+    def classify(self, text: str, scope_terms: tuple[str, ...]) -> dict[str, Any]:
+        self.calls += 1
+        if self.gate is not None:
+            self.gate.wait(timeout=5)
+        if self.error is not None:
+            raise self.error
+        return {"relevant": True, "confidence": 1.0, "signal": "fixture"}
 
 
 def _get(db: Path, sql: str, params: tuple[Any, ...] = ()) -> storage.sqlite3.Row | None:
@@ -414,6 +439,170 @@ def test_uncertain_paid_invocation_blocks_duplicate_until_explicit_release(tmp_d
     with pytest.raises(AIDisabled):
         _analyze(_service(tmp_db, provider), fixture)
     assert provider.calls == 1
+
+
+def test_paid_router_admission_survives_reload_and_is_durable(tmp_db):
+    apply_migrations(tmp_db)
+    budgets = BudgetService(tmp_db)
+    budgets.set_paid_enabled(True)
+    provider = CountingRelevanceProvider()
+    policy = RoutePolicy(
+        local_enabled=False,
+        paid_enabled=True,
+        max_paid_calls=1,
+        max_paid_cost_usd=0.01,
+        max_paid_calls_per_work=1,
+        max_paid_cost_usd_per_work=0.01,
+        paid_request_cost_usd=0.01,
+    )
+
+    first = AIRouter(
+        local=CapabilityBundle(),
+        paid=CapabilityBundle(relevance=provider),
+        policy=policy,
+        budget_service=budgets,
+        telemetry=SQLiteTelemetrySink(tmp_db),
+    )
+    assert first.relevance("UAP report", ("UAP",), work_id="work-one").relevant is True
+    assert provider.calls == 1
+
+    reloaded = AIRouter(
+        local=CapabilityBundle(),
+        paid=CapabilityBundle(relevance=provider),
+        policy=policy,
+        budget_service=BudgetService(tmp_db),
+    )
+    with pytest.raises(AIDisabled):
+        reloaded.relevance("another UAP report", ("UAP",), work_id="work-two")
+    assert provider.calls == 1
+    assert _get(tmp_db, "SELECT COUNT(*) FROM provider_usage WHERE request_type = 'ai:paid'")[0] == 1
+
+
+def test_concurrent_paid_routers_share_one_durable_admission(tmp_db):
+    apply_migrations(tmp_db)
+    budgets = BudgetService(tmp_db)
+    budgets.set_paid_enabled(True)
+    provider = CountingRelevanceProvider(gate=threading.Event())
+    policy = RoutePolicy(
+        local_enabled=False,
+        paid_enabled=True,
+        max_paid_calls=1,
+        max_paid_cost_usd=0.01,
+        max_paid_calls_per_work=1,
+        max_paid_cost_usd_per_work=0.01,
+        paid_request_cost_usd=0.01,
+    )
+    routers = [
+        AIRouter(
+            local=CapabilityBundle(),
+            paid=CapabilityBundle(relevance=provider),
+            policy=policy,
+            budget_service=BudgetService(tmp_db),
+        )
+        for _ in range(2)
+    ]
+    results: list[Any] = []
+    errors: list[BaseException] = []
+
+    def run(router: AIRouter, work_id: str) -> None:
+        try:
+            results.append(router.relevance("UAP report", ("UAP",), work_id=work_id))
+        except BaseException as exc:  # pragma: no cover - assertion below reports it
+            errors.append(exc)
+
+    threads = [
+        threading.Thread(target=run, args=(routers[0], "concurrent-one")),
+        threading.Thread(target=run, args=(routers[1], "concurrent-two")),
+    ]
+    for thread in threads:
+        thread.start()
+    deadline = time.monotonic() + 5
+    while provider.calls < 1 and time.monotonic() < deadline:
+        time.sleep(0.01)
+    provider.gate.set()
+    for thread in threads:
+        thread.join(timeout=10)
+
+    assert provider.calls == 1
+    assert len(results) == 1
+    assert len(errors) == 1 and isinstance(errors[0], AIDisabled)
+    assert _get(tmp_db, "SELECT COUNT(*) FROM provider_usage WHERE request_type = 'ai:paid'")[0] == 1
+
+
+def test_failed_paid_router_call_remains_durable_budget_usage(tmp_db):
+    apply_migrations(tmp_db)
+    budgets = BudgetService(tmp_db)
+    budgets.set_paid_enabled(True)
+    provider = CountingRelevanceProvider(error=RuntimeError("synthetic provider failure"))
+    policy = RoutePolicy(
+        local_enabled=False,
+        paid_enabled=True,
+        max_paid_calls=1,
+        max_paid_cost_usd=0.01,
+        max_paid_calls_per_work=1,
+        max_paid_cost_usd_per_work=0.01,
+        paid_request_cost_usd=0.01,
+    )
+    with pytest.raises(AIProviderError):
+        AIRouter(
+            local=CapabilityBundle(),
+            paid=CapabilityBundle(relevance=provider),
+            policy=policy,
+            budget_service=budgets,
+        ).relevance("UAP report", ("UAP",), work_id="failed-paid-call")
+
+    row = _get(tmp_db, "SELECT * FROM provider_usage WHERE request_type = 'ai:paid'")
+    assert row is not None
+    assert json.loads(row["outcome"])["status"] == "failed"
+    with pytest.raises(AIDisabled):
+        AIRouter(
+            local=CapabilityBundle(),
+            paid=CapabilityBundle(relevance=provider),
+            policy=policy,
+            budget_service=BudgetService(tmp_db),
+        ).relevance("another UAP report", ("UAP",), work_id="restarted-paid-call")
+    assert provider.calls == 1
+
+
+def test_connection_test_allowance_does_not_enable_background_paid_routing(tmp_db):
+    apply_migrations(tmp_db)
+    budgets = BudgetService(tmp_db)
+    with pytest.raises(BudgetExhausted) as denied:
+        budgets.reserve_paid_capability(
+            capability="relevance",
+            work_id="connection-test-denied",
+            estimated_cost_usd=0.01,
+            max_paid_calls=1,
+            max_paid_cost_usd=0.01,
+            max_paid_calls_per_work=1,
+            max_paid_cost_usd_per_work=0.01,
+            purpose="connection_test",
+        )
+    assert getattr(denied.value, "reason", None) == "test_not_authorized"
+
+    reservation = budgets.reserve_paid_capability(
+        capability="relevance",
+        work_id="connection-test-allowed",
+        estimated_cost_usd=0.01,
+        max_paid_calls=1,
+        max_paid_cost_usd=0.01,
+        max_paid_calls_per_work=1,
+        max_paid_cost_usd_per_work=0.01,
+        purpose="connection_test",
+        allow_test=True,
+    )
+    assert reservation["id"]
+    with pytest.raises(BudgetExhausted) as background:
+        budgets.reserve_paid_capability(
+            capability="relevance",
+            work_id="background-after-test",
+            estimated_cost_usd=0.01,
+            max_paid_calls=2,
+            max_paid_cost_usd=0.02,
+            max_paid_calls_per_work=1,
+            max_paid_cost_usd_per_work=0.01,
+        )
+    assert getattr(background.value, "reason", None) == "paid_disabled"
 
 
 def test_retryable_paid_reauthorization_rechecks_global_limit(tmp_db):

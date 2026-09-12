@@ -818,6 +818,10 @@ class ArticleAnalysisService:
             paid=paid_bundle if paid_route else None,
             policy=policy,
             telemetry=sink,
+            # The durable analysis invocation is the admission authority for
+            # this supported paid capability. Do not apply the router's
+            # legacy process-local generic counter a second time.
+            paid_admission_reserved=paid_route,
         )
         request = ArticleAnalysisRequest(
             title=analysis_input.title,
