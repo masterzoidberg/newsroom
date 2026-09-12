@@ -739,6 +739,15 @@ class AIConnectionPatch(StrictModel):
         return self
 
 
+class AICredentialWrite(StrictModel):
+    expected_revision: int = Field(ge=1, le=1_000_000)
+    secret: str = Field(min_length=1, max_length=16_384)
+
+
+class AICredentialRemove(StrictModel):
+    expected_revision: int = Field(ge=1, le=1_000_000)
+
+
 class AICapabilityRouteWrite(StrictModel):
     provider_route: Optional[Literal["local", "connection"]] = None
     route: Optional[Literal["local", "connection"]] = None
@@ -2785,6 +2794,25 @@ def create_domain_router(
         return ai_configuration.update_connection(
             identifier,
             data,
+            expected_revision=payload.expected_revision,
+        )
+
+    @router.put("/ai/providers/{identifier}/credential")
+    async def set_ai_provider_credential(request: Request, response: Response, identifier: str, payload: AICredentialWrite):
+        write_guard(request)
+        response.headers["Cache-Control"] = "no-store"
+        return ai_configuration.set_credential(
+            identifier,
+            payload.secret,
+            expected_revision=payload.expected_revision,
+        )
+
+    @router.delete("/ai/providers/{identifier}/credential")
+    async def remove_ai_provider_credential(request: Request, response: Response, identifier: str, payload: AICredentialRemove):
+        write_guard(request)
+        response.headers["Cache-Control"] = "no-store"
+        return ai_configuration.remove_credential(
+            identifier,
             expected_revision=payload.expected_revision,
         )
 

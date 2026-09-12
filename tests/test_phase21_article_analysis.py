@@ -50,7 +50,14 @@ from newsroom.article_analysis import (
 )
 from newsroom.content_artifacts import ContentArtifactService
 from newsroom.document_processing import DocumentProcessingExecutionService
-from newsroom.domain import AIConfigurationService, CoreService, DomainConflict, DomainValidation
+from newsroom.domain import (
+    AIConfigurationService,
+    CredentialStoreError,
+    CoreService,
+    DomainConflict,
+    DomainValidation,
+    InMemoryCredentialStore,
+)
 from newsroom.integrity import check_database
 from newsroom.jobs import (
     AUTOMATIC_ALERT_STAGE_JOB_TYPE,
@@ -1678,13 +1685,233 @@ def test_ai_configuration_fail_fallback_reports_unavailable_connection(tmp_db):
     assert route["effective"]["reason"] == "connection_unavailable"
 
 
-def test_ai_configuration_api_is_authenticated_csrf_protected_and_bounded(tmp_path):
+def test_ai_credentials_are_versioned_and_never_persisted_or_echoed(tmp_db, tmp_path):
+    apply_migrations(tmp_db)
+    store = InMemoryCredentialStore()
+    configuration = AIConfigurationService(
+        tmp_db,
+        credential_store=store,
+        credential_namespace="installation-test",
+    )
+    provider = configuration.create_connection(
+        {
+            "display_name": "Vault gateway",
+            "base_url": "https://api.example.test/v1",
+            "model": "model",
+        }
+    )
+
+    saved = configuration.set_credential(
+        provider["id"], "sentinel-secret-v1", expected_revision=1
+    )
+    assert saved["credential_configured"] is True
+    assert saved["credential_ref_version"] == 1
+    assert "sentinel-secret-v1" not in str(saved)
+    assert configuration.read_credential(provider["id"]) == "sentinel-secret-v1"
+
+    rotated = configuration.set_credential(
+        provider["id"], "sentinel-secret-v2", expected_revision=saved["revision"]
+    )
+    assert rotated["credential_ref_version"] == 2
+    assert configuration.read_credential(provider["id"]) == "sentinel-secret-v2"
+    assert store.contains(provider["id"], 1) is False
+    assert store.contains(provider["id"], 2) is True
+
+    exported = export_logical(tmp_db, tmp_path / "credential-export.jsonl")
+    export_text = exported.read_text(encoding="utf-8")
+    assert "sentinel-secret-v1" not in export_text
+    assert "sentinel-secret-v2" not in export_text
+    assert '"credential_ref"' not in export_text
+
+    removed = configuration.remove_credential(
+        provider["id"], expected_revision=rotated["revision"]
+    )
+    assert removed["enabled"] is False
+    assert removed["credential_configured"] is False
+    assert removed["credential_ref_version"] is None
+    with pytest.raises(CredentialStoreError):
+        configuration.read_credential(provider["id"])
+
+
+def test_ai_credential_failures_preserve_truthful_recoverable_state(tmp_db):
+    apply_migrations(tmp_db)
+    store = InMemoryCredentialStore()
+    configuration = AIConfigurationService(
+        tmp_db,
+        credential_store=store,
+        credential_namespace="installation-test",
+    )
+    provider = configuration.create_connection(
+        {
+            "display_name": "Failure gateway",
+            "base_url": "https://api.example.test/v1",
+            "model": "model",
+        }
+    )
+
+    store.fail_on.add("put")
+    with pytest.raises(CredentialStoreError):
+        configuration.set_credential(
+            provider["id"], "sentinel-put-failure", expected_revision=1
+        )
+    unchanged = configuration.get_connection(provider["id"])
+    assert unchanged["revision"] == 1
+    assert unchanged["credential_configured"] is False
+
+    store.fail_on.clear()
+    saved = configuration.set_credential(
+        provider["id"], "sentinel-remove-failure", expected_revision=1
+    )
+    store.fail_on.add("delete")
+    failed = configuration.remove_credential(
+        provider["id"], expected_revision=saved["revision"]
+    )
+    assert failed["enabled"] is False
+    assert failed["credential_configured"] is True
+    assert failed["credential_removal_required"] is True
+    assert configuration.read_credential(provider["id"]) == "sentinel-remove-failure"
+
+    store.fail_on.clear()
+    retried = configuration.remove_credential(
+        provider["id"], expected_revision=failed["revision"]
+    )
+    assert retried["credential_configured"] is False
+    assert retried["credential_removal_required"] is False
+
+
+def test_ai_credential_stale_rotation_rolls_back_new_vault_entry(tmp_db):
+    apply_migrations(tmp_db)
+    store = InMemoryCredentialStore()
+    configuration = AIConfigurationService(
+        tmp_db,
+        credential_store=store,
+        credential_namespace="installation-test",
+    )
+    provider = configuration.create_connection(
+        {
+            "display_name": "Stale gateway",
+            "base_url": "https://api.example.test/v1",
+            "model": "model",
+        }
+    )
+    saved = configuration.set_credential(
+        provider["id"], "sentinel-original", expected_revision=1
+    )
+
+    with pytest.raises(DomainConflict):
+        configuration.set_credential(
+            provider["id"], "sentinel-stale", expected_revision=1
+        )
+    assert configuration.read_credential(provider["id"]) == "sentinel-original"
+    assert store.contains(provider["id"], 1) is True
+    assert store.contains(provider["id"], 2) is False
+    assert configuration.get_connection(provider["id"])["revision"] == saved["revision"]
+
+
+def test_ai_credential_rotation_cleanup_failure_is_durable(tmp_db, monkeypatch):
+    apply_migrations(tmp_db)
+    store = InMemoryCredentialStore()
+    configuration = AIConfigurationService(
+        tmp_db,
+        credential_store=store,
+        credential_namespace="installation-test",
+    )
+    provider = configuration.create_connection(
+        {
+            "display_name": "Durable cleanup gateway",
+            "base_url": "https://api.example.test/v1",
+            "model": "model",
+        }
+    )
+    saved = configuration.set_credential(provider["id"], "sentinel-original", expected_revision=1)
+
+    generation_calls = 0
+
+    def fail_once(conn, now):
+        nonlocal generation_calls
+        generation_calls += 1
+        if generation_calls == 1:
+            raise sqlite3.OperationalError("simulated metadata failure")
+        return AIConfigurationService._advance_generation(conn, now)
+
+    monkeypatch.setattr(configuration, "_advance_generation", fail_once)
+    store.fail_on.add("delete")
+    with pytest.raises(CredentialStoreError):
+        configuration.set_credential(provider["id"], "sentinel-orphan", expected_revision=saved["revision"])
+
+    pending = configuration.get_connection(provider["id"])
+    assert pending["credential_configured"] is True
+    assert pending["credential_cleanup_required"] is True
+    assert pending["credential_removal_required"] is False
+    assert configuration.read_credential(provider["id"]) == "sentinel-original"
+    assert store.contains(provider["id"], 2) is True
+
+    store.fail_on.clear()
+    removed = configuration.remove_credential(provider["id"], expected_revision=pending["revision"])
+    assert removed["credential_configured"] is False
+    assert store.contains(provider["id"], 1) is False
+    assert store.contains(provider["id"], 2) is False
+
+
+def test_ai_credential_removal_tracks_active_version_after_orphan_cleanup(tmp_db):
+    class VersionFailureStore(InMemoryCredentialStore):
+        def __init__(self):
+            super().__init__()
+            self.fail_versions: set[int] = set()
+
+        def delete(self, namespace, connection_id, version):
+            if version in self.fail_versions:
+                raise CredentialStoreError("simulated version delete failure")
+            super().delete(namespace, connection_id, version)
+
+    apply_migrations(tmp_db)
+    store = VersionFailureStore()
+    configuration = AIConfigurationService(
+        tmp_db,
+        credential_store=store,
+        credential_namespace="installation-test",
+    )
+    provider = configuration.create_connection(
+        {
+            "display_name": "Version cleanup gateway",
+            "base_url": "https://api.example.test/v1",
+            "model": "model",
+        }
+    )
+    saved = configuration.set_credential(provider["id"], "sentinel-v1", expected_revision=1)
+    store.fail_versions.add(1)
+    rotated = configuration.set_credential(provider["id"], "sentinel-v2", expected_revision=saved["revision"])
+    assert rotated["credential_cleanup_required"] is True
+    store.fail_versions.clear()
+    store.fail_versions.add(2)
+
+    failed = configuration.remove_credential(provider["id"], expected_revision=rotated["revision"])
+    assert failed["credential_configured"] is True
+    assert failed["credential_cleanup_required"] is True
+    assert failed["credential_removal_required"] is True
+    assert store.contains(provider["id"], 1) is False
+    assert store.contains(provider["id"], 2) is True
+
+    store.fail_versions.clear()
+    removed = configuration.remove_credential(provider["id"], expected_revision=failed["revision"])
+    assert removed["credential_configured"] is False
+    assert removed["credential_cleanup_required"] is False
+    assert store.contains(provider["id"], 2) is False
+
+
+def test_ai_configuration_api_is_authenticated_csrf_protected_and_bounded(tmp_path, monkeypatch):
     from fastapi.testclient import TestClient
 
     from newsroom.app import create_app
     from newsroom.config import RuntimeConfig
+    from newsroom.runtime_identity import ensure_installation_identity
 
     config = RuntimeConfig.for_environment("dev", root=tmp_path / "dev")
+    store = InMemoryCredentialStore()
+    import newsroom.domain as domain_module
+
+    monkeypatch.setattr(domain_module, "OSCredentialStore", lambda: store)
+    ensure_installation_identity(config)
     with TestClient(create_app(config=config, frontend_dist=tmp_path / "missing-dist")) as client:
         password = "a-long-test-password-12345"
         assert client.post("/api/v1/auth/setup", json={"username": "admin", "password": password}).status_code == 201
@@ -1727,6 +1954,22 @@ def test_ai_configuration_api_is_authenticated_csrf_protected_and_bounded(tmp_pa
             json={"expected_revision": 1, "model": "model-v2"},
         )
         assert changed.status_code == 200
+        credential = client.put(
+            f"/api/v1/ai/providers/{provider['id']}/credential",
+            headers=headers,
+            json={"expected_revision": changed.json()["revision"], "secret": "sentinel-api-secret"},
+        )
+        assert credential.status_code == 200
+        assert "sentinel-api-secret" not in credential.text
+        removed = client.request(
+            "DELETE",
+            f"/api/v1/ai/providers/{provider['id']}/credential",
+            headers=headers,
+            json={"expected_revision": credential.json()["revision"]},
+        )
+        assert removed.status_code == 200
+        assert removed.json()["credential_configured"] is False
+        assert "sentinel-api-secret" not in removed.text
         stale = client.patch(
             f"/api/v1/ai/providers/{provider['id']}",
             headers=headers,
@@ -1839,14 +2082,14 @@ def test_migration_0038_schema37_upgrade_preserves_data_and_history(tmp_path):
             conn.execute("DROP TABLE ai_capability_routes")
             conn.execute("DROP TABLE ai_connections")
             conn.execute("DROP TABLE ai_config_state")
-            conn.execute("DELETE FROM schema_migrations WHERE version = 38")
+            conn.execute("DELETE FROM schema_migrations WHERE version IN (38, 39)")
             conn.execute("UPDATE app_meta SET value = '37' WHERE key = 'schema_version'")
         conn.execute("PRAGMA foreign_keys = ON")
     finally:
         conn.close()
 
     result = apply_migrations(db_path)
-    assert result.applied_versions == (CURRENT_SCHEMA_VERSION,)
+    assert result.applied_versions == tuple(range(38, CURRENT_SCHEMA_VERSION + 1))
     assert result.current_version == CURRENT_SCHEMA_VERSION
     assert migration_status(db_path) == tuple(range(1, CURRENT_SCHEMA_VERSION + 1))
     assert _get(db_path, "SELECT value FROM app_meta WHERE key = 'ast06_preserved'")[0] == "yes"
@@ -1878,14 +2121,14 @@ def test_migration_0038_schema36_upgrade_preserves_data_and_history(tmp_path):
             conn.execute("DROP TABLE ai_connections")
             conn.execute("DROP TABLE ai_config_state")
             conn.execute("DROP TABLE briefing_schedules")
-            conn.execute("DELETE FROM schema_migrations WHERE version IN (37, 38)")
+            conn.execute("DELETE FROM schema_migrations WHERE version IN (37, 38, 39)")
             conn.execute("UPDATE app_meta SET value = '36' WHERE key = 'schema_version'")
         conn.execute("PRAGMA foreign_keys = ON")
     finally:
         conn.close()
 
     result = apply_migrations(db_path)
-    assert result.applied_versions == (37, CURRENT_SCHEMA_VERSION)
+    assert result.applied_versions == tuple(range(37, CURRENT_SCHEMA_VERSION + 1))
     assert result.current_version == CURRENT_SCHEMA_VERSION
     assert _get(db_path, "SELECT value FROM app_meta WHERE key = 'ast06_schema36_preserved'")[0] == "yes"
     assert _get(db_path, "SELECT name FROM sources WHERE id = 'src-schema36'")[0] == "Schema 36 source"

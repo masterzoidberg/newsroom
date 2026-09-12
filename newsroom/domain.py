@@ -4,10 +4,15 @@ from __future__ import annotations
 import re
 import secrets
 import sqlite3
+import importlib
+import json
+import os
+import sys
+import uuid
 from ipaddress import ip_address
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Iterable, Mapping, Optional
+from typing import Any, Iterable, Mapping, Optional, Protocol
 from urllib.parse import urlsplit, urlunsplit
 
 from . import storage
@@ -36,6 +41,20 @@ class DomainConflict(DomainError):
 class DomainValidation(DomainError):
     status_code = 422
     code = "validation_error"
+
+
+class CredentialStoreError(DomainError):
+    status_code = 503
+    code = "credential_store_unavailable"
+
+
+class CredentialStoreUnavailable(CredentialStoreError):
+    pass
+
+
+class CredentialNotFound(CredentialStoreError):
+    status_code = 404
+    code = "credential_not_found"
 
 
 SLUG_RE = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
@@ -81,6 +100,7 @@ AI_LOCAL_ROUTE = "local"
 AI_CONNECTION_ROUTE = "connection"
 AI_FALLBACK_POLICIES = frozenset({"local", "fail"})
 _AI_OPAQUE_REFERENCE_RE = re.compile(r"^[A-Za-z][A-Za-z0-9._:/-]{0,199}$")
+_CREDENTIAL_NAMESPACE_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,119}$")
 
 
 def _ai_text(value: object, label: str, *, maximum: int) -> str:
@@ -156,16 +176,157 @@ def _ai_bool(value: object, label: str) -> bool:
     return value
 
 
-class AIConfigurationService:
-    """Transactional public AI metadata and capability-route authority.
+class CredentialStore(Protocol):
+    def put(self, namespace: str, connection_id: str, version: int, secret: str) -> None: ...
 
-    This service intentionally has no credential-store dependency.  The only
-    persisted credential field is an opaque reference for the later vault
-    integration; API projections never return it.
+    def get(self, namespace: str, connection_id: str, version: int) -> str | None: ...
+
+    def delete(self, namespace: str, connection_id: str, version: int) -> None: ...
+
+
+class InMemoryCredentialStore:
+    """Deterministic vault double for tests; never selected by production code."""
+
+    def __init__(self) -> None:
+        self.values: dict[tuple[str, str, int], str] = {}
+        self.fail_on: set[str] = set()
+
+    def _check(self, operation: str) -> None:
+        if operation in self.fail_on:
+            raise CredentialStoreError("credential store operation failed")
+
+    def put(self, namespace: str, connection_id: str, version: int, secret: str) -> None:
+        self._check("put")
+        self.values[(namespace, connection_id, version)] = secret
+
+    def get(self, namespace: str, connection_id: str, version: int) -> str | None:
+        self._check("get")
+        return self.values.get((namespace, connection_id, version))
+
+    def delete(self, namespace: str, connection_id: str, version: int) -> None:
+        self._check("delete")
+        self.values.pop((namespace, connection_id, version), None)
+
+    def contains(self, connection_id: str, version: int, *, namespace: str = "installation-test") -> bool:
+        return (namespace, connection_id, version) in self.values
+
+
+class OSCredentialStore:
+    """Use only an explicitly selected OS-backed keyring backend."""
+
+    def __init__(self, *, platform: str | None = None) -> None:
+        selected = platform or sys.platform
+        backend_path = {
+            "win32": ("keyring.backends.Windows", "WinVaultKeyring"),
+            "darwin": ("keyring.backends.macOS", "Keyring"),
+        }.get(selected)
+        if backend_path is None and selected.startswith("linux"):
+            backend_path = ("keyring.backends.SecretService", "Keyring")
+        if backend_path is None:
+            raise CredentialStoreUnavailable("approved credential backend is unavailable")
+        try:
+            keyring = importlib.import_module("keyring")
+            module = importlib.import_module(backend_path[0])
+            backend_type = getattr(module, backend_path[1])
+            backend = backend_type()
+            keyring.set_keyring(backend)
+        except Exception as exc:
+            raise CredentialStoreUnavailable("approved credential backend is unavailable") from exc
+        self._backend = backend
+
+    @staticmethod
+    def _service(namespace: str, connection_id: str, version: int) -> str:
+        return f"Newsroom/{namespace}/{connection_id}/{version}"
+
+    @staticmethod
+    def _username(_connection_id: str, _version: int) -> str:
+        return "credential"
+
+    def put(self, namespace: str, connection_id: str, version: int, secret: str) -> None:
+        try:
+            self._backend.set_password(
+                self._service(namespace, connection_id, version),
+                self._username(connection_id, version),
+                secret,
+            )
+        except Exception as exc:
+            raise CredentialStoreError("credential store write failed") from exc
+
+    def get(self, namespace: str, connection_id: str, version: int) -> str | None:
+        try:
+            return self._backend.get_password(
+                self._service(namespace, connection_id, version),
+                self._username(connection_id, version),
+            )
+        except Exception as exc:
+            raise CredentialStoreError("credential store read failed") from exc
+
+    def delete(self, namespace: str, connection_id: str, version: int) -> None:
+        try:
+            self._backend.delete_password(
+                self._service(namespace, connection_id, version),
+                self._username(connection_id, version),
+            )
+        except Exception as exc:
+            raise CredentialStoreError("credential store delete failed") from exc
+
+
+def _credential_namespace(value: object) -> str:
+    if not isinstance(value, str) or not _CREDENTIAL_NAMESPACE_RE.fullmatch(value):
+        raise CredentialStoreError("credential store namespace is invalid")
+    return value
+
+
+def _runtime_credential_namespace(db_path: Path) -> str | None:
+    runtime_root = db_path.parent.parent
+    identity_path = runtime_root / "runtime" / "installation.json"
+    try:
+        raw = identity_path.read_bytes()
+        if len(raw) > 8192:
+            return None
+        payload = json.loads(raw.decode("utf-8"))
+        if not isinstance(payload, dict):
+            return None
+        if Path(str(payload.get("root", ""))).expanduser().resolve() != runtime_root.resolve():
+            return None
+        if payload.get("format_version") != 1:
+            return None
+        return _credential_namespace(str(uuid.UUID(str(payload.get("installation_id", "")))))
+    except (OSError, UnicodeDecodeError, ValueError, TypeError, json.JSONDecodeError):
+        return None
+
+
+def _credential_secret(value: object) -> str:
+    if not isinstance(value, str) or not value:
+        raise DomainValidation("credential secret must not be empty")
+    if len(value) > 16_384 or "\x00" in value:
+        raise DomainValidation("credential secret is invalid or too long")
+    return value
+
+
+class AIConfigurationService:
+    """Transactional public AI metadata and credential-store authority.
+
+    Credential values are held only in the injected or explicitly selected OS
+    store. SQLite retains an opaque reference and non-secret cleanup metadata;
+    API projections never return either the reference or a credential value.
     """
 
-    def __init__(self, db_path: str | Path):
+    def __init__(
+        self,
+        db_path: str | Path,
+        *,
+        credential_store: CredentialStore | None = None,
+        credential_namespace: str | None = None,
+    ):
         self.db_path = Path(db_path)
+        self.credential_store = credential_store
+        self._resolved_credential_store: CredentialStore | None = None
+        self.credential_namespace = (
+            _credential_namespace(credential_namespace)
+            if credential_namespace is not None
+            else _runtime_credential_namespace(self.db_path)
+        )
 
     @staticmethod
     def _generation(conn: sqlite3.Connection) -> int:
@@ -190,6 +351,13 @@ class AIConfigurationService:
         result["enabled"] = bool(result["enabled"])
         result["credential_required"] = bool(result["credential_required"])
         result["credential_configured"] = bool(result.pop("credential_ref", None))
+        cleanup_version = result.pop("credential_cleanup_version", None)
+        result["credential_cleanup_required"] = cleanup_version is not None
+        result["credential_removal_required"] = (
+            cleanup_version is not None
+            and cleanup_version == result.get("credential_ref_version")
+            and not result["enabled"]
+        )
         result["supported_capabilities"] = list(AI_SUPPORTED_CAPABILITIES)
         result["generation"] = generation
         return result
@@ -351,6 +519,266 @@ class AIConfigurationService:
         finally:
             conn.close()
         return self.get_connection(identifier)
+
+    def _credential_store(self) -> CredentialStore:
+        if self.credential_store is not None:
+            return self.credential_store
+        if self._resolved_credential_store is not None:
+            return self._resolved_credential_store
+        if self.credential_namespace is None:
+            raise CredentialStoreUnavailable("approved credential backend is unavailable")
+        self._resolved_credential_store = OSCredentialStore()
+        return self._resolved_credential_store
+
+    def _credential_slot(self, identifier: str, version: int) -> tuple[str, str, int]:
+        if self.credential_namespace is None:
+            raise CredentialStoreError("approved credential backend is unavailable")
+        return self.credential_namespace, identifier, version
+
+    @staticmethod
+    def _credential_reference(namespace: str, identifier: str, version: int) -> str:
+        return f"vault:{namespace}/{identifier}/{version}"
+
+    def _connection_row(self, identifier: str) -> sqlite3.Row:
+        conn = storage.connect(self.db_path)
+        try:
+            row = conn.execute("SELECT * FROM ai_connections WHERE id = ?", (identifier,)).fetchone()
+            if row is None:
+                raise DomainNotFound("AI connection not found")
+            return row
+        finally:
+            conn.close()
+
+    def _record_cleanup(self, identifier: str, version: int) -> dict[str, Any]:
+        conn = storage.connect(self.db_path)
+        try:
+            with storage.write_tx(conn):
+                current = conn.execute("SELECT * FROM ai_connections WHERE id = ?", (identifier,)).fetchone()
+                if current is None:
+                    raise DomainNotFound("AI connection not found")
+                if current["credential_cleanup_version"] == version:
+                    return self._connection_projection(current, self._generation(conn))
+                now = utc_now()
+                generation = self._advance_generation(conn, now)
+                revision = int(current["revision"]) + 1
+                conn.execute(
+                    "UPDATE ai_connections SET credential_cleanup_version = ?, revision = ?, config_generation = ?, updated_at = ? WHERE id = ?",
+                    (version, revision, generation, now, identifier),
+                )
+        finally:
+            conn.close()
+        return self.get_connection(identifier)
+
+    def _clear_credential_metadata(
+        self,
+        identifier: str,
+        *,
+        expected_version: int,
+    ) -> dict[str, Any]:
+        conn = storage.connect(self.db_path)
+        try:
+            with storage.write_tx(conn):
+                current = conn.execute("SELECT * FROM ai_connections WHERE id = ?", (identifier,)).fetchone()
+                if current is None:
+                    raise DomainNotFound("AI connection not found")
+                if current["credential_ref_version"] != expected_version:
+                    return self._connection_projection(current, self._generation(conn))
+                now = utc_now()
+                generation = self._advance_generation(conn, now)
+                revision = int(current["revision"]) + 1
+                conn.execute(
+                    """
+                    UPDATE ai_connections
+                    SET credential_ref = NULL, credential_ref_version = NULL,
+                        credential_cleanup_version = NULL, revision = ?,
+                        config_generation = ?, validation_status = 'unvalidated',
+                        validation_code = NULL, validation_revision = NULL,
+                        validated_at = NULL, updated_at = ?
+                    WHERE id = ?
+                    """,
+                    (revision, generation, now, identifier),
+                )
+        finally:
+            conn.close()
+        return self.get_connection(identifier)
+
+    def set_credential(
+        self,
+        identifier: str,
+        secret: object,
+        *,
+        expected_revision: int | None = None,
+    ) -> dict[str, Any]:
+        value = _credential_secret(secret)
+        if expected_revision is not None:
+            expected_revision = _ai_positive_int(expected_revision, "expected_revision", maximum=1_000_000)
+        current = self._connection_row(identifier)
+        base_revision = int(current["revision"])
+        if expected_revision is not None and base_revision != expected_revision:
+            raise DomainConflict("AI connection changed; refresh and retry")
+        pending_version = current["credential_cleanup_version"]
+        if pending_version is not None:
+            raise DomainConflict("AI credential cleanup is pending; retry the removal")
+        store = self._credential_store()
+        old_version: int | None = None
+        new_slot: tuple[str, str, int] | None = None
+        put_attempted = False
+        try:
+            conn = storage.connect(self.db_path)
+            try:
+                with storage.write_tx(conn):
+                    latest = conn.execute("SELECT * FROM ai_connections WHERE id = ?", (identifier,)).fetchone()
+                    if latest is None:
+                        raise DomainNotFound("AI connection not found")
+                    if int(latest["revision"]) != base_revision:
+                        raise DomainConflict("AI connection changed; refresh and retry")
+                    if latest["credential_cleanup_version"] is not None:
+                        raise DomainConflict("AI credential cleanup is pending; retry the removal")
+                    old_version = latest["credential_ref_version"]
+                    next_version = int(old_version or 0) + 1
+                    namespace, connection_id, version = self._credential_slot(identifier, next_version)
+                    new_slot = (namespace, connection_id, version)
+                    put_attempted = True
+                    # Hold the SQLite write lock while reserving the version and
+                    # writing the vault entry. This prevents concurrent callers
+                    # with the same expected revision from sharing a slot.
+                    store.put(namespace, connection_id, version, value)
+                    new_ref = self._credential_reference(namespace, identifier, next_version)
+                    now = utc_now()
+                    generation = self._advance_generation(conn, now)
+                    revision = int(latest["revision"]) + 1
+                    conn.execute(
+                        """
+                        UPDATE ai_connections
+                        SET credential_ref = ?, credential_ref_version = ?,
+                            credential_cleanup_version = NULL, revision = ?,
+                            config_generation = ?, validation_status = 'unvalidated',
+                            validation_code = NULL, validation_revision = NULL,
+                            validated_at = NULL, updated_at = ?
+                        WHERE id = ?
+                        """,
+                        (new_ref, next_version, revision, generation, now, identifier),
+                    )
+            finally:
+                conn.close()
+        except Exception:
+            if not put_attempted or new_slot is None:
+                raise
+            try:
+                store.delete(*new_slot)
+            except Exception as cleanup_error:
+                try:
+                    self._record_cleanup(identifier, new_slot[2])
+                except Exception as record_error:
+                    raise CredentialStoreError(
+                        "credential update was not committed; new credential cleanup needs retry"
+                    ) from record_error
+                raise CredentialStoreError(
+                    "credential update was not committed; new credential cleanup needs retry"
+                ) from cleanup_error
+            raise
+
+        if old_version is not None and current["credential_ref"]:
+            try:
+                old_namespace, old_connection_id, old_slot = self._credential_slot(identifier, int(old_version))
+                store.delete(old_namespace, old_connection_id, old_slot)
+            except Exception:
+                return self._record_cleanup(identifier, int(old_version))
+        return self.get_connection(identifier)
+
+    def read_credential(self, identifier: str) -> str:
+        current = self._connection_row(identifier)
+        version = current["credential_ref_version"]
+        if not current["credential_ref"] or version is None:
+            raise CredentialNotFound("AI connection credential is not configured")
+        namespace, connection_id, slot = self._credential_slot(identifier, int(version))
+        value = self._credential_store().get(namespace, connection_id, slot)
+        if value is None:
+            raise CredentialNotFound("AI connection credential is not configured")
+        return value
+
+    def _disable_and_reroute(self, identifier: str, expected_revision: int | None) -> dict[str, Any]:
+        if expected_revision is not None:
+            expected_revision = _ai_positive_int(expected_revision, "expected_revision", maximum=1_000_000)
+        conn = storage.connect(self.db_path)
+        try:
+            with storage.write_tx(conn):
+                current = conn.execute("SELECT * FROM ai_connections WHERE id = ?", (identifier,)).fetchone()
+                if current is None:
+                    raise DomainNotFound("AI connection not found")
+                if expected_revision is not None and int(current["revision"]) != expected_revision:
+                    raise DomainConflict("AI connection changed; refresh and retry")
+                now = utc_now()
+                generation = self._advance_generation(conn, now)
+                revision = int(current["revision"]) + 1
+                cleanup_version = current["credential_cleanup_version"] or current["credential_ref_version"]
+                conn.execute(
+                    "UPDATE ai_connections SET enabled = 0, credential_cleanup_version = ?, revision = ?, config_generation = ?, updated_at = ? WHERE id = ?",
+                    (cleanup_version, revision, generation, now, identifier),
+                )
+                route = conn.execute(
+                    "SELECT * FROM ai_capability_routes WHERE connection_id = ?", (identifier,)
+                ).fetchall()
+                for route_row in route:
+                    route_revision = int(route_row["revision"]) + 1
+                    conn.execute(
+                        """
+                        UPDATE ai_capability_routes
+                        SET provider_route = 'local', connection_id = NULL,
+                            fallback_policy = 'local', revision = ?,
+                            config_generation = ?, updated_at = ?
+                        WHERE capability = ?
+                        """,
+                        (route_revision, generation, now, route_row["capability"]),
+                    )
+        finally:
+            conn.close()
+        return self.get_connection(identifier)
+
+    def remove_credential(
+        self,
+        identifier: str,
+        *,
+        expected_revision: int | None = None,
+    ) -> dict[str, Any]:
+        disabled = self._disable_and_reroute(identifier, expected_revision)
+        current = self._connection_row(identifier)
+        try:
+            store = self._credential_store()
+        except CredentialStoreError:
+            return self.get_connection(identifier)
+        pending_version = current["credential_cleanup_version"]
+        if pending_version is None:
+            return disabled
+        namespace, connection_id, slot = self._credential_slot(identifier, int(pending_version))
+        try:
+            store.delete(namespace, connection_id, slot)
+        except Exception:
+            return self.get_connection(identifier)
+
+        current_version = current["credential_ref_version"]
+        if current_version is not None and current_version != pending_version:
+            try:
+                store.delete(namespace, connection_id, int(current_version))
+            except Exception as delete_error:
+                try:
+                    return self._record_cleanup(identifier, int(current_version))
+                except Exception as record_error:
+                    raise CredentialStoreError(
+                        "credential removal needs retry"
+                    ) from record_error
+        try:
+            return self._clear_credential_metadata(
+                identifier,
+                expected_version=int(current_version or pending_version),
+            )
+        except Exception:
+            try:
+                return self._record_cleanup(identifier, int(current_version or pending_version))
+            except Exception as cleanup_error:
+                raise CredentialStoreError(
+                    "credential was removed from the vault; metadata cleanup needs retry"
+                ) from cleanup_error
 
     def update_connection(
         self,
@@ -1567,6 +1995,11 @@ __all__ = [
     "AIConfigurationService",
     "AI_SUPPORTED_CAPABILITIES",
     "CoreService",
+    "CredentialNotFound",
+    "CredentialStore",
+    "CredentialStoreError",
+    "InMemoryCredentialStore",
+    "OSCredentialStore",
     "DomainConflict",
     "DomainError",
     "DomainNotFound",

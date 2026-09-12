@@ -3773,7 +3773,18 @@ MIGRATION_0038_CHECKSUM = hashlib.sha256(
 ).hexdigest()
 
 
-CURRENT_SCHEMA_VERSION = 38
+# 0039: retain a non-secret version marker for credentials that have been
+# written to the vault but still need cleanup after a cross-store failure.
+MIGRATION_0039_STATEMENTS: tuple[str, ...] = (
+    "ALTER TABLE ai_connections ADD COLUMN credential_cleanup_version INTEGER CHECK (credential_cleanup_version IS NULL OR credential_cleanup_version >= 1)",
+)
+
+MIGRATION_0039_CHECKSUM = hashlib.sha256(
+    "\n".join(MIGRATION_0039_STATEMENTS).encode("utf-8")
+).hexdigest()
+
+
+CURRENT_SCHEMA_VERSION = 39
 
 
 @dataclass(frozen=True)
@@ -3861,6 +3872,7 @@ def apply_migrations(db_path: Optional[str | Path] = None) -> MigrationResult:
                 36: MIGRATION_0036_STATEMENTS,
                 37: MIGRATION_0037_STATEMENTS,
                 38: MIGRATION_0038_STATEMENTS,
+                39: MIGRATION_0039_STATEMENTS,
             }
             for version, statements in migrations.items():
                 if version in existing:
