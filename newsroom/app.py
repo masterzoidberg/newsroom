@@ -102,6 +102,7 @@ def create_app(
     *,
     frontend_dist: str | Path | None = None,
     runtime_identity: dict[str, object] | None = None,
+    ai_provider_factory: object | None = None,
 ) -> FastAPI:
     runtime = config or RuntimeConfig.for_environment("dev")
     runtime.ensure_runtime_dirs()
@@ -460,6 +461,7 @@ def create_app(
             require_user,
             require_csrf,
             evidence_service=evidence_service,
+            ai_provider_factory=ai_provider_factory,
         ),
         prefix="/api/v1",
     )

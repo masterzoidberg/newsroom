@@ -45,6 +45,7 @@ from newsroom.article_analysis import (
     ANALYSIS_PROMPT_VERSION,
     ANALYSIS_SCHEMA_VERSION,
     AIConfigurationResolver,
+    AIProviderValidationService,
     ArticleAnalysisService,
     AnalysisProviderConfig,
     OpenAICompatibleArticleAnalysisProvider,
@@ -67,6 +68,7 @@ from newsroom.jobs import (
     AUTOMATIC_ALERT_STAGE_JOB_TYPE,
     AUTOMATIC_REPORT_STAGE_JOB_TYPE,
     AUTOMATIC_STORY_STAGE_JOB_TYPE,
+    BudgetExhausted,
     DOCUMENT_VERSION_PROCESS_JOB_TYPE,
     BudgetService,
     MONITOR_CHECK_JOB_TYPE,
@@ -2205,6 +2207,41 @@ def test_watch_maintenance_reuses_an_existing_watch_resolver(tmp_db):
     assert maintenance.configuration_resolver is resolver
 
 
+def test_ai_connection_keyless_and_host_change_rules_fail_closed(tmp_db):
+    apply_migrations(tmp_db)
+    configuration = AIConfigurationService(
+        tmp_db,
+        credential_store=InMemoryCredentialStore(),
+        credential_namespace="installation-test",
+    )
+
+    with pytest.raises(DomainValidation, match="loopback"):
+        configuration.create_connection(
+            {
+                "display_name": "Hosted keyless",
+                "base_url": "https://api.example.test/v1",
+                "model": "model",
+                "credential_required": False,
+            }
+        )
+
+    provider = configuration.create_connection(
+        {
+            "display_name": "Host-bound gateway",
+            "base_url": "https://api.example.test/v1",
+            "model": "model",
+        }
+    )
+    saved = configuration.set_credential(provider["id"], "sentinel-host-secret", expected_revision=1)
+
+    with pytest.raises(DomainConflict, match="removing credential"):
+        configuration.update_connection(
+            provider["id"],
+            {"base_url": "https://other.example.test/v1"},
+            expected_revision=saved["revision"],
+        )
+
+
 def test_ai_credential_removal_tracks_active_version_after_orphan_cleanup(tmp_db):
     class VersionFailureStore(InMemoryCredentialStore):
         def __init__(self):
@@ -2335,6 +2372,15 @@ def test_ai_configuration_api_is_authenticated_csrf_protected_and_bounded(tmp_pa
             json={"expected_revision": 1, "model": "stale-model"},
         )
         assert stale.status_code == 409
+        deleted = client.request(
+            "DELETE",
+            f"/api/v1/ai/providers/{provider['id']}",
+            headers=headers,
+            json={"expected_revision": removed.json()["revision"]},
+        )
+        assert deleted.status_code == 200
+        assert deleted.json()["deleted"] is True
+        assert client.get(f"/api/v1/ai/providers/{provider['id']}").status_code == 404
 
         unsupported = client.put(
             "/api/v1/ai/routes/embeddings",
@@ -2342,6 +2388,327 @@ def test_ai_configuration_api_is_authenticated_csrf_protected_and_bounded(tmp_pa
             json={"provider_route": "local"},
         )
         assert unsupported.status_code == 422
+
+
+def test_explicit_ai_provider_test_is_revision_bound_and_does_not_enable_background_spend(tmp_path, monkeypatch):
+    from fastapi.testclient import TestClient
+
+    from newsroom.app import create_app
+    from newsroom.config import RuntimeConfig
+    from newsroom.runtime_identity import ensure_installation_identity
+
+    class ValidationProvider:
+        provider_name = "openai"
+        model_name = "validation-model"
+
+        def __init__(self):
+            self.calls = 0
+
+        def analyze(self, request):
+            self.calls += 1
+            assert request.text == "Newsroom connection validation test."
+            return dict(_VALID_ANALYSIS_MAPPING)
+
+    config = RuntimeConfig.for_environment("dev", root=tmp_path / "dev")
+    store = InMemoryCredentialStore()
+    import newsroom.domain as domain_module
+
+    monkeypatch.setattr(domain_module, "OSCredentialStore", lambda: store)
+    ensure_installation_identity(config)
+    validation_provider = ValidationProvider()
+    with TestClient(
+        create_app(
+            config=config,
+            frontend_dist=tmp_path / "missing-dist",
+            ai_provider_factory=lambda _config: validation_provider,
+        )
+    ) as client:
+        password = "a-long-test-password-12345"
+        assert client.post("/api/v1/auth/setup", json={"username": "admin", "password": password}).status_code == 201
+        assert client.post("/api/v1/auth/login", json={"username": "admin", "password": password}).status_code == 200
+        headers = {"X-CSRF-Token": client.cookies.get("newsroom_csrf")}
+        created = client.post(
+            "/api/v1/ai/providers",
+            headers=headers,
+            json={
+                "display_name": "Validation gateway",
+                "base_url": "https://api.example.test/v1",
+                "model": "validation-model",
+            },
+        )
+        assert created.status_code == 201
+        provider_id = created.json()["id"]
+        credential = client.put(
+            f"/api/v1/ai/providers/{provider_id}/credential",
+            headers=headers,
+            json={"expected_revision": created.json()["revision"], "secret": "sentinel-validation-secret"},
+        )
+        assert credential.status_code == 200
+        assert validation_provider.calls == 0
+        assert client.get("/api/v1/ai/providers").status_code == 200
+        assert validation_provider.calls == 0
+
+        tested = client.post(
+            f"/api/v1/ai/providers/{provider_id}/test",
+            headers=headers,
+            json={"expected_revision": credential.json()["revision"], "authorize_paid": True},
+        )
+
+        assert tested.status_code == 200
+        payload = tested.json()
+        assert payload["status"] == "passed"
+        assert payload["validation_status"] == "passed"
+        assert payload["validation_revision"] == credential.json()["revision"]
+        assert payload["provider"] == "openai"
+        assert "sentinel-validation-secret" not in tested.text
+        assert validation_provider.calls == 1
+        assert BudgetService(config.database_path).paid_enabled() is False
+
+
+def test_provider_validation_failure_is_safe_and_consumes_the_explicit_test_reservation(tmp_db):
+    apply_migrations(tmp_db)
+    configuration = AIConfigurationService(
+        tmp_db,
+        credential_store=InMemoryCredentialStore(),
+        credential_namespace="installation-test",
+    )
+    connection = configuration.create_connection(
+        {
+            "display_name": "Malformed gateway",
+            "base_url": "https://api.example.test/v1",
+            "model": "malformed-model",
+        }
+    )
+    saved = configuration.set_credential(connection["id"], "sentinel-validation-secret", expected_revision=1)
+
+    class MalformedProvider:
+        def analyze(self, _request):
+            return {"secret": "sentinel-provider-body"}
+
+    result = AIProviderValidationService(
+        tmp_db,
+        configuration_service=configuration,
+        provider_factory=lambda _config: MalformedProvider(),
+    ).validate_connection(
+        connection["id"],
+        expected_revision=saved["revision"],
+        authorize_paid=True,
+    )
+
+    assert result["status"] == "failed"
+    assert result["validation_code"] == "invalid_response"
+    assert result["validation_revision"] == saved["revision"]
+    assert "sentinel-validation-secret" not in json.dumps(result)
+    assert "sentinel-provider-body" not in json.dumps(result)
+    usage = _get(tmp_db, "SELECT * FROM provider_usage WHERE request_type = 'ai:paid'")
+    assert usage is not None
+    assert json.loads(usage["outcome"])["status"] == "failed"
+    assert json.loads(usage["outcome"])["validation_code"] == "invalid_response"
+
+
+def test_provider_validation_maps_auth_failure_to_a_safe_code(tmp_db):
+    apply_migrations(tmp_db)
+    configuration = AIConfigurationService(
+        tmp_db,
+        credential_store=InMemoryCredentialStore(),
+        credential_namespace="installation-test",
+    )
+    connection = configuration.create_connection(
+        {
+            "display_name": "Auth failure gateway",
+            "base_url": "https://api.example.test/v1",
+            "model": "auth-model",
+        }
+    )
+    saved = configuration.set_credential(connection["id"], "sentinel-validation-secret", expected_revision=1)
+
+    class AuthenticationError(Exception):
+        status_code = 401
+
+    class RejectedProvider:
+        def analyze(self, _request):
+            raise AuthenticationError("sentinel-auth-response")
+
+    result = AIProviderValidationService(
+        tmp_db,
+        configuration_service=configuration,
+        provider_factory=lambda _config: RejectedProvider(),
+    ).validate_connection(
+        connection["id"],
+        expected_revision=saved["revision"],
+        authorize_paid=True,
+    )
+
+    assert result["status"] == "failed"
+    assert result["validation_code"] == "authentication_failed"
+    assert "sentinel-auth-response" not in json.dumps(result)
+
+
+def test_provider_validation_requires_per_call_authorization_without_calling_provider(tmp_db):
+    apply_migrations(tmp_db)
+    configuration = AIConfigurationService(
+        tmp_db,
+        credential_store=InMemoryCredentialStore(),
+        credential_namespace="installation-test",
+    )
+    connection = configuration.create_connection(
+        {
+            "display_name": "Unauthorized gateway",
+            "base_url": "https://api.example.test/v1",
+            "model": "model",
+        }
+    )
+    saved = configuration.set_credential(connection["id"], "sentinel-validation-secret", expected_revision=1)
+    calls = 0
+
+    def provider_factory(_config):
+        nonlocal calls
+        calls += 1
+        return object()
+
+    with pytest.raises(BudgetExhausted) as error:
+        AIProviderValidationService(
+            tmp_db,
+            configuration_service=configuration,
+            provider_factory=provider_factory,
+        ).validate_connection(
+            connection["id"],
+            expected_revision=saved["revision"],
+            authorize_paid=False,
+        )
+
+    assert error.value.reason == "test_not_authorized"
+    assert calls == 0
+    assert _count(tmp_db, "provider_usage", where="request_type = 'ai:paid'") == 0
+    assert configuration.get_connection(connection["id"])["validation_status"] == "unvalidated"
+
+
+def test_provider_validation_rejects_invalid_expected_revision_type(tmp_db):
+    apply_migrations(tmp_db)
+    configuration = AIConfigurationService(tmp_db)
+    connection = configuration.create_connection(
+        {
+            "display_name": "Revision validation gateway",
+            "base_url": "https://api.example.test/v1",
+            "model": "model",
+        }
+    )
+
+    with pytest.raises(DomainValidation, match="expected_revision"):
+        AIProviderValidationService(
+            tmp_db,
+            configuration_service=configuration,
+        ).validate_connection(
+            connection["id"],
+            expected_revision="1",
+            authorize_paid=False,
+        )
+
+
+def test_provider_validation_discards_a_result_when_connection_revision_changes(tmp_db):
+    apply_migrations(tmp_db)
+    configuration = AIConfigurationService(
+        tmp_db,
+        credential_store=InMemoryCredentialStore(),
+        credential_namespace="installation-test",
+    )
+    connection = configuration.create_connection(
+        {
+            "display_name": "Racing gateway",
+            "base_url": "https://api.example.test/v1",
+            "model": "model",
+        }
+    )
+    saved = configuration.set_credential(connection["id"], "sentinel-validation-secret", expected_revision=1)
+
+    class RacingProvider:
+        def analyze(self, _request):
+            configuration.update_connection(
+                connection["id"],
+                {"model": "changed-during-test"},
+                expected_revision=saved["revision"],
+            )
+            return dict(_VALID_ANALYSIS_MAPPING)
+
+    with pytest.raises(DomainConflict, match="discard this validation"):
+        AIProviderValidationService(
+            tmp_db,
+            configuration_service=configuration,
+            provider_factory=lambda _config: RacingProvider(),
+        ).validate_connection(
+            connection["id"],
+            expected_revision=saved["revision"],
+            authorize_paid=True,
+        )
+
+    current = configuration.get_connection(connection["id"])
+    assert current["model"] == "changed-during-test"
+    assert current["validation_status"] == "unvalidated"
+
+
+def test_connection_removal_rechecks_revision_after_credential_cleanup(tmp_db):
+    apply_migrations(tmp_db)
+    store = InMemoryCredentialStore()
+    base = AIConfigurationService(
+        tmp_db,
+        credential_store=store,
+        credential_namespace="installation-test",
+    )
+    connection = base.create_connection(
+        {
+            "display_name": "Removal race gateway",
+            "base_url": "https://api.example.test/v1",
+            "model": "model",
+        }
+    )
+
+    class RacingConfigurationService(AIConfigurationService):
+        def remove_credential(self, identifier, *, expected_revision=None):
+            disabled = super().remove_credential(
+                identifier,
+                expected_revision=expected_revision,
+            )
+            self.update_connection(
+                identifier,
+                {"model": "changed-during-removal"},
+                expected_revision=disabled["revision"],
+            )
+            return disabled
+
+    racing = RacingConfigurationService(
+        tmp_db,
+        credential_store=store,
+        credential_namespace="installation-test",
+    )
+    with pytest.raises(DomainConflict, match="changed"):
+        racing.remove_connection(connection["id"], expected_revision=connection["revision"])
+
+    current = base.get_connection(connection["id"])
+    assert current["model"] == "changed-during-removal"
+
+
+def test_openai_adapter_does_not_follow_redirects_with_a_stored_credential(monkeypatch):
+    captured: dict[str, Any] = {}
+
+    class FakeOpenAI:
+        def __init__(self, **kwargs):
+            captured.update(kwargs)
+
+    import openai
+
+    monkeypatch.setattr(openai, "OpenAI", FakeOpenAI)
+    provider = OpenAICompatibleArticleAnalysisProvider(
+        AnalysisProviderConfig(
+            provider="openai",
+            api_key=FAKE_KEY,
+            base_url="https://api.example.test/v1",
+        )
+    )
+
+    provider._default_client()
+
+    assert captured["http_client"].follow_redirects is False
+    captured["http_client"].close()
 
 
 # ---------------------------------------------------------------------------

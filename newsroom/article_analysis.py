@@ -67,7 +67,9 @@ from .domain import (
     DomainConflict,
     DomainNotFound,
     DomainValidation,
+    _ai_positive_int,
     new_id,
+    is_loopback_ai_base_url,
     utc_now,
 )
 from .jobs import (
@@ -675,8 +677,8 @@ class AIConfigurationResolver:
 class OpenAICompatibleArticleAnalysisProvider:
     """One real model-backed provider: OpenAI-compatible chat completions.
 
-    Uses the official ``openai`` SDK (or any OpenAI-compatible endpoint via
-    ``NEWSROOM_ANALYSIS_BASE_URL``) with an explicit ``httpx.Timeout``
+    Uses the official ``openai`` SDK (or any validated OpenAI-compatible
+    endpoint) with an explicit ``httpx.Timeout``
     (connect/read/write) and a bounded ``max_retries`` so Newsroom's retry
     semantics stay bounded. Structured output is requested via the chat
     completions ``response_format`` JSON-schema mechanism; the response is
@@ -712,9 +714,18 @@ class OpenAICompatibleArticleAnalysisProvider:
 
         from openai import OpenAI  # noqa: PLC0415
 
+        api_key = self.config.api_key
+        if api_key is None and is_loopback_ai_base_url(self.config.base_url or ""):
+            # The SDK requires a non-empty value even for an explicitly
+            # configured keyless loopback endpoint. This sentinel is never
+            # permitted for hosted URLs and is sent only to loopback.
+            api_key = "newsroom-loopback"
         return OpenAI(
-            api_key=self.config.api_key,
+            api_key=api_key,
             base_url=self.config.base_url,
+            # A provider must never receive the stored credential after an
+            # HTTP redirect changes its destination.
+            http_client=httpx.Client(follow_redirects=False),
             timeout=httpx.Timeout(
                 self.config.timeout_seconds,
                 connect=self.config.connect_timeout_seconds,
@@ -725,7 +736,7 @@ class OpenAICompatibleArticleAnalysisProvider:
         )
 
     def analyze(self, request: ArticleAnalysisRequest) -> ArticleAnalysisOutput | Mapping[str, Any]:
-        if not self.config.api_key:
+        if not self.config.api_key and not is_loopback_ai_base_url(self.config.base_url or ""):
             raise AIConfigurationError(
                 "analysis provider 'openai' requires NEWSROOM_ANALYSIS_API_KEY"
             )
@@ -769,6 +780,171 @@ class OpenAICompatibleArticleAnalysisProvider:
         if not isinstance(parsed, Mapping):
             raise AIValidationError("article analysis provider returned a non-object result")
         return dict(parsed)
+
+
+class AIProviderValidationService:
+    """Run one explicit, bounded structured-output capability test."""
+
+    _TEST_TEXT = "Newsroom connection validation test."
+    _TEST_COST_USD = 0.01
+
+    def __init__(
+        self,
+        db_path: str | Path,
+        *,
+        configuration_service: AIConfigurationService | None = None,
+        provider_factory: Any | None = None,
+    ):
+        self.db_path = Path(db_path)
+        self.configuration_service = configuration_service or AIConfigurationService(self.db_path)
+        self.provider_factory = provider_factory or OpenAICompatibleArticleAnalysisProvider
+
+    @staticmethod
+    def _error_code(exc: Exception) -> str:
+        if isinstance(exc, AITimeout) or "timeout" in type(exc).__name__.casefold():
+            return "timeout"
+        if isinstance(exc, AIValidationError):
+            return "invalid_response"
+        if isinstance(exc, AIConfigurationError):
+            return "configuration_error"
+        cause = exc.__cause__ or getattr(exc, "__context__", None)
+        status = getattr(exc, "status_code", None)
+        if status is None and cause is not None:
+            status = getattr(cause, "status_code", None)
+        if status is None and cause is not None:
+            status = getattr(cause, "status", None)
+        if status in {401, 403}:
+            return "authentication_failed"
+        if status == 404:
+            return "model_unavailable"
+        if isinstance(status, int) and (status == 429 or status >= 500):
+            return "provider_unavailable"
+        return "provider_error"
+
+    @staticmethod
+    def _token_units(provider: Any) -> int | None:
+        usage = getattr(provider, "last_usage", None)
+        value = usage.get("token_units") if isinstance(usage, Mapping) else None
+        return int(value) if isinstance(value, (int, float)) and math.isfinite(float(value)) else None
+
+    @staticmethod
+    def _response(connection: Mapping[str, Any]) -> dict[str, Any]:
+        return {
+            "capability": ARTICLE_ANALYSIS_CAPABILITY,
+            "connection_id": connection["id"],
+            "status": connection["validation_status"],
+            "validation_status": connection["validation_status"],
+            "validation_code": connection["validation_code"],
+            "validation_revision": connection["validation_revision"],
+            "validated_at": connection["validated_at"],
+            "revision": connection["revision"],
+            "generation": connection["generation"],
+            "provider": "openai",
+            "model": connection["model"],
+        }
+
+    def validate_connection(
+        self,
+        connection_id: str,
+        *,
+        expected_revision: int,
+        authorize_paid: bool,
+    ) -> dict[str, Any]:
+        expected_revision = _ai_positive_int(
+            expected_revision, "expected_revision", maximum=1_000_000
+        )
+        if not isinstance(authorize_paid, bool):
+            raise DomainValidation("authorize_paid must be a boolean")
+        connection = self.configuration_service.get_connection(connection_id)
+        if int(connection["revision"]) != expected_revision:
+            raise DomainConflict("AI connection changed; refresh and retry")
+
+        api_key: str | None = None
+        if connection["credential_required"]:
+            try:
+                api_key = self.configuration_service.read_credential(connection_id)
+            except CredentialStoreError:
+                updated = self.configuration_service.record_validation(
+                    connection_id,
+                    expected_revision=expected_revision,
+                    status="failed",
+                    code="credential_unavailable",
+                )
+                return self._response(updated)
+
+        config = AnalysisProviderConfig(
+            provider=ANALYSIS_PROVIDER_OPENAI,
+            api_key=api_key,
+            base_url=str(connection["base_url"]),
+            model=str(connection["model"]),
+            max_input_chars=int(connection["max_input_chars"]),
+            max_tokens=int(connection["max_output_tokens"]),
+        )
+        budget = BudgetService(self.db_path)
+        reservation = budget.reserve_paid_capability(
+            capability=ARTICLE_ANALYSIS_CAPABILITY,
+            work_id=f"connection-test:{connection_id}:{expected_revision}",
+            estimated_cost_usd=self._TEST_COST_USD,
+            max_paid_calls=1,
+            max_paid_cost_usd=self._TEST_COST_USD,
+            max_paid_calls_per_work=1,
+            max_paid_cost_usd_per_work=self._TEST_COST_USD,
+            purpose="connection_test",
+            allow_test=authorize_paid,
+        )
+        started = time.monotonic()
+        provider: Any | None = None
+        provider_name = "openai"
+        try:
+            provider = self.provider_factory(config)
+            raw = provider.analyze(
+                ArticleAnalysisRequest(
+                    title="",
+                    text=self._TEST_TEXT,
+                    scope_terms=(),
+                )
+            )
+            try:
+                ArticleAnalysisOutput.model_validate(raw)
+            except Exception as exc:
+                raise AIValidationError("provider returned an invalid structured response") from exc
+        except Exception as exc:
+            code = self._error_code(exc)
+            budget.finalize_paid_capability(
+                reservation["id"],
+                provider=provider_name,
+                token_units=self._token_units(provider),
+                latency_ms=max(0, int((time.monotonic() - started) * 1000)),
+                outcome="failed",
+                metadata={"purpose": "connection_test", "validation_code": code, "model": config.model},
+            )
+            updated = self.configuration_service.record_validation(
+                connection_id,
+                expected_revision=expected_revision,
+                status="failed",
+                code=code,
+            )
+            return self._response(updated)
+
+        budget.finalize_paid_capability(
+            reservation["id"],
+            provider=provider_name,
+            token_units=self._token_units(provider),
+            latency_ms=max(0, int((time.monotonic() - started) * 1000)),
+            outcome="succeeded",
+            metadata={
+                "purpose": "connection_test",
+                "validation_code": "structured_output_supported",
+                "model": config.model,
+            },
+        )
+        updated = self.configuration_service.record_validation(
+            connection_id,
+            expected_revision=expected_revision,
+            status="passed",
+            code="structured_output_supported",
+        )
+        return self._response(updated)
 
 
 def _is_retryable_provider_failure(exc: BaseException) -> bool:
@@ -1398,6 +1574,7 @@ __all__ = [
     "ANALYSIS_SCHEMA_VERSION",
     "ARTIFACT_INPUT_VIEW_VERSION",
     "ARTICLE_ANALYSIS_CAPABILITY",
+    "AIProviderValidationService",
     "AnalysisProviderConfig",
     "ArticleAnalysisService",
     "AnalysisInputContract",

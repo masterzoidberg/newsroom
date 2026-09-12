@@ -153,6 +153,20 @@ def normalize_ai_base_url(value: object) -> str:
     return urlunsplit((scheme, authority, path, "", ""))
 
 
+def is_loopback_ai_base_url(value: str) -> bool:
+    """Return whether an already-normalized AI URL targets loopback only."""
+    try:
+        host = urlsplit(str(value)).hostname
+    except ValueError:
+        return False
+    if not host:
+        return False
+    try:
+        return ip_address(host).is_loopback
+    except ValueError:
+        return host.casefold().rstrip(".") == "localhost"
+
+
 def _ai_opaque_reference(value: object | None) -> str | None:
     if value is None:
         return None
@@ -478,6 +492,10 @@ class AIConfigurationService:
         credential_required = _ai_bool(
             data.get("credential_required", True), "credential_required"
         )
+        if not credential_required and not is_loopback_ai_base_url(base_url):
+            raise DomainValidation(
+                "keyless AI connections require a loopback base_url"
+            )
         max_input_chars = _ai_positive_int(
             data.get("max_input_chars", 24_000), "max_input_chars", maximum=1_000_000
         )
@@ -834,6 +852,19 @@ class AIConfigurationService:
                 next_credential_required = bool(
                     values.get("credential_required", current["credential_required"])
                 )
+                next_base_url = str(values.get("base_url", current["base_url"]))
+                if not next_credential_required and not is_loopback_ai_base_url(next_base_url):
+                    raise DomainValidation(
+                        "keyless AI connections require a loopback base_url"
+                    )
+                if (
+                    "base_url" in values
+                    and values["base_url"] != current["base_url"]
+                    and current["credential_ref"]
+                ):
+                    raise DomainConflict(
+                        "AI connection base_url change requires removing credential first"
+                    )
                 if next_enabled and next_credential_required and not current["credential_ref"]:
                     raise DomainConflict("AI connection credentials are not configured")
                 now = utc_now()
@@ -850,6 +881,88 @@ class AIConfigurationService:
         finally:
             conn.close()
         return self.get_connection(identifier)
+
+    def record_validation(
+        self,
+        identifier: str,
+        *,
+        expected_revision: int,
+        status: str,
+        code: str,
+    ) -> dict[str, Any]:
+        """Persist a bounded result tied to the exact connection revision."""
+        expected_revision = _ai_positive_int(
+            expected_revision, "expected_revision", maximum=1_000_000
+        )
+        status = _ai_text(status, "validation_status", maximum=16)
+        if status not in {"passed", "failed"}:
+            raise DomainValidation("validation_status must be passed or failed")
+        code = _ai_text(code, "validation_code", maximum=80)
+        now = utc_now()
+        conn = storage.connect(self.db_path)
+        try:
+            with storage.write_tx(conn):
+                current = conn.execute(
+                    "SELECT revision FROM ai_connections WHERE id = ?", (identifier,)
+                ).fetchone()
+                if current is None:
+                    raise DomainNotFound("AI connection not found")
+                if int(current["revision"]) != expected_revision:
+                    raise DomainConflict("AI connection changed; discard this validation result")
+                conn.execute(
+                    """
+                    UPDATE ai_connections
+                    SET validation_status = ?, validation_code = ?,
+                        validation_revision = ?, validated_at = ?, updated_at = ?
+                    WHERE id = ?
+                    """,
+                    (status, code, expected_revision, now, now, identifier),
+                )
+        finally:
+            conn.close()
+        return self.get_connection(identifier)
+
+    def remove_connection(
+        self,
+        identifier: str,
+        *,
+        expected_revision: int | None = None,
+    ) -> dict[str, Any]:
+        """Disable/reroute and remove a connection only after vault cleanup."""
+        disabled = self.remove_credential(identifier, expected_revision=expected_revision)
+        current = self._connection_row(identifier)
+        if current["credential_ref"] is not None or current["credential_cleanup_version"] is not None:
+            disabled["deleted"] = False
+            disabled["removal_required"] = True
+            return disabled
+        deletion_revision = int(disabled["revision"])
+        conn = storage.connect(self.db_path)
+        try:
+            with storage.write_tx(conn):
+                current = conn.execute(
+                    "SELECT revision FROM ai_connections WHERE id = ?", (identifier,)
+                ).fetchone()
+                if current is None:
+                    raise DomainNotFound("AI connection not found")
+                if int(current["revision"]) != deletion_revision:
+                    raise DomainConflict("AI connection changed; refresh and retry")
+                now = utc_now()
+                generation = self._advance_generation(conn, now)
+                deleted = conn.execute(
+                    """
+                    DELETE FROM ai_connections
+                    WHERE id = ? AND revision = ?
+                      AND credential_ref IS NULL
+                      AND credential_cleanup_version IS NULL
+                      AND enabled = 0
+                    """,
+                    (identifier, deletion_revision),
+                )
+                if deleted.rowcount != 1:
+                    raise DomainConflict("AI connection changed; refresh and retry")
+        finally:
+            conn.close()
+        return {"id": identifier, "deleted": True, "generation": generation}
 
     def set_route(
         self,
@@ -2004,5 +2117,6 @@ __all__ = [
     "DomainError",
     "DomainNotFound",
     "DomainValidation",
+    "is_loopback_ai_base_url",
     "normalize_ai_base_url",
 ]

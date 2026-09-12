@@ -15,7 +15,11 @@ from .acquisition import (
     SourceProfileService,
     SourceSuggestionService,
 )
-from .article_analysis import AIConfigurationResolver, ArticleAnalysisService
+from .article_analysis import (
+    AIConfigurationResolver,
+    AIProviderValidationService,
+    ArticleAnalysisService,
+)
 from .domain import AIConfigurationService, CoreService, DomainConflict, DomainNotFound, DomainValidation
 from .evidence import EvidenceService
 from .jobs import BudgetService, JobService, SchedulerService, compose_completion_hooks
@@ -748,6 +752,11 @@ class AICredentialRemove(StrictModel):
     expected_revision: int = Field(ge=1, le=1_000_000)
 
 
+class AIProviderTest(StrictModel):
+    expected_revision: int = Field(ge=1, le=1_000_000)
+    authorize_paid: bool = False
+
+
 class AICapabilityRouteWrite(StrictModel):
     provider_route: Optional[Literal["local", "connection"]] = None
     route: Optional[Literal["local", "connection"]] = None
@@ -1064,6 +1073,7 @@ def create_domain_router(
     require_user: Callable,
     require_csrf: Callable,
     evidence_service: EvidenceService | None = None,
+    ai_provider_factory: Any | None = None,
 ) -> APIRouter:
     router = APIRouter()
     ledger = evidence_service or EvidenceService(service.db_path)
@@ -1080,7 +1090,11 @@ def create_domain_router(
         rerun_factory=research_job_rerun_factory,
     )
     budgets = BudgetService(service.db_path)
-    configuration_resolver = AIConfigurationResolver(service.db_path)
+    ai_configuration = AIConfigurationService(service.db_path)
+    configuration_resolver = AIConfigurationResolver(
+        service.db_path,
+        configuration_service=ai_configuration,
+    )
     scheduler = SchedulerService(service.db_path)
     policies = MonitoringPolicyService(service.db_path)
     monitors = MonitorService(service.db_path)
@@ -1110,7 +1124,11 @@ def create_domain_router(
         service.db_path,
         configuration_resolver=configuration_resolver,
     )
-    ai_configuration = AIConfigurationService(service.db_path)
+    provider_validation = AIProviderValidationService(
+        service.db_path,
+        configuration_service=ai_configuration,
+        provider_factory=ai_provider_factory,
+    )
     knowledge = KnowledgeService(service.db_path)
     corrections = StoryCorrectionService(service.db_path)
 
@@ -2813,6 +2831,25 @@ def create_domain_router(
         write_guard(request)
         response.headers["Cache-Control"] = "no-store"
         return ai_configuration.remove_credential(
+            identifier,
+            expected_revision=payload.expected_revision,
+        )
+
+    @router.post("/ai/providers/{identifier}/test")
+    async def test_ai_provider(request: Request, response: Response, identifier: str, payload: AIProviderTest):
+        write_guard(request)
+        response.headers["Cache-Control"] = "no-store"
+        return provider_validation.validate_connection(
+            identifier,
+            expected_revision=payload.expected_revision,
+            authorize_paid=payload.authorize_paid,
+        )
+
+    @router.delete("/ai/providers/{identifier}")
+    async def remove_ai_provider(request: Request, response: Response, identifier: str, payload: AICredentialRemove):
+        write_guard(request)
+        response.headers["Cache-Control"] = "no-store"
+        return ai_configuration.remove_connection(
             identifier,
             expected_revision=payload.expected_revision,
         )
