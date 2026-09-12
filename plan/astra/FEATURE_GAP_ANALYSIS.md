@@ -20,7 +20,7 @@ Ratings are against main at `3d7f9cf`, with stack differences explicitly called 
 | C14 Story clustering/evolution | Follow event changes and safe corrections | MOSTLY_COMPLETE | automatic_story_resolution.py; story_evolution.py; story_corrections.py; phase27/296 tests | Accessible change/disagreement/correction journeys and content yield qualification | AST-35, AST-40, AST-47 |
 | C15 Claim evidence/provenance | Summary → Claim → exact span → source/version | COMPLETE | evidence_promotion.py; provenance.py; EvidenceView.tsx; tests/test_phase22_3_trust_boundary.py | Narrow core trust contract complete; contextual navigation still needs UX work | AST-35 |
 | C16 Questions and gaps | Accumulate evidence toward user questions | MOSTLY_COMPLETE | research_questions.py; research_prioritization.py; hypotheses.py; phase25 tests; QuestionsView | Question-first Watch and bounded pursuit/context; local planner empty | AST-41 |
-| C17 Alerts | Explainable scoped important alerts plus all history | MOSTLY_COMPLETE | reports.py:AlertService; alert_automation.py; AlertsView.tsx; phase23d tests | Threshold mismatch, scoped controls and lower-priority history | AST-39 |
+| C17 Alerts | Explainable scoped important alerts plus all history | COMPLETE | reports.py:AlertService; alert_automation.py; AlertsView.tsx; phase23d tests | — | AST-39 |
 | C18 Living reports/briefings | Maintained synthesis with user-selected briefing cadence | MOSTLY_COMPLETE | reports.py; BriefingScheduleService; domain_api.py; ReportsView; InboxView; phase11/23c tests | Durable schedule and latest-output UX are present; real-use usefulness and installed/background qualification remain open | AST-36, AST-37, AST-38 |
 | C19 What changed since visit | Persistent returning-user review range | PARTIAL | attention.py; temporal.py; InboxView manual daily briefing/render timestamp | Visit boundary, readable range and complete lower-priority access | AST-33, AST-34 |
 | C20 Search/browse/history | Names, context, saved and historical evidence | MOSTLY_COMPLETE | knowledge.py; workbench.py; WorkbenchView; ReviewViews; phase26 tests | Discoverable context, pagination and ID-free selection | AST-42, AST-54, AST-55 |
@@ -38,7 +38,7 @@ Ratings are against main at `3d7f9cf`, with stack differences explicitly called 
 ## Gaps by kind and priority
 
 - **Product P1:** semantic vocabulary provider currently empty; first-run source discovery has no external inputs; durable briefing cadence not located. C05/C06/C18 need bounded additions, not claims that existing APIs deliver them.
-- **UX P1:** raw IDs in Watch/report/Ask; Home lacks first-Watch action and real freshness; lower-priority alerts hidden; unclear contextual evidence paths. C03/C04/C17/C19/C27.
+- **UX P1:** raw IDs in Watch/report/Ask; Home lacks first-Watch action and real freshness; contextual selection remains uneven outside the completed alert path. C03/C04/C19/C27.
 - **Integration P1:** backend capabilities exist independently; Watch setup, Sources, policy, analysis, reports and questions need named contextual paths. C07/C10–C16/C20.
 - **Reliability P0:** main lacks stack lifecycle fixes; AST-05 installed qualification remains open. Source network/extraction variability and PWA update behavior require bounded failure proof. C02/C08/C09/C21–C24.
 - **Evidence P1:** passing trust tests does not establish relevance/summary usefulness, installed lifecycle, physical phone or four-week value. C10/C13/C14/C23/C26.

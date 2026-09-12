@@ -1532,6 +1532,13 @@ class AlertService:
     def list_alerts(self, *, status: str | None = None, min_importance: float | None = None, page: int = 1, page_size: int = 25) -> dict[str, Any]:
         if status is not None and status not in ALERT_STATUSES:
             raise DomainValidation("invalid alert status")
+        if min_importance is not None:
+            try:
+                min_importance = float(min_importance)
+            except (TypeError, ValueError) as exc:
+                raise DomainValidation("min_importance must be numeric") from exc
+            if not 0.0 <= min_importance <= 1.0:
+                raise DomainValidation("min_importance must be between 0 and 1")
         if page < 1 or page_size < 1 or page_size > 100:
             raise DomainValidation("invalid alert page")
         conn = storage.connect(self.db_path)

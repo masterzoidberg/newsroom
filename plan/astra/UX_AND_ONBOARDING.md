@@ -12,7 +12,7 @@ This is a source-grounded UX audit and desired experience, not a new browser acc
 | Vocabulary | approve/reject/edit proposals and query plan | useful boundary, but no semantic default suggestions | AST-28–29 |
 | Home | manual daily briefing, six attention rows, render-time Last checked | weak returning-user summary; timestamp overstates collection | AST-27,33–34 |
 | Reports | canonical target ID; manual generate | no contextual setup or briefing cadence | AST-36–38 |
-| Alerts | ≥0.85 fetch; rules use ≥0.5; global default scope | some matching alerts hidden; scope/noise control unclear | AST-39 |
+| Alerts | Important by default; All/history and rule scope/threshold controls | keep authoritative in-app history when browser permission is denied; no OS-push promise when closed | AST-39 |
 | Evidence/Stories | exact excerpts, provenance and correction structures | signature feature exists but cross-screen navigation needs proof | AST-35,40 |
 | Research/Ask | question form exists; research advanced, Ask object IDs | question-first journey and follow-up context disconnected | AST-41–42,52–55 |
 | Settings/status | raw budget/config; main liveness overclaims health | owner cannot configure providers/recover confidently | AST-05–11,43–44 |

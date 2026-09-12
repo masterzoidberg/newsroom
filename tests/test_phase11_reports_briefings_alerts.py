@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import sqlite3
 import threading
 from datetime import datetime, timedelta, timezone
@@ -10,7 +11,7 @@ from fastapi.testclient import TestClient
 from newsroom import storage
 from newsroom.app import create_app
 from newsroom.config import RuntimeConfig
-from newsroom.domain import CoreService, DomainConflict, DomainValidation, utc_now
+from newsroom.domain import CoreService, DomainConflict, DomainValidation, new_id, utc_now
 from newsroom.evidence import EvidenceService
 from newsroom.intelligent_monitoring import WatchService
 from newsroom.jobs import BRIEFING_GENERATE_JOB_TYPE, JobService, SchedulerService
@@ -344,6 +345,63 @@ def test_material_change_alert_has_durable_in_app_ack_and_browser_fallback(tmp_d
     assert any(item["channel"] == "browser" and item["status"] == "denied" for item in deliveries)
     acknowledged = alerts.acknowledge(alert["id"], "user_1")
     assert acknowledged["status"] == "acknowledged"
+
+
+def test_alert_inbox_threshold_history_and_watch_scope_are_persisted(tmp_db):
+    apply_migrations(tmp_db)
+    _, _, story, _, _, _ = _accepted_story(tmp_db)
+    monitor = _monitor(tmp_db, story["id"])
+    alerts = AlertService(tmp_db)
+    rule = alerts.create_rule(
+        {
+            "name": "Watch corroboration",
+            "target_type": "all",
+            "event_types": ["corroboration"],
+            "min_importance": 0.45,
+        }
+    )
+    alert_id = new_id("alert")
+    now = utc_now()
+    conn = storage.connect(tmp_db)
+    try:
+        with storage.write_tx(conn):
+            conn.execute(
+                """
+                INSERT INTO alerts(
+                    id, rule_id, story_id, event_type, title, body,
+                    importance_score, dedupe_key, cause_json, status, created_at
+                ) VALUES (?, ?, ?, 'corroboration', ?, ?, 0.45, ?, ?, 'unread', ?)
+                """,
+                (
+                    alert_id,
+                    rule["id"],
+                    story["id"],
+                    "Corroboration: Atlas release",
+                    "A lower-priority corroborating source was recorded.",
+                    new_id("dedupe"),
+                    json.dumps([]),
+                    now,
+                ),
+            )
+    finally:
+        conn.close()
+
+    assert alerts.list_alerts(status="unread", min_importance=0.5)["total"] == 0
+    assert alerts.list_alerts(status="unread", min_importance=0.45)["total"] == 1
+    alerts.acknowledge(alert_id, "owner")
+    assert alerts.list_alerts(status="acknowledged", min_importance=0.0)["total"] == 1
+
+    updated = alerts.update_rule(
+        rule["id"],
+        {"target_type": "monitor", "target_id": monitor["id"], "min_importance": 0.75},
+    )
+    assert updated["target_type"] == "monitor"
+    assert updated["target_id"] == monitor["id"]
+    assert updated["min_importance"] == 0.75
+    assert alerts.get_rule(rule["id"])["target_id"] == monitor["id"]
+
+    with pytest.raises(DomainValidation, match="between 0 and 1"):
+        alerts.list_alerts(min_importance=1.1)
 
 
 def test_daily_briefing_is_timezone_aware_ranked_and_deduplicated(tmp_db):

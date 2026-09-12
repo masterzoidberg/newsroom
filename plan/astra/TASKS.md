@@ -1,6 +1,6 @@
 # Canonical execution ledger
 
-Rebaseline transitioned 2026-09-09 after automated Gate 0 acceptance at integrated head `18c5ee8bdf56a44218af4ecd6d7e8d9ead68f8c0`. Newsroom Run 1 then completed sequentially on `astra/AST-25-27-first-watch` through AST-38 at code head `e47a45e`. AST-25, AST-26, AST-27, AST-33, AST-34, AST-35, AST-36, AST-37 and AST-38 are DONE; AST-33 completed at code head `4a7c0f9` with the full local backend suite green, AST-34 completed with frontend and isolated browser qualification, AST-35 completed with frontend, trust-boundary and isolated browser qualification, AST-36 completed with backend, frontend, full-suite, eval and isolated browser qualification, AST-37 completed with backend, migration, full-suite, eval and frontend build qualification, and AST-38 completed with API, frontend, full-suite, eval and isolated browser qualification. Physical reboot/sign-in and lock/sleep/wake evidence remains pending for release. AST-39 is now the sole READY task.
+Rebaseline transitioned 2026-09-09 after automated Gate 0 acceptance at integrated head `18c5ee8bdf56a44218af4ecd6d7e8d9ead68f8c0`. Newsroom Run 1 then completed sequentially on `astra/AST-25-27-first-watch` through AST-39 at the latest committed AST-39 head. AST-25, AST-26, AST-27, AST-33, AST-34, AST-35, AST-36, AST-37, AST-38 and AST-39 are DONE; AST-33 completed at code head `4a7c0f9` with the full local backend suite green, AST-34 completed with frontend and isolated browser qualification, AST-35 completed with frontend, trust-boundary and isolated browser qualification, AST-36 completed with backend, frontend, full-suite, eval and isolated browser qualification, AST-37 completed with backend, migration, full-suite, eval and frontend build qualification, AST-38 completed with API, frontend, full-suite, eval and isolated browser qualification, and AST-39 completed with alert API/domain tests, full-suite, frontend checks and isolated browser qualification. Physical reboot/sign-in and lock/sleep/wake evidence remains pending for release. AST-40 is the next queued task.
 
 ## Contract inherited by every future task
 
@@ -61,8 +61,8 @@ Statuses: READY, NOT_STARTED, IN_PROGRESS, DONE, BLOCKED, DEFERRED, SUPERSEDED. 
 | AST-36 | Create and read Living Reports from named Watch context | DONE | AST-35 | 2 |
 | AST-37 | Add durable user-selected briefing schedules | DONE | AST-36 | 3 |
 | AST-38 | Expose briefing preferences and first intelligence choices | DONE | AST-37 | 2 |
-| AST-39 | Make alert triage scoped and complete | READY | AST-38 | 2 |
-| AST-40 | Expose Story changes, disagreements and correction preview | NOT_STARTED | AST-35 | 2 |
+| AST-39 | Make alert triage scoped and complete | DONE | AST-38 | 2 |
+| AST-40 | Expose Story changes, disagreements and correction preview | READY | AST-35 | 2 |
 | AST-41 | Support question-first Watches and contextual research | NOT_STARTED | AST-29, AST-35 | 3 |
 | AST-42 | Make search, saved and history discoverable by name | NOT_STARTED | AST-35, AST-41 | 2 |
 | AST-43 | Add owner verified-backup and diagnostic controls | NOT_STARTED | AST-11, AST-05 | 3 |
@@ -499,7 +499,7 @@ Full original task bodies, acceptance and completion evidence are preserved in [
 
 ## AST-39 — Make alert triage scoped and complete
 
-- **Status:** READY
+- **Status:** DONE
 - **Outcome / why it matters:** Make alert triage scoped and complete. See the mapped user gap in FEATURE_GAP_ANALYSIS and milestone in COMPLETION_ROADMAP.
 - **Dependencies:** AST-38
 - **Exact scope / files:** frontend/src/views/AlertsView.tsx; newsroom/reports.py; tests/test_phase11_reports_briefings_alerts.py
@@ -509,11 +509,11 @@ Full original task bodies, acceptance and completion evidence are preserved in [
 - **Model:** TIER 2; reasoning medium.
 - **Prompt filename:** Not generated: outside the six-task horizon. Generate `prompts/AST-39-<bounded-title>.md` after dependencies land; retained old template (if any) is historical only.
 - **Non-goals, invariants, browser evidence, rollback, cost and stop condition:** inherited in full from Contract inherited by every future task above.
-- **Completion evidence:** Not executed by this rebaseline. AST-05 has implementation on the unmerged stack but incomplete qualification; all other records describe future work or explicit external gates.
+- **Completion evidence:** DONE on `astra/AST-25-27-first-watch` at the latest committed AST-39 head. `AlertsView.tsx` now defaults to Important unread alerts at ≥0.85, exposes all unread rule matches and acknowledged history, supports Watch Source monitor scope selection, persists rule threshold/scope/pause changes through the canonical API, and links each material cause to Story evidence and the exact source. Acknowledgement removes only the unread inbox row after persistence; browser permission denial leaves the in-app alert and history authoritative. The alert metadata row wraps at narrow widths so the complete 390px surface remains horizontally contained. `AlertService.list_alerts()` now validates direct `min_importance` inputs as numeric and bounded to 0..1. Focused Phase 11 alert tests passed (15); full `python -m pytest -q` passed with one expected Windows POSIX-only lifecycle skip; `python -m compileall -q newsroom tests`, `ruff check newsroom tests`, `python -m newsroom.evals validate`, `python -m newsroom.evals lite-contract`, `npm run lint`, `npm run typecheck`, `npm run build`, and `git diff --check` passed. Isolated browser qualification against a disposable local server verified Important (`min_importance=0.85`), All (`min_importance=0`), acknowledgement (HTTP 200), acknowledged history, denied notification preference, rendered cause navigation links, persisted threshold/scope edits after reload, and 390px `innerWidth`/`clientWidth`/`scrollWidth` of 390/390/390. CI status was not queried; local checks are the qualification evidence. No paid calls, external discovery, active-trial contact or runtime data mutation occurred. Physical reboot/sign-in and lock/sleep/wake remain release gates outside this task.
 
 ## AST-40 — Expose Story changes, disagreements and correction preview
 
-- **Status:** NOT_STARTED
+- **Status:** READY
 - **Outcome / why it matters:** Expose Story changes, disagreements and correction preview. See the mapped user gap in FEATURE_GAP_ANALYSIS and milestone in COMPLETION_ROADMAP.
 - **Dependencies:** AST-35
 - **Exact scope / files:** frontend/src/views/StoryEvidenceView.tsx; newsroom/story_corrections.py; tests/test_phase27_story_correction_api.py
