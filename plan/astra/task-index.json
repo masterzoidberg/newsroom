@@ -44,7 +44,7 @@
     "accept": "Concurrent/restarted clients cannot overspend the configured reservation limits; Blocked calls count zero; sent/uncertain calls remain conservatively accounted; Test-connection permission does not enable background paid routing.",
     "tests": "Concurrent API/worker admission, restart/reset, disable race, failed/uncertain/blocked calls, explicit test allowance, global/per-work exhaustion.",
     "tier": "3",
-    "status": "READY",
+    "status": "DONE",
     "prompt": null
   },
   {
@@ -56,7 +56,7 @@
     "accept": "Next work uses saved generation without restarting while in-flight work keeps its identity; All product construction paths report supported local/remote authority coherently; Disable/remove falls back safely and no legacy environment variable re-enables the provider.",
     "tests": "Edit while worker alive, in-flight pinning, provider disable/delete, environment precedence, local fallback identity and restart persistence.",
     "tier": "3",
-    "status": "NOT_STARTED",
+    "status": "READY",
     "prompt": null
   },
   {

@@ -7,10 +7,10 @@ Accepted for Phase 07.
 ## Context
 
 Monitoring work must survive HTTP disconnects, process restarts, and worker
-crashes. The Phase 05 AI router already has in-process paid counters, but those
-counters cannot coordinate multiple process instances or explain durable work
-history. The first release needs restart-safe state without introducing a
-distributed queue.
+crashes. The Phase 05 AI router began with in-process paid counters, and later
+Article Analysis added a dedicated durable invocation ledger. Generic paid
+capabilities now use the existing `BudgetService` and `provider_usage` ledger
+for restart-safe admission without introducing a distributed queue.
 
 ## Decision
 
@@ -37,10 +37,14 @@ Phase 07 keeps the queue in SQLite and hardens the existing `jobs`,
   monthly, or lifetime periods. `budget_reservations` is checked and written
   in the same transaction as a claim, preventing concurrent dispatch from
   exceeding a configured hard cap.
-- Paid dispatch is disabled by default and can be enabled explicitly. Actual
-  provider usage remains attributable through `provider_usage`; reservations
-  are released on completion, cancellation, or lease recovery, while recorded
-  usage continues to count against the period cap.
+- Paid dispatch is disabled by default and can be enabled explicitly. Job
+  reservations are released on completion, cancellation, or lease recovery,
+  while recorded usage continues to count against the period cap. Generic paid
+  capability calls instead insert a `provider_usage` reservation before the
+  provider call and finalize that row in place, so failure or process loss
+  remains conservatively accounted. Article Analysis uses its separate
+  `analysis_invocations` reservation ledger. Connection-test admission requires
+  explicit per-call authorization and never enables background paid routing.
 - Run status is derived from child Job outcomes and becomes success, partial, or
   failed once all children are terminal.
 

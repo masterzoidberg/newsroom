@@ -211,8 +211,10 @@ mutations require the normal session and CSRF header:
   switch. Paid routing is disabled by default.
 
 Workers claim Jobs transactionally with leases; expired claims are recovered
-with bounded backoff. Budget reservations are checked before dispatch, and
-actual usage remains in `provider_usage` after a reservation is released.
+with bounded backoff. Budget reservations are checked before dispatch. Job
+reservations are released on terminal completion or recovery while usage stays
+in `provider_usage`; generic paid-capability reservations are themselves
+durable `provider_usage` rows and are finalized in place after the call.
 
 Generated revisions require `claim_ids` and structured `propositions`, each
 with one or more cited Claim IDs. The server checks that every cited Claim is

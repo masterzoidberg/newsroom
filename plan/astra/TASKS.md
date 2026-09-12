@@ -1,6 +1,6 @@
 # Canonical execution ledger
 
-Rebaseline transitioned 2026-09-09 after automated Gate 0 acceptance at integrated head `18c5ee8bdf56a44218af4ecd6d7e8d9ead68f8c0`. Newsroom Run 1 then completed sequentially on `astra/AST-25-27-first-watch` through AST-40 at the latest committed AST-40 head. AST-25, AST-26, AST-27, AST-33, AST-34, AST-35, AST-36, AST-37, AST-38, AST-39, AST-40, AST-06 and AST-07 are DONE; AST-33 completed at code head `4a7c0f9` with the full local backend suite green, AST-34 completed with frontend and isolated browser qualification, AST-35 completed with frontend, trust-boundary and isolated browser qualification, AST-36 completed with backend, frontend, full-suite, eval and isolated browser qualification, AST-37 completed with backend, migration, full-suite, eval and frontend build qualification, AST-38 completed with API, frontend, full-suite, eval and isolated browser qualification, AST-39 completed with alert API/domain tests, full-suite, frontend checks and isolated browser qualification, AST-40 completed with correction API/domain tests, full-suite, frontend checks, evals and isolated Story browser qualification, AST-06 completed with migration, metadata-service, API, export-policy, full-suite, evaluation and frontend-build qualification, and AST-07 completed with credential-store lifecycle, migration, export-policy, full-suite, evaluation, frontend-build and disposable same-user Windows vault qualification. Physical reboot/sign-in and lock/sleep/wake evidence remains pending for release. AST-08 is now the next READY task; AST-41 remains blocked by unfinished AST-29.
+Rebaseline transitioned 2026-09-09 after automated Gate 0 acceptance at integrated head `18c5ee8bdf56a44218af4ecd6d7e8d9ead68f8c0`. Newsroom Run 1 then completed sequentially on `astra/AST-25-27-first-watch` through AST-40 at the latest committed AST-40 head. AST-25, AST-26, AST-27, AST-33, AST-34, AST-35, AST-36, AST-37, AST-38, AST-39, AST-40, AST-06, AST-07 and AST-08 are DONE; AST-33 completed at code head `4a7c0f9` with the full local backend suite green, AST-34 completed with frontend and isolated browser qualification, AST-35 completed with frontend, trust-boundary and isolated browser qualification, AST-36 completed with backend, frontend, full-suite, eval and isolated browser qualification, AST-37 completed with backend, migration, full-suite, eval and frontend build qualification, AST-38 completed with API, frontend, full-suite, eval and isolated browser qualification, AST-39 completed with alert API/domain tests, full-suite, frontend checks and isolated browser qualification, AST-40 completed with correction API/domain tests, full-suite, frontend checks, evals and isolated Story browser qualification, AST-06 completed with migration, metadata-service, API, export-policy, full-suite, evaluation and frontend-build qualification, AST-07 completed with credential-store lifecycle, migration, export-policy, full-suite, evaluation, frontend-build and disposable same-user Windows vault qualification, and AST-08 completed with durable generic paid admission, multiprocessing regression coverage and telemetry-finalization qualification. Physical reboot/sign-in and lock/sleep/wake evidence remains pending for release. AST-09 is now the sole READY task; AST-41 remains blocked by unfinished AST-29.
 
 ## Contract inherited by every future task
 
@@ -30,8 +30,8 @@ Statuses: READY, NOT_STARTED, IN_PROGRESS, DONE, BLOCKED, DEFERRED, SUPERSEDED. 
 | AST-05 | Qualify the existing Start Newsroom launcher | DONE | AST-01, AST-02, AST-03, AST-04 | 3 |
 | AST-06 | Create typed public AI configuration metadata | DONE | AST-27 | 3 |
 | AST-07 | Store credentials in an approved operating-system vault | DONE | AST-06 | 3 |
-| AST-08 | Make paid admission durable across processes and reloads | READY | AST-07 | 3 |
-| AST-09 | Resolve provider configuration at operation boundaries | NOT_STARTED | AST-08 | 3 |
+| AST-08 | Make paid admission durable across processes and reloads | DONE | AST-07 | 3 |
+| AST-09 | Resolve provider configuration at operation boundaries | READY | AST-08 | 3 |
 | AST-10 | Add bounded provider validation and safe API contracts | NOT_STARTED | AST-09 | 3 |
 | AST-11 | Build functional AI Providers and cost settings | NOT_STARTED | AST-10 | 2 |
 | AST-12 | Original broad task, preserved below | SUPERSEDED | Replaced by AST-23–29,32,41,42,52–55 | — |
@@ -135,7 +135,7 @@ Full original task bodies, acceptance and completion evidence are preserved in [
 
 ## AST-08 — Make paid admission durable across processes and reloads
 
-- **Status:** READY
+- **Status:** DONE
 - **Outcome / why it matters:** Make paid admission durable across processes and reloads. See the mapped user gap in FEATURE_GAP_ANALYSIS and milestone in COMPLETION_ROADMAP.
 - **Dependencies:** AST-07
 - **Exact scope / files:** newsroom/jobs.py; newsroom/ai.py; newsroom/article_analysis.py; tests/test_phase07_jobs.py; tests/test_phase21h_hardening.py.
@@ -145,11 +145,11 @@ Full original task bodies, acceptance and completion evidence are preserved in [
 - **Model:** TIER 3; reasoning high.
 - **Prompt filename:** Not generated: outside the six-task horizon. Generate `prompts/AST-08-<bounded-title>.md` after dependencies land; retained old template (if any) is historical only.
 - **Non-goals, invariants, browser evidence, rollback, cost and stop condition:** inherited in full from Contract inherited by every future task above.
-- **Completion evidence:** Not executed by this rebaseline. AST-05 has implementation on the unmerged stack but incomplete qualification; all other records describe future work or explicit external gates.
+- **Completion evidence:** DONE on 2026-09-12 at implementation commits `4b7892a` and `91f348b`. Extended `BudgetService` with atomic SQLite-backed generic paid-capability reservations in the existing `provider_usage` ledger, including global/per-work/configured scope limits, pre-call accounting that remains counted after provider failure or process loss, in-place finalization, and explicit `connection_test` authorization that never enables background paid routing. `AIRouter` accepts a durable budget authority or infers one from `SQLiteTelemetrySink`; its in-memory counters remain only the legacy fallback when no durable authority is supplied. Article Analysis continues using its dedicated `analysis_invocations` ledger without double-counting generic usage. Added reload, thread-concurrency, spawned-process, failure-accounting, connection-test and reauthorization regression coverage in `tests/test_phase21h_hardening.py`. `python -m pytest -q` passed with 846 tests passed and one documented POSIX-only supervisor skip; `python -m ruff check newsroom tests`, `python -m compileall -q newsroom tests`, and `git diff --check` passed. No paid/provider call was made and the active trial/runtime roots were not contacted; provider configuration resolution at operation boundaries remains AST-09.
 
 ## AST-09 — Resolve provider configuration at operation boundaries
 
-- **Status:** NOT_STARTED
+- **Status:** READY
 - **Outcome / why it matters:** Resolve provider configuration at operation boundaries. See the mapped user gap in FEATURE_GAP_ANALYSIS and milestone in COMPLETION_ROADMAP.
 - **Dependencies:** AST-08
 - **Exact scope / files:** newsroom/runtime.py; newsroom/article_analysis.py; newsroom/document_processing.py; newsroom/domain_api.py; newsroom/intelligent_monitoring.py.

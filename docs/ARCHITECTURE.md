@@ -133,7 +133,10 @@ leases, retry/backoff, cancellation, idempotency, and terminal Run aggregation;
 `SchedulerService` advances persisted Monitor schedules and enqueues due work.
 `WorkerProcess` executes only an explicitly registered handler map outside the
 queue transaction. Budget limits and active reservations are evaluated during
-claim, while `provider_usage` remains the actual cost ledger.
+claim. Paid AI admission is also durable: Article Analysis uses
+`analysis_invocations`, while generic paid capabilities use pre-call
+`provider_usage` reservations that remain counted after failure or process
+loss and are finalized in place.
 
 Phase 08 monitor jobs carry the policy's acquisition, local-model, and USD
 budget only; they cannot silently broaden scope or recursively create work.

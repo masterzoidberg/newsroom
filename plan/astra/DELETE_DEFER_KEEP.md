@@ -7,7 +7,7 @@ No application code or historical document is deleted by this audit. “Delete c
 | Evidence/artifact/promotion/correction/temporal boundaries | KEEP | `content_artifacts.py`, `evidence_promotion.py`, `story_corrections.py`, `temporal.py`; differentiated, tested and data-bearing |
 | Durable jobs and staged completion hooks | KEEP | `runtime.build_worker_queue`, stage services; do not replace with a generic event bus |
 | Monolithic domain API | KEEP now | large file is real debt but a global split delays provider/startup delivery; small new service modules only where a boundary earns them |
-| Two paid-limit layers | SIMPLIFY under AST-08 | retain durable BudgetService authority; router-local counters may remain defensive but cannot define global spending |
+| Two paid-limit layers | SIMPLIFY completed under AST-08 | retain durable `BudgetService` authority; router-local counters remain only as a legacy fallback when no durable authority is supplied and cannot define global spending |
 | Environment-only analysis configuration | RETIRE normal managed authority under AST-09 | preserve explicit one-time import/dev mode; no silent fallback after removal |
 | Three normal installed launchers/tasks | RETIRE normal entry point after AST-05 | supervisor becomes authority; retain advanced commands and safe existing-install migration |
 | `scripts/phase12_server.py` | GUARD/RETIRE normal usage | creates temp DB but hard-codes 8127, collides with product; use explicit safe test endpoint |

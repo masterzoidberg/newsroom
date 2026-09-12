@@ -32,10 +32,14 @@ injected per capability, but escalation requires all of the following:
 - the global paid-call and cost budgets have remaining capacity; and
 - the per-work paid-call and cost budgets have remaining capacity.
 
-Paid routing is disabled by default. The current in-process defaults permit no
-paid calls unless a caller explicitly enables the route and supplies a positive
-budget. Phase 07 may replace the in-process counters with durable Job/Run budget
-ledger enforcement without changing the capability contracts.
+Paid routing is disabled by default. Generic paid capabilities are admitted
+through the durable `BudgetService` authority when a DB-backed router is used:
+the pre-call reservation is serialized in SQLite and remains counted after a
+provider failure or process loss. Article Analysis retains its dedicated
+`analysis_invocations` ledger. AIRouter's in-process counters remain only as a
+compatibility fallback for callers that provide no durable budget authority;
+they never define global spending for production paths. Explicit connection
+tests require per-call authorization and do not enable background paid routing.
 
 Provider responses are parsed through closed Pydantic models with forbidden extra
 fields and bounded numeric/string/list fields. Invalid output, provider errors,

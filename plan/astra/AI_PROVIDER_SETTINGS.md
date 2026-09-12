@@ -13,7 +13,7 @@
 | Ask | normal frontend sends `provider_mode: local`; default `AskService(hosted_enabled=False)`; injectable synthesis path and eval provider exist but are not a supported product paid path |
 | Synthesis/extraction/ranking/etc. | capability interfaces and local implementations exist; production paid coverage is not inferred from interfaces |
 
-Current selection requires `NEWSROOM_ANALYSIS_PROVIDER=openai`, Newsroom-specific API key or `OPENAI_API_KEY`, and `budget.paid_enabled`. Analysis uses durable paid invocation reservations; `AIRouter` additionally has instance-local counters, which are insufficient as a cross-process authority for new paid routes. Actual billing cost is unavailable from the current adapter; token counts and estimated reservation cost are different facts. `_resolve_route` raises when remote is selected but credentials/paid permission are absent: graceful local fallback is a design change, not current behavior.
+Current selection still requires `NEWSROOM_ANALYSIS_PROVIDER=openai`, a Newsroom-specific API key or `OPENAI_API_KEY`, and `budget.paid_enabled` until AST-09 moves resolution to operation boundaries. Article Analysis uses durable paid invocation reservations. AST-08 adds durable generic paid-capability reservations through `BudgetService` and the existing `provider_usage` ledger; `AIRouter` instance-local counters remain only a compatibility fallback when no durable authority is supplied. Actual billing cost is unavailable from the current adapter; token counts and estimated reservation cost are different facts. `_resolve_route` raises when remote is selected but credentials/paid permission are absent: graceful local fallback is a design change owned by AST-09.
 
 ## One coherent configuration authority
 
