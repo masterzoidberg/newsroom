@@ -862,7 +862,12 @@ class AIRouter:
         self.policy = policy or RoutePolicy()
         self.telemetry = telemetry if telemetry is not None else []
         inferred_db_path = telemetry.db_path if isinstance(telemetry, SQLiteTelemetrySink) else None
-        self.budget_service = budget_service or BudgetService(db_path or inferred_db_path) if (budget_service or db_path or inferred_db_path) else None
+        if budget_service is not None:
+            self.budget_service = budget_service
+        elif db_path is not None or inferred_db_path is not None:
+            self.budget_service = BudgetService(db_path or inferred_db_path)
+        else:
+            self.budget_service = None
         self.paid_admission_reserved = paid_admission_reserved
         self.budget_job_id = job_id
         self.budget_monitor_id = monitor_id

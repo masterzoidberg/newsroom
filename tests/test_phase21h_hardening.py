@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import multiprocessing
 import socket
 import sqlite3
 import threading
@@ -96,6 +97,24 @@ class CountingRelevanceProvider:
         if self.error is not None:
             raise self.error
         return {"relevant": True, "confidence": 1.0, "signal": "fixture"}
+
+
+def _reserve_paid_capability_in_process(db_path: str, result_queue: Any, work_id: str) -> None:
+    try:
+        reservation = BudgetService(db_path).reserve_paid_capability(
+            capability="relevance",
+            work_id=work_id,
+            estimated_cost_usd=0.01,
+            max_paid_calls=1,
+            max_paid_cost_usd=0.01,
+            max_paid_calls_per_work=1,
+            max_paid_cost_usd_per_work=0.01,
+        )
+        result_queue.put(("reserved", reservation["id"]))
+    except BudgetExhausted as exc:
+        result_queue.put(("blocked", exc.reason))
+    except BaseException as exc:  # pragma: no cover - assertion below reports it
+        result_queue.put(("error", type(exc).__name__))
 
 
 def _get(db: Path, sql: str, params: tuple[Any, ...] = ()) -> storage.sqlite3.Row | None:
@@ -526,6 +545,35 @@ def test_concurrent_paid_routers_share_one_durable_admission(tmp_db):
     assert provider.calls == 1
     assert len(results) == 1
     assert len(errors) == 1 and isinstance(errors[0], AIDisabled)
+    assert _get(tmp_db, "SELECT COUNT(*) FROM provider_usage WHERE request_type = 'ai:paid'")[0] == 1
+
+
+def test_paid_budget_reservation_is_atomic_across_processes(tmp_db):
+    apply_migrations(tmp_db)
+    BudgetService(tmp_db).set_paid_enabled(True)
+    context = multiprocessing.get_context("spawn")
+    result_queue = context.Queue()
+    processes = [
+        context.Process(
+            target=_reserve_paid_capability_in_process,
+            args=(str(tmp_db), result_queue, f"process-{index}"),
+        )
+        for index in range(2)
+    ]
+    try:
+        for process in processes:
+            process.start()
+        for process in processes:
+            process.join(timeout=15)
+        results = [result_queue.get(timeout=5) for _ in processes]
+    finally:
+        for process in processes:
+            if process.is_alive():
+                process.terminate()
+            process.join(timeout=5)
+        result_queue.close()
+
+    assert sorted(result[0] for result in results) == ["blocked", "reserved"]
     assert _get(tmp_db, "SELECT COUNT(*) FROM provider_usage WHERE request_type = 'ai:paid'")[0] == 1
 
 
