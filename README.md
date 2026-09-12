@@ -83,10 +83,15 @@ excerpts by unique exact code-point match, and atomically persists immutable
 verified EvidenceSpans, pending Claims, and ClaimEvidence links. Ambiguous,
 fabricated, and out-of-slice candidates fail closed; model offsets are never
 trusted, and legacy/manual spans remain distinct. The current applied schema
-is migration 0038 / schema version 38. Migration 0037 adds the durable
-owner-selected briefing schedule, and migration 0038 adds typed non-secret AI
-connection metadata and supported Article Analysis routing; credential values
-remain outside SQLite. Phase 23A–E now connect verified
+is migration 0039 / schema version 39. Migration 0037 adds the durable
+owner-selected briefing schedule, migration 0038 adds typed non-secret AI
+connection metadata and supported Article Analysis routing, and migration 0039
+adds only a non-secret credential-cleanup marker. AST-07 now stores write-only
+provider credentials through an explicitly selected OS vault (Windows
+Credential Manager, macOS Keychain, or Linux Secret Service); credential values
+remain outside SQLite, backups, logs and exports. Article Analysis still uses
+its environment-specific provider configuration until AST-09 wires operation-
+boundary resolution. Phase 23A–E now connect verified
 automatic Claims to deterministic Story resolution, audited Claim acceptance,
 evidence-bound Living Reports, exact-cause Alerts, and durable in-app delivery.
 The complete chain has bounded compatibility/status APIs, logical-export

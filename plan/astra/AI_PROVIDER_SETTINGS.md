@@ -29,7 +29,7 @@ Names/URLs/model strings are validated and length bounded. Reject embedded URL c
 
 ## Credential storage decision
 
-Recommend the trusted Python **keyring abstraction with an explicitly selected approved OS backend**: Windows Credential Manager on Windows, macOS Keychain and Linux Secret Service when available. This is one justified dependency, to be added only in AST-07 after a packaging/security review. No generic auto-selected plaintext, third-party fallback, null-success or arbitrary plugin backend is acceptable. Unsupported/headless environments remain local-only; tests use an injected in-memory fake. No silent `.env` fallback.
+AST-07 implements the trusted Python **keyring abstraction with an explicitly selected approved OS backend**: Windows Credential Manager on Windows, macOS Keychain and Linux Secret Service when available. This is the one approved credential dependency. No generic auto-selected plaintext, third-party fallback, null-success or arbitrary plugin backend is acceptable. Unsupported/headless environments remain local-only; tests use an injected in-memory fake. There is no silent `.env` fallback.
 
 Windows target namespace: `Newsroom/<installation-uuid>/<connection-id>/<credential-version>`, bound to the runtime owner's account. API performs create/replace/delete; workers and API execution services read just in time under that same owner. Scheduler has no need to read provider secrets. An API on another Windows account must report unavailable credentials rather than copy them.
 
@@ -39,9 +39,9 @@ Alternative: current-user DPAPI in a separate restricted file. It avoids a Pytho
 
 ## Save, rotate and remove safely
 
-Key store and SQLite do not share a transaction. Write a new versioned secret first; commit its reference and new generation only if that succeeds. On DB failure, remove the new orphan or record a safe cleanup obligation; the prior reference remains authoritative. On successful rotation, retire the old version after in-flight work releases it. Never overwrite an active secret in place while callers could resolve a stale configuration revision.
+Key store and SQLite do not share a transaction. AST-07 writes a new versioned secret while holding the SQLite reservation lock, commits its reference and new generation only if that succeeds, and on DB failure removes the new orphan or records a safe cleanup obligation; the prior reference remains authoritative. On successful rotation, it retires the old version after the metadata commit. Never overwrite an active secret in place while callers could resolve a stale configuration revision.
 
-Removal first disables/reroutes new calls transactionally and advances generation, then deletes the secret. Failed deletion is shown as “disabled; credential removal needs retry,” not falsely reported as removed. Connection metadata may remain as a tombstone where audit foreign keys require it. Existing analysis/history must retain provider/model identity. Deleting a connection never deletes evidence, analyses or paid invocation history.
+Removal first disables/reroutes new calls transactionally and advances generation, then deletes the secret. Failed deletion is shown as “disabled; credential removal needs retry,” not falsely reported as removed. Migration 0039 retains a non-secret cleanup version so retries can recover even after a process failure. Connection metadata may remain as a tombstone where audit foreign keys require it. Existing analysis/history must retain provider/model identity. Deleting a connection never deletes evidence, analyses or paid invocation history.
 
 ## Reload and process ownership
 

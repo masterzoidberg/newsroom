@@ -655,7 +655,7 @@ manual evidence; automatic Claims begin story-less and may only receive a
 controlled, audited initial Story association. No Story matching, Story
 creation, Story evolution, Report, or Alert automation is introduced here.
 
-The current applied schema is migration 0038 / schema version 38 (see
+The current applied schema is migration 0039 / schema version 39 (see
 `newsroom/migrations.py`). Migration 0015 added the Phase 18 content artifact
 substrate; migration 0016 added the Phase 19 processing-ownership column
 (`jobs.document_version_id`), the durable result column (`jobs.result_json`),
@@ -684,8 +684,13 @@ query execution states (`planned`, `executed`, `duplicate_suppressed`, and
 `failed`) with `executed_at`. Migration 0037 adds the single owner-selected
 periodic briefing schedule. Migration 0038 adds non-secret typed AI connection
 metadata, the monotonic configuration generation and the supported Article
-Analysis capability route; credential values remain outside SQLite. These
-analytical records do not replace the canonical evidence ledger.
+Analysis capability route. Migration 0039 adds only a non-secret marker for
+retryable vault cleanup. AST-07 stores credential values through an explicitly
+selected OS-backed `keyring` backend, namespaced by installation UUID,
+connection ID and credential version; values remain outside SQLite. Its
+authenticated write-only routes disable/reroute before deletion and preserve
+truthful cleanup state when the vault and database cannot commit atomically.
+These analytical records do not replace the canonical evidence ledger.
 
 Due Research Questions use a separate bounded scheduler path: each tick can
 enqueue at most one durable `research_question` Job per due Question, and the

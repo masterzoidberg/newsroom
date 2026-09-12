@@ -90,6 +90,23 @@ Hypotheses are created under `/research-questions/{id}/hypotheses`, linked to
 existing Claims through `/hypotheses/{id}/claims/{claim_id}`, given canonical
 Research Gaps, and reviewed explicitly.
 
+## AI configuration
+
+The authenticated AI configuration routes expose bounded non-secret provider
+metadata and the supported `article_analysis` route. `GET /ai/providers` and
+`GET /ai/providers/{id}` return configured status, credential version, effective
+route and generation, never the vault reference or credential value. Provider
+metadata writes and route changes require CSRF protection and use optimistic
+revision/generation checks.
+
+`PUT /ai/providers/{id}/credential` accepts a write-only credential and
+`DELETE /ai/providers/{id}/credential` disables/reroutes before attempting
+vault deletion. Both responses are `no-store`; a failed vault operation leaves
+an explicit retryable cleanup state. Values are stored only through the
+explicitly selected OS keyring backend and are never written to SQLite,
+backups, logs or logical exports. Unsupported/headless backends fail closed;
+operation-boundary use of this managed configuration remains AST-09 work.
+
 ## Reports, briefings, and alerts
 
 Phase 11 adds authenticated, evidence-bound output paths:

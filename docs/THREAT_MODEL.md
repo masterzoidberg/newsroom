@@ -14,6 +14,7 @@ protected by the deployment layer.
 | Asset | Boundary | Required protection |
 | --- | --- | --- |
 | Password and session state | Browser/API/SQLite | Argon2id, hashed session IDs, HTTP-only session cookie, CSRF, expiry, login throttle |
+| Provider credentials | Browser/API/OS vault | Write-only authenticated API, explicit platform keyring backend, root-stable installation namespace, versioned rotation, no SQLite/plaintext fallback |
 | Evidence identity and provenance | API/domain/SQLite | Authenticated mutations, parameterized SQL, immutable ledger triggers, integrity checks |
 | Fetched URLs and documents | Network/acquisition/parser | HTTP(S) allow policy, DNS re-check, private-address rejection, redirect/byte/time bounds, no JavaScript |
 | Ask prompts and answers | Browser/API/SQLite/logs/exports | Length/context/cost bounds, closed-world retrieval, no raw prompt persistence, no prompt/body telemetry or export |
@@ -36,9 +37,9 @@ protected by the deployment layer.
 
 ## Dependency and license audit
 
-The runtime dependency set is intentionally small: `argon2-cffi`, FastAPI, and
-Uvicorn from `pyproject.toml`; the frontend uses React, React DOM, TypeScript,
-and Vite from `frontend/package.json`. The current local environment audit on
+The runtime dependency set is intentionally small: `argon2-cffi`, FastAPI,
+`keyring`, OpenAI, Pydantic and Uvicorn from `pyproject.toml`; the frontend uses
+React, React DOM, TypeScript, and Vite from `frontend/package.json`. The current local environment audit on
 2026-08-17 reported:
 
 | Package | Version observed | License evidence |

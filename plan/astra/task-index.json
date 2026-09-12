@@ -32,7 +32,7 @@
     "accept": "Sentinel exists only in submitted request/process memory and OS vault, never persisted diagnostic/export surfaces; Save/rotation/deletion failures preserve a truthful recoverable configuration; Windows owner access works; non-Windows approved backend or local-only behavior is explicit.",
     "tests": "Sentinel tests through response/validation/log/telemetry/DB/full-backup/logical-export/build; store failures, rotation rollback, locked/unavailable backend; disposable Windows same-user integration.",
     "tier": "3",
-    "status": "READY",
+    "status": "DONE",
     "prompt": null
   },
   {
@@ -44,7 +44,7 @@
     "accept": "Concurrent/restarted clients cannot overspend the configured reservation limits; Blocked calls count zero; sent/uncertain calls remain conservatively accounted; Test-connection permission does not enable background paid routing.",
     "tests": "Concurrent API/worker admission, restart/reset, disable race, failed/uncertain/blocked calls, explicit test allowance, global/per-work exhaustion.",
     "tier": "3",
-    "status": "NOT_STARTED",
+    "status": "READY",
     "prompt": null
   },
   {

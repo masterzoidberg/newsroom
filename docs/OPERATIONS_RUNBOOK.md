@@ -77,9 +77,12 @@ tailscale serve get-config --all
 Tailscale Serve must target `http://127.0.0.1:8127`; do not use Funnel or bind
 the application to a LAN/public interface. Application authentication remains
 required even on the private tailnet. The installer does not create passwords
-or persist provider secrets. Future OS-vault credentials are intentionally tied
-to this same-user startup identity; do not move the scheduled task to a service
-or different account without separately qualifying credential access.
+or persist provider secrets in launch/task arguments. AST-07 stores provider
+credentials only through the authenticated write-only API and the explicitly
+selected OS vault, tied to this same-user startup identity; do not move the
+scheduled task to a service or different account without separately qualifying
+credential access. Unsupported/headless vaults fail closed to local-only mode;
+there is no plaintext or `.env` fallback.
 
 ## Safety boundaries
 
