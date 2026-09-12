@@ -83,7 +83,10 @@ excerpts by unique exact code-point match, and atomically persists immutable
 verified EvidenceSpans, pending Claims, and ClaimEvidence links. Ambiguous,
 fabricated, and out-of-slice candidates fail closed; model offsets are never
 trusted, and legacy/manual spans remain distinct. The current applied schema
-is migration 0036 / schema version 36. Phase 23A–E now connect verified
+is migration 0038 / schema version 38. Migration 0037 adds the durable
+owner-selected briefing schedule, and migration 0038 adds typed non-secret AI
+connection metadata and supported Article Analysis routing; credential values
+remain outside SQLite. Phase 23A–E now connect verified
 automatic Claims to deterministic Story resolution, audited Claim acceptance,
 evidence-bound Living Reports, exact-cause Alerts, and durable in-app delivery.
 The complete chain has bounded compatibility/status APIs, logical-export
@@ -101,7 +104,7 @@ human decisions; Research Gaps are canonical; and Simple/Advanced changes
 navigation density only. Ask refuses when no qualifying Evidence grounds the
 answer.
 
-Phase 29.6 engineering closure is complete at the current schema-36 baseline.
+Phase 29.6 engineering closure was recorded at its schema-36 baseline.
 Phase 29 real-use/value acceptance remains pending. It still requires one
 approved Watch configuration, unattended observation, human usefulness logging,
 reproducible Full-vs-Lite evaluation, and an intelligence-value verdict. The

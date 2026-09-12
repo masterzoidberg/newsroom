@@ -17,7 +17,7 @@ Baseline and checks: [AUDIT_EVIDENCE.md](AUDIT_EVIDENCE.md). Status describes th
 | Runtime roots | DONE | `config.py`, `paths.py`, `test_runtime_config.py`; explicit dev/prod, root outside repository, root suffix checks. |
 | Windows install | MOSTLY DONE | `phase16_windows_deploy.ps1`, `release.py`; artifact identity and separate install/runtime roots. Supervisor/status/control are implemented but current installer/task topology is still three legacy entries; installed Windows lifecycle/creation-token qualification remains AST-05/19. |
 | Task Scheduler | PARTIAL | Existing installer still creates three fixed-name AtStartup/S4U tasks. AST-03 supplies the single supervisor runtime authority and AST-04 owner-facing status/control, but task registration/migration to one sign-in launcher is deliberately AST-05. |
-| Upgrade/migrations | MOSTLY DONE | `migrations.py`, `operations.py`, `cli.py`; contiguous schema 36 and integrity tools. AST-03 makes the supervisor the normal managed migration writer only when API/worker/scheduler managed locks are all free; reconciliation of active same-release children skips migration writes. Installed upgrade choreography remains AST-14/19. |
+| Upgrade/migrations | MOSTLY DONE | `migrations.py`, `operations.py`, `cli.py`; contiguous schema 38 and integrity tools. AST-03 makes the supervisor the normal managed migration writer only when API/worker/scheduler managed locks are all free; reconciliation of active same-release children skips migration writes. Installed upgrade choreography remains AST-14/19. |
 | Backup/restore | MOSTLY DONE | `operations.py`, `storage.py`, phase15 tests; verified SQLite backup/restore, not effortless owner UX. |
 | Logical export/import | MOSTLY DONE | explicit `_EXPORT_COLUMNS`, round-trip/integrity tests; bounded logical reconstruction is not full database recovery. |
 | Logs/telemetry | MOSTLY DONE | rotating runtime logs, `telemetry.py`, AI telemetry; AST-04 adds bounded owner status/recovery but no general diagnostics dashboard. |
@@ -54,7 +54,7 @@ Baseline and checks: [AUDIT_EVIDENCE.md](AUDIT_EVIDENCE.md). Status describes th
 |---|---|---|
 | Local route | MOSTLY DONE | `ai.py:CapabilityBundle.local_defaults`; heuristic embedding/ranking/entailment/extraction/synthesis; not an installed local LLM. |
 | Remote route | MOSTLY DONE | `OpenAICompatibleArticleAnalysisProvider`; JSON-schema chat completions required, bounded SDK; endpoint compatibility must be tested. |
-| Provider selection | PARTIAL | `AnalysisProviderConfig.from_env`; selection is analysis-specific, not coherent product settings. |
+| Provider selection | PARTIAL | `AIConfigurationService` now provides typed public metadata, supported Article Analysis routing, local/fail effective-route state and a monotonic generation in migration 0038; `AnalysisProviderConfig.from_env` remains analysis-specific until AST-09 resolves configuration at operation boundaries. |
 | Credential persistence/UI | NOT STARTED | no OS credential-store implementation or provider management UI found; ordinary settings reject sensitive key names. |
 | Budgets | MOSTLY DONE | `BudgetService` durable analysis reservations plus router-local counters; extend shared durable enforcement before adding paid capabilities. |
 | AI telemetry | MOSTLY DONE | `SQLiteTelemetrySink`, invocation identity, token usage; provider billing cost unavailable and estimated cost must remain labeled. |
