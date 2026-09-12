@@ -745,6 +745,8 @@ class TelemetryEvent:
     escalation_reason: str | None = None
     error_code: str | None = None
     reservation_id: str | None = None
+    config_generation: int | None = None
+    config_source: str | None = None
 
 
 class TelemetrySink(Protocol):
@@ -785,6 +787,10 @@ class SQLiteTelemetrySink:
             "route": event.route,
             "work_id": event.work_id,
         }
+        if event.config_generation is not None:
+            metadata["config_generation"] = event.config_generation
+        if event.config_source is not None:
+            metadata["config_source"] = event.config_source
         conn = storage.connect(self.db_path)
         try:
             with storage.write_tx(conn):
@@ -854,6 +860,8 @@ class AIRouter:
         job_id: str | None = None,
         monitor_id: str | None = None,
         research_question_id: str | None = None,
+        config_generation: int | None = None,
+        config_source: str | None = None,
     ):
         if budget_service is not None and db_path is not None:
             raise ValueError("provide budget_service or db_path, not both")
@@ -872,6 +880,8 @@ class AIRouter:
         self.budget_job_id = job_id
         self.budget_monitor_id = monitor_id
         self.budget_research_question_id = research_question_id
+        self.config_generation = config_generation
+        self.config_source = config_source
         self._paid_calls = 0
         self._paid_cost = 0.0
         self._work_paid_calls: dict[str, int] = {}
@@ -1049,6 +1059,8 @@ class AIRouter:
             estimated_cost_usd=estimated_cost,
             escalation_reason=escalation_reason,
             reservation_id=reservation_id,
+            config_generation=self.config_generation,
+            config_source=self.config_source,
         )
         self._finalize_paid_reservation(event)
         self._emit_telemetry(event)
@@ -1078,6 +1090,8 @@ class AIRouter:
             escalation_reason=escalation_reason,
             error_code=error_code,
             reservation_id=reservation_id,
+            config_generation=self.config_generation,
+            config_source=self.config_source,
         )
         self._finalize_paid_reservation(event)
         self._emit_telemetry(event)
@@ -1099,6 +1113,8 @@ class AIRouter:
                 "model": event.model,
                 "route": event.route,
                 "work_id": event.work_id,
+                "config_generation": event.config_generation,
+                "config_source": event.config_source,
             },
         )
 
@@ -1113,6 +1129,8 @@ class AIRouter:
                 work_id=work_id,
                 escalation_reason=reason,
                 error_code=error_code,
+                config_generation=self.config_generation,
+                config_source=self.config_source,
             ),
         )
 

@@ -19,7 +19,7 @@ from .alert_automation import (
     automatic_alert_stage_completion_hook,
     automatic_alert_stage_rerun_factory,
 )
-from .ai import AIRouter, CapabilityBundle, SQLiteTelemetrySink
+from .article_analysis import AIConfigurationResolver
 from .config import RuntimeConfig
 from .document_processing import (
     DocumentProcessingExecutionService,
@@ -150,19 +150,22 @@ def _stop_event() -> threading.Event:
 
 def build_worker_handlers(db_path: str | Path) -> dict[str, Any]:
     """Compose the complete production handler set for every schedulable job type."""
-    research_router = AIRouter(
-        local=CapabilityBundle.local_defaults(),
-        telemetry=SQLiteTelemetrySink(db_path),
-    )
+    configuration_resolver = AIConfigurationResolver(db_path)
     return merge_handlers(
         MonitorExecutionService(db_path).handlers(),
-        ResearchQuestionExecutionService(db_path, router=research_router).handlers(),
-        DocumentProcessingExecutionService(db_path).handlers(),
+        ResearchQuestionExecutionService(db_path).handlers(),
+        DocumentProcessingExecutionService(
+            db_path,
+            configuration_resolver=configuration_resolver,
+        ).handlers(),
         AutomaticStoryStageExecutionService(db_path).handlers(),
         StoryCorrectionReconciliationService(db_path).handlers(),
         AutomaticReportStageExecutionService(db_path).handlers(),
         AutomaticAlertStageExecutionService(db_path).handlers(),
-        WatchMaintenanceService(db_path).handlers(),
+        WatchMaintenanceService(
+            db_path,
+            configuration_resolver=configuration_resolver,
+        ).handlers(),
         BriefingScheduleService(db_path).handlers(),
     )
 

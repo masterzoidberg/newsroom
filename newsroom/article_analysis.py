@@ -61,7 +61,15 @@ from .ai import (
     TelemetryEvent,
     TelemetrySink,
 )
-from .domain import DomainConflict, DomainNotFound, DomainValidation, new_id, utc_now
+from .domain import (
+    AIConfigurationService,
+    CredentialStoreError,
+    DomainConflict,
+    DomainNotFound,
+    DomainValidation,
+    new_id,
+    utc_now,
+)
 from .jobs import (
     DOCUMENT_VERSION_PROCESS_JOB_TYPE,
     BudgetExhausted,
@@ -371,6 +379,299 @@ class AnalysisProviderConfig:
         )
 
 
+@dataclass(frozen=True)
+class AIConfigurationResolution:
+    """One immutable provider decision for one operation boundary."""
+
+    config: AnalysisProviderConfig
+    generation: int
+    source: str
+    reason: str
+    provider_route: str
+    connection_id: str | None = None
+
+
+class AIConfigurationResolver:
+    """Resolve managed AI metadata or explicitly labeled legacy environment state.
+
+    A resolver is cheap to keep on a long-lived service: it reads the current
+    SQLite generation for every call, and only reads a credential when the
+    selected managed route actually needs one. No provider client is created
+    here. Unsupported capabilities always resolve to the local route.
+    """
+
+    _LEGACY_ENV_KEYS = frozenset(
+        {
+            "NEWSROOM_ANALYSIS_PROVIDER",
+            "NEWSROOM_ANALYSIS_API_KEY",
+            "OPENAI_API_KEY",
+            "NEWSROOM_ANALYSIS_BASE_URL",
+            "NEWSROOM_ANALYSIS_MODEL",
+            "NEWSROOM_ANALYSIS_TIMEOUT_SECONDS",
+            "NEWSROOM_ANALYSIS_CONNECT_TIMEOUT_SECONDS",
+            "NEWSROOM_ANALYSIS_MAX_TOKENS",
+            "NEWSROOM_ANALYSIS_MAX_INPUT_CHARS",
+            "NEWSROOM_ANALYSIS_MAX_RETRIES",
+            "NEWSROOM_ANALYSIS_MAX_PAID_CALLS",
+            "NEWSROOM_ANALYSIS_MAX_PAID_COST_USD",
+            "NEWSROOM_ANALYSIS_MAX_PAID_CALLS_PER_WORK",
+            "NEWSROOM_ANALYSIS_MAX_PAID_COST_USD_PER_WORK",
+            "NEWSROOM_ANALYSIS_REQUEST_COST_USD",
+        }
+    )
+
+    def __init__(
+        self,
+        db_path: str | Path,
+        *,
+        configuration_service: AIConfigurationService | None = None,
+        explicit_config: AnalysisProviderConfig | None = None,
+        environ: Mapping[str, str] | None = None,
+    ):
+        self.db_path = Path(db_path)
+        self.configuration_service = configuration_service or AIConfigurationService(self.db_path)
+        self.explicit_config = explicit_config
+        self.environ = environ
+
+    def _generation(self) -> int:
+        return int(self.configuration_service.list_connections()["generation"])
+
+    @staticmethod
+    def _local_config(*, max_input_chars: int | None = None, max_tokens: int | None = None) -> AnalysisProviderConfig:
+        values: dict[str, Any] = {"provider": ANALYSIS_PROVIDER_LOCAL}
+        if max_input_chars is not None:
+            values["max_input_chars"] = max_input_chars
+        if max_tokens is not None:
+            values["max_tokens"] = max_tokens
+        return AnalysisProviderConfig(**values)
+
+    def _resolution(
+        self,
+        config: AnalysisProviderConfig,
+        *,
+        generation: int,
+        source: str,
+        reason: str,
+        provider_route: str,
+        connection_id: str | None = None,
+    ) -> AIConfigurationResolution:
+        return AIConfigurationResolution(
+            config=config,
+            generation=generation,
+            source=source,
+            reason=reason,
+            provider_route=provider_route,
+            connection_id=connection_id,
+        )
+
+    def _legacy_resolution(self, generation: int) -> AIConfigurationResolution:
+        values = os.environ if self.environ is None else self.environ
+        config = AnalysisProviderConfig.from_env(values)
+        source = "legacy_environment" if self._LEGACY_ENV_KEYS.intersection(values) else "default_local"
+        if config.provider == ANALYSIS_PROVIDER_OPENAI:
+            if not config.api_key:
+                return self._resolution(
+                    self._local_config(
+                        max_input_chars=config.max_input_chars,
+                        max_tokens=config.max_tokens,
+                    ),
+                    generation=generation,
+                    source=source,
+                    reason="legacy_environment_unconfigured",
+                    provider_route="local",
+                )
+            if not BudgetService(self.db_path).paid_enabled():
+                return self._resolution(
+                    self._local_config(
+                        max_input_chars=config.max_input_chars,
+                        max_tokens=config.max_tokens,
+                    ),
+                    generation=generation,
+                    source=source,
+                    reason="paid_disabled",
+                    provider_route="local",
+                )
+            return self._resolution(
+                config,
+                generation=generation,
+                source=source,
+                reason="legacy_environment",
+                provider_route="connection",
+            )
+        return self._resolution(
+            config,
+            generation=generation,
+            source=source,
+            reason="default_local" if source == "default_local" else "legacy_environment_local",
+            provider_route="local",
+        )
+
+    def _managed_resolution(
+        self,
+        capability: str,
+        snapshot: Mapping[str, Any],
+    ) -> AIConfigurationResolution:
+        generation = int(snapshot["generation"])
+        if capability not in {ARTICLE_ANALYSIS_CAPABILITY}:
+            return self._resolution(
+                self._local_config(),
+                generation=generation,
+                source="managed",
+                reason="unsupported_capability",
+                provider_route="local",
+            )
+
+        route = next(
+            (item for item in snapshot.get("routes", []) if item.get("capability") == capability),
+            None,
+        )
+        if not isinstance(route, Mapping) or route.get("provider_route") != "connection":
+            return self._resolution(
+                self._local_config(),
+                generation=generation,
+                source="managed",
+                reason="managed_local",
+                provider_route="local",
+            )
+
+        connection_id = str(route.get("connection_id") or "").strip() or None
+        connection = next(
+            (item for item in snapshot.get("items", []) if item.get("id") == connection_id),
+            None,
+        )
+        fallback_policy = str(route.get("fallback_policy") or "local")
+        effective = route.get("effective") if isinstance(route.get("effective"), Mapping) else {}
+        if connection is None or effective.get("provider_route") != "connection":
+            if fallback_policy == "local":
+                return self._resolution(
+                    self._local_config(),
+                    generation=generation,
+                    source="managed",
+                    reason=str(effective.get("reason") or "connection_unavailable"),
+                    provider_route="local",
+                    connection_id=connection_id,
+                )
+            raise AIConfigurationError("managed AI connection is unavailable")
+
+        if not BudgetService(self.db_path).paid_enabled():
+            return self._resolution(
+                self._local_config(
+                    max_input_chars=int(connection["max_input_chars"]),
+                    max_tokens=int(connection["max_output_tokens"]),
+                ),
+                generation=generation,
+                source="managed",
+                reason="paid_disabled",
+                provider_route="local",
+                connection_id=connection_id,
+            )
+
+        api_key: str | None = None
+        if bool(connection.get("credential_required", True)):
+            try:
+                if connection_id is None:
+                    raise CredentialStoreError("managed AI credential is unavailable")
+                api_key = self.configuration_service.read_credential(connection_id)
+            except CredentialStoreError as exc:
+                if fallback_policy == "local":
+                    return self._resolution(
+                        self._local_config(
+                            max_input_chars=int(connection["max_input_chars"]),
+                            max_tokens=int(connection["max_output_tokens"]),
+                        ),
+                        generation=generation,
+                        source="managed",
+                        reason="credential_unavailable",
+                        provider_route="local",
+                        connection_id=connection_id,
+                    )
+                raise AIConfigurationError("managed AI credential is unavailable") from exc
+
+        config = AnalysisProviderConfig(
+            provider=ANALYSIS_PROVIDER_OPENAI,
+            api_key=api_key,
+            base_url=str(connection["base_url"]),
+            model=str(connection["model"]),
+            max_input_chars=int(connection["max_input_chars"]),
+            max_tokens=int(connection["max_output_tokens"]),
+        )
+        return self._resolution(
+            config,
+            generation=generation,
+            source="managed",
+            reason="configured_connection",
+            provider_route="connection",
+            connection_id=connection_id,
+        )
+
+    def resolve(self, capability: str) -> AIConfigurationResolution:
+        if self.explicit_config is not None:
+            generation = self._generation()
+            if capability not in {ARTICLE_ANALYSIS_CAPABILITY}:
+                return self._resolution(
+                    self._local_config(),
+                    generation=generation,
+                    source="explicit",
+                    reason="unsupported_capability",
+                    provider_route="local",
+                )
+            provider_route = "connection" if self.explicit_config.provider == ANALYSIS_PROVIDER_OPENAI else "local"
+            return self._resolution(
+                self.explicit_config,
+                generation=generation,
+                source="explicit",
+                reason="explicit_override",
+                provider_route=provider_route,
+            )
+
+        snapshot = self.configuration_service.list_connections()
+        generation = int(snapshot["generation"])
+        if capability not in {ARTICLE_ANALYSIS_CAPABILITY}:
+            values = os.environ if self.environ is None else self.environ
+            source = (
+                "legacy_environment"
+                if generation == 1 and not snapshot.get("items") and self._LEGACY_ENV_KEYS.intersection(values)
+                else "managed"
+            )
+            return self._resolution(
+                self._local_config(),
+                generation=generation,
+                source=source,
+                reason="unsupported_capability",
+                provider_route="local",
+            )
+        # Generation 1 with no connection is the untouched migration default;
+        # it is the only state where a legacy environment route is honored.
+        if generation == 1 and not snapshot.get("items"):
+            return self._legacy_resolution(generation)
+        return self._managed_resolution(capability, snapshot)
+
+    def local_router(
+        self,
+        capability: str,
+        *,
+        telemetry: list[Any] | TelemetrySink | None = None,
+    ) -> AIRouter:
+        """Build a local-only router from one operation-boundary snapshot.
+
+        Non-Article-Analysis capabilities are intentionally local-only today.
+        Resolving immediately before construction keeps their generation and
+        source metadata aligned with the operation without creating a paid
+        provider path that the managed authority does not support.
+        """
+        resolution = self.resolve(capability)
+        if resolution.provider_route != "local":
+            raise AIConfigurationError(
+                f"capability {capability!r} is not available through the local router"
+            )
+        return AIRouter(
+            local=CapabilityBundle.local_defaults(),
+            telemetry=telemetry if telemetry is not None else SQLiteTelemetrySink(self.db_path),
+            config_generation=resolution.generation,
+            config_source=resolution.source,
+        )
+
+
 class OpenAICompatibleArticleAnalysisProvider:
     """One real model-backed provider: OpenAI-compatible chat completions.
 
@@ -527,11 +828,39 @@ class ArticleAnalysisService:
         config: AnalysisProviderConfig | None = None,
         telemetry: list[Any] | TelemetrySink | None = None,
         paid_provider_factory: Any | None = None,
+        configuration_service: AIConfigurationService | None = None,
+        configuration_resolver: AIConfigurationResolver | None = None,
     ):
         self.db_path = Path(db_path)
-        self.config = config or AnalysisProviderConfig.from_env()
+        # An explicit config remains a test/legacy override. Production
+        # services keep only the resolver and snapshot config at analyze time.
+        self.config = config
+        self.configuration_service = configuration_service or (
+            configuration_resolver.configuration_service
+            if configuration_resolver is not None
+            else AIConfigurationService(self.db_path)
+        )
+        self.configuration_resolver = configuration_resolver or AIConfigurationResolver(
+            self.db_path,
+            configuration_service=self.configuration_service,
+            explicit_config=config,
+        )
         self.telemetry = telemetry
         self.paid_provider_factory = paid_provider_factory or OpenAICompatibleArticleAnalysisProvider
+
+    def effective_configuration(self) -> dict[str, Any]:
+        """Return safe effective operation metadata without exposing credentials."""
+        resolution = self.configuration_resolver.resolve(ARTICLE_ANALYSIS_CAPABILITY)
+        return {
+            "capability": ARTICLE_ANALYSIS_CAPABILITY,
+            "provider_route": resolution.provider_route,
+            "provider": resolution.config.provider,
+            "model": resolution.config.model if resolution.config.provider == ANALYSIS_PROVIDER_OPENAI else LOCAL_MODEL_LABEL,
+            "generation": resolution.generation,
+            "source": resolution.source,
+            "reason": resolution.reason,
+            "connection_id": resolution.connection_id,
+        }
 
     # -- read paths ----------------------------------------------------------
 
@@ -589,7 +918,16 @@ class ArticleAnalysisService:
             time.sleep(0.02)
         return None
 
-    def _record_blocked_paid(self, *, job_id: str | None, monitor_id: str, work_id: str, reason: str) -> None:
+    def _record_blocked_paid(
+        self,
+        *,
+        job_id: str | None,
+        monitor_id: str,
+        work_id: str,
+        reason: str,
+        config: AnalysisProviderConfig,
+        resolution: AIConfigurationResolution,
+    ) -> None:
         sink = self.telemetry
         if sink is None:
             sink = SQLiteTelemetrySink(self.db_path, job_id=job_id, monitor_id=monitor_id)
@@ -599,9 +937,11 @@ class ArticleAnalysisService:
             provider=ANALYSIS_PROVIDER_OPENAI,
             outcome="blocked",
             work_id=work_id,
-            model=self.config.model,
+            model=config.model,
             escalation_reason="durable_paid_reservation",
             error_code=reason,
+            config_generation=resolution.generation,
+            config_source=resolution.source,
         )
         if isinstance(sink, list):
             sink.append(event)
@@ -724,7 +1064,12 @@ class ArticleAnalysisService:
                 )
         canonical_job_id = durable_job_id
 
-        analysis_input = build_analysis_input(content, self.config.max_input_chars)
+        # Resolve exactly once so every identity, provider, budget and
+        # telemetry field for this operation describes the same generation.
+        resolution = self.configuration_resolver.resolve(ARTICLE_ANALYSIS_CAPABILITY)
+        config = resolution.config
+
+        analysis_input = build_analysis_input(content, config.max_input_chars)
 
         identity_hash = analysis_identity_hash(
             document_version_id=document_version_id,
@@ -732,8 +1077,8 @@ class ArticleAnalysisService:
             scope_version=scope_version,
             schema_version=ANALYSIS_SCHEMA_VERSION,
             prompt_version=ANALYSIS_PROMPT_VERSION,
-            provider=self.config.provider,
-            model=self.config.model if self.config.provider == ANALYSIS_PROVIDER_OPENAI else LOCAL_MODEL_LABEL,
+            provider=config.provider,
+            model=config.model if config.provider == ANALYSIS_PROVIDER_OPENAI else LOCAL_MODEL_LABEL,
             artifact_id=str(content.get("artifact_id") or ""),
             normalized_content_hash=str(content.get("normalized_content_hash") or ""),
             input_view_version=analysis_input.view_version,
@@ -745,12 +1090,19 @@ class ArticleAnalysisService:
             self.validate_analysis_provenance(existing["id"])
             return existing
 
-        paid_route, provider_label, model_label = self._resolve_route()
+        paid_route, provider_label, model_label = self._resolve_route(config)
         invocation: dict[str, Any] | None = None
         work_id = f"analysis:{document_version_id}:{relevance_id}"
         if paid_route:
-            if self.config.max_paid_calls < 1 or self.config.max_paid_cost_usd + 1e-12 < self.config.request_cost_usd:
-                self._record_blocked_paid(job_id=job_id, monitor_id=monitor_id, work_id=work_id, reason="paid_budget_exhausted")
+            if config.max_paid_calls < 1 or config.max_paid_cost_usd + 1e-12 < config.request_cost_usd:
+                self._record_blocked_paid(
+                    job_id=job_id,
+                    monitor_id=monitor_id,
+                    work_id=work_id,
+                    reason="paid_budget_exhausted",
+                    config=config,
+                    resolution=resolution,
+                )
                 raise AIDisabled("paid article analysis is disabled by the configured per-work budget")
             try:
                 invocation = BudgetService(self.db_path).reserve_paid_analysis(
@@ -759,21 +1111,42 @@ class ArticleAnalysisService:
                     relevance_id=relevance_id,
                     monitor_id=monitor_id,
                     job_id=job_id,
-                    estimated_cost_usd=self.config.request_cost_usd,
-                    max_paid_calls=self.config.max_paid_calls,
-                    max_paid_cost_usd=self.config.max_paid_cost_usd,
+                    estimated_cost_usd=config.request_cost_usd,
+                    max_paid_calls=config.max_paid_calls,
+                    max_paid_cost_usd=config.max_paid_cost_usd,
                 )
             except PaidInvocationBusy:
                 existing = self._wait_for_existing_paid_invocation(identity_hash)
                 if existing is not None:
                     return existing
-                self._record_blocked_paid(job_id=job_id, monitor_id=monitor_id, work_id=work_id, reason="analysis_invocation_active")
+                self._record_blocked_paid(
+                    job_id=job_id,
+                    monitor_id=monitor_id,
+                    work_id=work_id,
+                    reason="analysis_invocation_active",
+                    config=config,
+                    resolution=resolution,
+                )
                 raise AIDisabled("paid article analysis is already being completed by another worker")
             except PaidInvocationUncertain as exc:
-                self._record_blocked_paid(job_id=job_id, monitor_id=monitor_id, work_id=work_id, reason=exc.reason)
+                self._record_blocked_paid(
+                    job_id=job_id,
+                    monitor_id=monitor_id,
+                    work_id=work_id,
+                    reason=exc.reason,
+                    config=config,
+                    resolution=resolution,
+                )
                 raise AIDisabled("paid article analysis has uncertain remote state; explicit operator confirmation is required") from exc
             except BudgetExhausted as exc:
-                self._record_blocked_paid(job_id=job_id, monitor_id=monitor_id, work_id=work_id, reason=exc.reason)
+                self._record_blocked_paid(
+                    job_id=job_id,
+                    monitor_id=monitor_id,
+                    work_id=work_id,
+                    reason=exc.reason,
+                    config=config,
+                    resolution=resolution,
+                )
                 raise AIDisabled("paid article analysis was blocked by a durable budget reservation") from exc
             if invocation["state"] == "succeeded":
                 existing = self.find_by_identity_hash(identity_hash)
@@ -786,19 +1159,19 @@ class ArticleAnalysisService:
             paid_enabled=paid_route,
             # The SDK enforces the real network timeout; the router timeout is
             # an outer guard with a small margin and must never fire first.
-            timeout_seconds=self.config.timeout_seconds + 10.0,
+            timeout_seconds=config.timeout_seconds + 10.0,
             min_confidence=0.0,
-            max_paid_calls=self.config.max_paid_calls,
-            max_paid_cost_usd=self.config.max_paid_cost_usd,
-            max_paid_calls_per_work=self.config.max_paid_calls_per_work,
-            max_paid_cost_usd_per_work=self.config.max_paid_cost_usd_per_work,
-            paid_request_cost_usd=self.config.request_cost_usd,
+            max_paid_calls=config.max_paid_calls,
+            max_paid_cost_usd=config.max_paid_cost_usd,
+            max_paid_calls_per_work=config.max_paid_calls_per_work,
+            max_paid_cost_usd_per_work=config.max_paid_cost_usd_per_work,
+            paid_request_cost_usd=config.request_cost_usd,
         )
         local_bundle = CapabilityBundle(article_analysis=LocalArticleAnalysisProvider())
         paid_bundle: CapabilityBundle | None = None
         if paid_route:
             try:
-                paid_bundle = CapabilityBundle(article_analysis=self.paid_provider_factory(self.config))
+                paid_bundle = CapabilityBundle(article_analysis=self.paid_provider_factory(config))
             except Exception as exc:
                 if invocation is not None:
                     BudgetService(self.db_path).fail_paid_analysis(
@@ -818,6 +1191,8 @@ class ArticleAnalysisService:
             paid=paid_bundle if paid_route else None,
             policy=policy,
             telemetry=sink,
+            config_generation=resolution.generation,
+            config_source=resolution.source,
             # The durable analysis invocation is the admission authority for
             # this supported paid capability. Do not apply the router's
             # legacy process-local generic counter a second time.
@@ -891,10 +1266,10 @@ class ArticleAnalysisService:
         self.validate_analysis_provenance(saved["id"])
         return saved
 
-    def _resolve_route(self) -> tuple[bool, str, str]:
+    def _resolve_route(self, config: AnalysisProviderConfig) -> tuple[bool, str, str]:
         """Decide local vs paid route from config + budget, with explicit failures."""
-        if self.config.provider == ANALYSIS_PROVIDER_OPENAI:
-            if not self.config.api_key:
+        if config.provider == ANALYSIS_PROVIDER_OPENAI:
+            if not config.api_key:
                 raise AIConfigurationError(
                     "analysis provider 'openai' requires NEWSROOM_ANALYSIS_API_KEY"
                 )
@@ -902,7 +1277,7 @@ class ArticleAnalysisService:
                 raise AIDisabled(
                     "paid article analysis is disabled because budget.paid_enabled is off"
                 )
-            return True, ANALYSIS_PROVIDER_OPENAI, self.config.model
+            return True, ANALYSIS_PROVIDER_OPENAI, config.model
         return False, ANALYSIS_PROVIDER_LOCAL, LOCAL_MODEL_LABEL
 
     def persist(

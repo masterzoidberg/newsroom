@@ -7,7 +7,7 @@ from typing import Any, Callable, Literal, Optional
 from fastapi import APIRouter, Query, Request, Response
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from .ai import AIError, AIRouter, CapabilityBundle, SQLiteTelemetrySink
+from .ai import AIError
 from .ai_pipeline import AIVerticalSliceService, VerticalSliceInput
 from .acquisition import (
     AcquisitionError,
@@ -15,7 +15,7 @@ from .acquisition import (
     SourceProfileService,
     SourceSuggestionService,
 )
-from .article_analysis import ArticleAnalysisService
+from .article_analysis import AIConfigurationResolver, ArticleAnalysisService
 from .domain import AIConfigurationService, CoreService, DomainConflict, DomainNotFound, DomainValidation
 from .evidence import EvidenceService
 from .jobs import BudgetService, JobService, SchedulerService, compose_completion_hooks
@@ -1080,15 +1080,13 @@ def create_domain_router(
         rerun_factory=research_job_rerun_factory,
     )
     budgets = BudgetService(service.db_path)
+    configuration_resolver = AIConfigurationResolver(service.db_path)
     scheduler = SchedulerService(service.db_path)
     policies = MonitoringPolicyService(service.db_path)
     monitors = MonitorService(service.db_path)
     watches = WatchService(
         service.db_path,
-        router=AIRouter(
-            local=CapabilityBundle.local_defaults(),
-            telemetry=SQLiteTelemetrySink(service.db_path),
-        ),
+        configuration_resolver=configuration_resolver,
     )
     watch_maintenance = WatchMaintenanceService(service.db_path, watches=watches)
     vocabulary_service = ScopeSuggestionService(service.db_path)
@@ -1108,7 +1106,10 @@ def create_domain_router(
     hypotheses = HypothesisService(service.db_path)
     experience = ExperienceService(service.db_path)
     research_prioritization = ResearchPrioritizationService(service.db_path)
-    analyses = ArticleAnalysisService(service.db_path)
+    analyses = ArticleAnalysisService(
+        service.db_path,
+        configuration_resolver=configuration_resolver,
+    )
     ai_configuration = AIConfigurationService(service.db_path)
     knowledge = KnowledgeService(service.db_path)
     corrections = StoryCorrectionService(service.db_path)
@@ -2835,6 +2836,13 @@ def create_domain_router(
         result = ai_configuration.list_connections()
         result["paid_enabled"] = budgets.paid_enabled()
         result["budget_limits"] = budgets.list_limits()
+        # Stored metadata and the operation-boundary resolver can differ when
+        # an untouched installation still exposes a legacy environment route.
+        # Expose only safe effective identity; resolution never creates a
+        # provider client or makes a provider call.
+        result["effective_operation_routes"] = {
+            "article_analysis": analyses.effective_configuration(),
+        }
         return result
 
     @router.post("/scheduler/tick")
@@ -2847,10 +2855,7 @@ def create_domain_router(
         write_guard(request)
         ai_service = AIVerticalSliceService(
             service.db_path,
-            AIRouter(
-                local=CapabilityBundle.local_defaults(),
-                telemetry=SQLiteTelemetrySink(service.db_path),
-            ),
+            configuration_resolver.local_router("relevance"),
         )
         try:
             return ai_service.run(

@@ -42,6 +42,7 @@ from newsroom.ai import (
 from newsroom.article_analysis import (
     ANALYSIS_PROMPT_VERSION,
     ANALYSIS_SCHEMA_VERSION,
+    AIConfigurationResolver,
     ArticleAnalysisService,
     AnalysisProviderConfig,
     OpenAICompatibleArticleAnalysisProvider,
@@ -1857,6 +1858,258 @@ def test_ai_credential_rotation_cleanup_failure_is_durable(tmp_db, monkeypatch):
     assert store.contains(provider["id"], 2) is False
 
 
+def _configure_managed_analysis_provider(db, *, model: str = "managed-v1"):
+    store = InMemoryCredentialStore()
+    configuration = AIConfigurationService(
+        db,
+        credential_store=store,
+        credential_namespace="installation-test",
+    )
+    provider = configuration.create_connection(
+        {
+            "display_name": "Managed analysis gateway",
+            "base_url": "https://api.example.test/v1",
+            "model": model,
+        }
+    )
+    saved = configuration.set_credential(provider["id"], "managed-test-secret", expected_revision=1)
+    enabled = configuration.update_connection(
+        provider["id"],
+        {"enabled": True},
+        expected_revision=saved["revision"],
+    )
+    route = configuration.set_route(
+        "article_analysis",
+        provider_route="connection",
+        connection_id=provider["id"],
+        expected_generation=enabled["generation"],
+    )
+    BudgetService(db).set_paid_enabled(True)
+    return configuration, provider["id"], route["generation"]
+
+
+def test_managed_provider_is_resolved_at_each_operation_boundary(tmp_db):
+    apply_migrations(tmp_db)
+    version_id, monitor_id, _transport = _setup_relevant(tmp_db)
+    configuration, provider_id, first_generation = _configure_managed_analysis_provider(tmp_db)
+    BudgetService(tmp_db).set_paid_enabled(False)
+    created_configs: list[AnalysisProviderConfig] = []
+
+    def provider_factory(config):
+        created_configs.append(config)
+        return ScriptedAnalysisProvider(config)
+
+    events: list[Any] = []
+    service = ArticleAnalysisService(
+        tmp_db,
+        configuration_service=configuration,
+        paid_provider_factory=provider_factory,
+        telemetry=events,
+    )
+    relevance = _persist_relevance(tmp_db, version_id, monitor_id)
+    content = ContentArtifactService(tmp_db).load_normalized_content(version_id)
+
+    first = service.analyze(
+        document_version_id=version_id,
+        relevance={
+            "status": "evaluated",
+            "relevant": True,
+            "relevance_id": relevance["id"],
+            "monitor_id": monitor_id,
+            "scope_version": relevance["scope_version"],
+        },
+        content=content,
+    )
+    current = configuration.get_connection(provider_id)
+    changed = configuration.update_connection(
+        provider_id,
+        {"model": "managed-v2"},
+        expected_revision=current["revision"],
+    )
+    BudgetService(tmp_db).set_paid_enabled(True)
+    second = service.analyze(
+        document_version_id=version_id,
+        relevance={
+            "status": "evaluated",
+            "relevant": True,
+            "relevance_id": relevance["id"],
+            "monitor_id": monitor_id,
+            "scope_version": relevance["scope_version"],
+        },
+        content=content,
+    )
+
+    assert first["model"] == "local"
+    assert second["model"] == "managed-v2"
+    assert [config.model for config in created_configs] == ["managed-v2"]
+    paid_events = [event for event in events if event.route == "paid" and event.outcome == "succeeded"]
+    assert [event.config_generation for event in paid_events] == [changed["generation"]]
+    assert all(event.config_source == "managed" for event in paid_events)
+
+
+def test_in_flight_managed_operation_keeps_its_pinned_generation(tmp_db):
+    apply_migrations(tmp_db)
+    version_id, monitor_id, _transport = _setup_relevant(tmp_db)
+    configuration, provider_id, first_generation = _configure_managed_analysis_provider(tmp_db)
+    started = threading.Event()
+    release = threading.Event()
+    created_configs: list[AnalysisProviderConfig] = []
+
+    class BlockingProvider(ScriptedAnalysisProvider):
+        def analyze(self, request):
+            started.set()
+            assert release.wait(timeout=5)
+            return super().analyze(request)
+
+    def provider_factory(config):
+        created_configs.append(config)
+        return BlockingProvider(config)
+
+    events: list[Any] = []
+    service = ArticleAnalysisService(
+        tmp_db,
+        configuration_service=configuration,
+        paid_provider_factory=provider_factory,
+        telemetry=events,
+    )
+    relevance = _persist_relevance(tmp_db, version_id, monitor_id)
+    content = ContentArtifactService(tmp_db).load_normalized_content(version_id)
+    result: list[dict[str, Any]] = []
+    errors: list[BaseException] = []
+
+    def run_analysis():
+        try:
+            result.append(
+                service.analyze(
+                    document_version_id=version_id,
+                    relevance={
+                        "status": "evaluated",
+                        "relevant": True,
+                        "relevance_id": relevance["id"],
+                        "monitor_id": monitor_id,
+                        "scope_version": relevance["scope_version"],
+                    },
+                    content=content,
+                )
+            )
+        except BaseException as exc:  # pragma: no cover - assertion below reports it
+            errors.append(exc)
+
+    thread = threading.Thread(target=run_analysis)
+    thread.start()
+    assert started.wait(timeout=5)
+    current = configuration.get_connection(provider_id)
+    configuration.update_connection(
+        provider_id,
+        {"model": "managed-after-start"},
+        expected_revision=current["revision"],
+    )
+    release.set()
+    thread.join(timeout=10)
+
+    assert errors == []
+    assert result[0]["model"] == "managed-v1"
+    assert created_configs[0].model == "managed-v1"
+    succeeded = [event for event in events if event.route == "paid" and event.outcome == "succeeded"]
+    assert succeeded[0].config_generation == first_generation
+
+
+def test_managed_removal_cannot_be_reactivated_by_legacy_environment(tmp_db, monkeypatch):
+    apply_migrations(tmp_db)
+    version_id, monitor_id, _transport = _setup_relevant(tmp_db)
+    configuration, provider_id, _generation = _configure_managed_analysis_provider(tmp_db)
+    monkeypatch.setenv("NEWSROOM_ANALYSIS_PROVIDER", "openai")
+    monkeypatch.setenv("NEWSROOM_ANALYSIS_API_KEY", "legacy-secret-must-not-reactivate")
+    provider_calls = 0
+
+    def provider_factory(config):
+        nonlocal provider_calls
+        provider_calls += 1
+        raise AssertionError("removed managed provider must not be constructed")
+
+    current = configuration.get_connection(provider_id)
+    removed = configuration.remove_credential(provider_id, expected_revision=current["revision"])
+    service = ArticleAnalysisService(
+        tmp_db,
+        configuration_service=configuration,
+        paid_provider_factory=provider_factory,
+    )
+    relevance = _persist_relevance(tmp_db, version_id, monitor_id)
+    content = ContentArtifactService(tmp_db).load_normalized_content(version_id)
+    analysis = service.analyze(
+        document_version_id=version_id,
+        relevance={
+            "status": "evaluated",
+            "relevant": True,
+            "relevance_id": relevance["id"],
+            "monitor_id": monitor_id,
+            "scope_version": relevance["scope_version"],
+        },
+        content=content,
+    )
+
+    assert removed["enabled"] is False
+    assert analysis["provider"] == "local"
+    assert analysis["paid"] is False
+    assert provider_calls == 0
+    assert service.effective_configuration()["source"] == "managed"
+
+
+def test_legacy_environment_route_is_explicitly_labeled_before_managed_configuration(tmp_db, monkeypatch):
+    apply_migrations(tmp_db)
+    monkeypatch.setenv("NEWSROOM_ANALYSIS_PROVIDER", "openai")
+    monkeypatch.setenv("NEWSROOM_ANALYSIS_API_KEY", "legacy-test-secret")
+    BudgetService(tmp_db).set_paid_enabled(True)
+    configuration = AIConfigurationService(tmp_db)
+    service = ArticleAnalysisService(
+        tmp_db,
+        configuration_service=configuration,
+        paid_provider_factory=lambda config: ScriptedAnalysisProvider(config),
+    )
+
+    effective = service.effective_configuration()
+
+    assert effective["provider_route"] == "connection"
+    assert effective["source"] == "legacy_environment"
+    assert effective["generation"] == 1
+    assert effective["model"] == "gpt-4o-mini"
+
+
+def test_unsupported_capabilities_use_the_explicit_local_resolution(tmp_db):
+    apply_migrations(tmp_db)
+    configuration, _provider_id, _generation = _configure_managed_analysis_provider(tmp_db)
+
+    resolved = AIConfigurationResolver(tmp_db, configuration_service=configuration).resolve("embeddings")
+
+    assert resolved.config.provider == "local"
+    assert resolved.source == "managed"
+    assert resolved.reason == "unsupported_capability"
+
+
+def test_document_processing_uses_the_shared_operation_boundary_resolver(tmp_db):
+    apply_migrations(tmp_db)
+    configuration = AIConfigurationService(tmp_db)
+    resolver = AIConfigurationResolver(tmp_db, configuration_service=configuration)
+
+    processing = DocumentProcessingExecutionService(
+        tmp_db,
+        configuration_resolver=resolver,
+    )
+
+    assert processing._analysis().configuration_resolver is resolver
+
+
+def test_production_worker_ai_handlers_share_one_operation_authority(tmp_db):
+    apply_migrations(tmp_db)
+
+    handlers = build_worker_handlers(tmp_db)
+    processing = handlers[DOCUMENT_VERSION_PROCESS_JOB_TYPE].__self__
+    vocabulary = handlers["watch_vocabulary_suggestion"].__self__
+
+    assert processing.configuration_resolver is vocabulary.configuration_resolver
+    assert processing._analysis().configuration_resolver is vocabulary.configuration_resolver
+
+
 def test_ai_credential_removal_tracks_active_version_after_orphan_cleanup(tmp_db):
     class VersionFailureStore(InMemoryCredentialStore):
         def __init__(self):
@@ -1911,6 +2164,9 @@ def test_ai_configuration_api_is_authenticated_csrf_protected_and_bounded(tmp_pa
     from newsroom.runtime_identity import ensure_installation_identity
 
     config = RuntimeConfig.for_environment("dev", root=tmp_path / "dev")
+    monkeypatch.delenv("NEWSROOM_ANALYSIS_PROVIDER", raising=False)
+    monkeypatch.delenv("NEWSROOM_ANALYSIS_API_KEY", raising=False)
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     store = InMemoryCredentialStore()
     import newsroom.domain as domain_module
 
@@ -1926,6 +2182,10 @@ def test_ai_configuration_api_is_authenticated_csrf_protected_and_bounded(tmp_pa
         assert listed.status_code == 200
         assert listed.headers["cache-control"] == "no-store"
         assert listed.json()["effective_routes"]["article_analysis"]["provider_route"] == "local"
+
+        status = client.get("/api/v1/ai/status")
+        assert status.status_code == 200
+        assert status.json()["effective_operation_routes"]["article_analysis"]["source"] == "default_local"
 
         denied = client.post(
             "/api/v1/ai/providers",

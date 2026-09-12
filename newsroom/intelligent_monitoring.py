@@ -33,6 +33,7 @@ from .ai import (
     VocabularyOutput,
     VocabularyRequest,
 )
+from .article_analysis import AIConfigurationResolver
 from .domain import (
     CoreService,
     DomainConflict,
@@ -167,9 +168,21 @@ def _initialism(term: str) -> str | None:
 class WatchService:
     """Higher-level monitoring intent backed by ordinary source Monitors."""
 
-    def __init__(self, db_path: str | Path, *, router: AIRouter | None = None):
+    def __init__(
+        self,
+        db_path: str | Path,
+        *,
+        router: AIRouter | None = None,
+        configuration_resolver: AIConfigurationResolver | None = None,
+    ):
         self.db_path = Path(db_path)
         self.router = router
+        self.configuration_resolver = configuration_resolver or AIConfigurationResolver(self.db_path)
+
+    def _operation_router(self) -> AIRouter:
+        if self.router is not None:
+            return self.router
+        return self.configuration_resolver.local_router("vocabulary")
 
     # ------------------------------------------------------------------
     # Watch lifecycle
@@ -1413,16 +1426,17 @@ class WatchService:
         try:
             watch = self._require_watch(conn, watch_id)
             candidates = self._deterministic_terms(conn, watch)
-            if self.router is not None and provider is None:
+            if provider is None:
+                operation_router = self._operation_router()
                 policy = conn.execute(
                     "SELECT paid_budget_usd FROM monitoring_policies WHERE id = ?",
                     (watch["policy_id"],),
                 ).fetchone()
-                paid_route_allowed = not self.router.policy.paid_enabled
-                if self.router.policy.paid_enabled:
+                paid_route_allowed = not operation_router.policy.paid_enabled
+                if operation_router.policy.paid_enabled:
                     paid_route_allowed = bool(
                         policy is not None
-                        and float(policy["paid_budget_usd"] or 0.0) >= self.router.policy.paid_request_cost_usd
+                        and float(policy["paid_budget_usd"] or 0.0) >= operation_router.policy.paid_request_cost_usd
                         and BudgetService(self.db_path).paid_enabled()
                     )
                 if paid_route_allowed:
@@ -1436,7 +1450,7 @@ class WatchService:
                         max_suggestions=limit,
                     )
                     try:
-                        payload = self.router.vocabulary(
+                        payload = operation_router.vocabulary(
                             request, work_id=work_id or f"watch:{watch_id}"
                         )
                     except AIError:
@@ -2273,14 +2287,18 @@ class WatchMaintenanceService:
     candidate rows a human has not approved.
     """
 
-    def __init__(self, db_path: str | Path, *, watches: WatchService | None = None):
+    def __init__(
+        self,
+        db_path: str | Path,
+        *,
+        watches: WatchService | None = None,
+        configuration_resolver: AIConfigurationResolver | None = None,
+    ):
         self.db_path = Path(db_path)
+        self.configuration_resolver = configuration_resolver or AIConfigurationResolver(self.db_path)
         self.watches = watches or WatchService(
             db_path,
-            router=AIRouter(
-                local=CapabilityBundle.local_defaults(),
-                telemetry=SQLiteTelemetrySink(db_path),
-            ),
+            configuration_resolver=self.configuration_resolver,
         )
 
     def handlers(self) -> dict[str, Any]:

@@ -231,17 +231,22 @@ class DocumentProcessingExecutionService:
         artifacts: ContentArtifactService | None = None,
         analysis_service: Any | None = None,
         promotion_service: Any | None = None,
+        configuration_resolver: Any | None = None,
     ):
         self.db_path = Path(db_path)
         self.artifacts = artifacts or ContentArtifactService(db_path)
         self.analysis_service = analysis_service
         self.promotion_service = promotion_service
+        self.configuration_resolver = configuration_resolver
 
     def _analysis(self) -> Any:
         if self.analysis_service is None:
             from .article_analysis import ArticleAnalysisService  # noqa: PLC0415
 
-            self.analysis_service = ArticleAnalysisService(self.db_path)
+            self.analysis_service = ArticleAnalysisService(
+                self.db_path,
+                configuration_resolver=self.configuration_resolver,
+            )
         return self.analysis_service
 
     def _promotion(self) -> Any:
