@@ -4,7 +4,7 @@
 
 Current source was reviewed across every view and shared shell/auth/PWA primitive. A fresh temporary runtime on 18127 loaded all 16 hash routes at 1440px and 390px. After waiting for loading states to finish, each rendered without page exceptions, error panels or document-level horizontal overflow. Login, desktop Watches and phone Settings screenshots were inspected. This is empty-state coverage, not populated workflow, keyboard, offline, physical-phone or contrast certification.
 
-**Confirmed mobile defect:** Settings retains the base two-column `.content-grid` at 390px; the Experience mode buttons extend beyond their narrow card into the adjacent App install column. Document-width overflow checks do not catch this internal overlap. `styles.css` collapses named grids in media queries but not generic `.content-grid`; AST-13 must address the base grid and wrapping buttons. The mobile screenshot also shows tiny low-emphasis explanatory text and unnecessarily tall narrow cards.
+**Previously confirmed mobile defect (corrected in AST-11):** Settings retained the base two-column `.content-grid` at 390px; the Experience mode buttons extended beyond their narrow card into the adjacent App install column. AST-11 adds the minimal shared mobile collapse and qualifies the populated provider/cost surface at measured 390px with component-boundary assertions. The mobile screenshot still shows intentionally subdued explanatory text; full keyboard/contrast/zoom and physical-phone qualification remain AST-13/19 work.
 
 ## Per-surface assessment
 

@@ -18,7 +18,7 @@ Product milestones, not a renumbering of historical phases. TASKS is the status/
 
 AST-33 depends only on AST-27 and can be promoted before AI assistance if the managed-provider lane blocks; this requires updating NEXT and keeping one READY. AST-43 depends on AST-11/05. AST-40 depends on AST-35; AST-41 on AST-29/35; AST-50 on AST-29/41; AST-51 on AST-50. AST-52 depends on AST-29/23; AST-53 on AST-24/35; AST-54 on AST-42/41; AST-55 on AST-42. Both polish and content qualification wait for these UI slices. AST-45 waits for all relevant UI slices; AST-47 is independent of visual polish once intelligence slices land. AST-49 waits for AST-44/46/47. This graph has no circular release/documentation dependency.
 
-The current next horizon is intentionally six tasks: AST-05 and AST-23–27. They complete a local first-value staircase without requiring new semantic/provider architecture. No merged prerequisite is inferred: code must exist in the chosen isolated descendant stack. This audit does not merge or qualify it.
+The current next horizon is AST-28 after the completed local first-value staircase and managed-provider UI. It begins the bounded assisted-setup capability without broadening the supported remote provider surface. No merged prerequisite is inferred: code must exist in the chosen isolated descendant stack, and fake-provider/browser evidence does not substitute for installed or real-use qualification.
 
 ## Checkpoints and completion boundaries
 

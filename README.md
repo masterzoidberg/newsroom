@@ -95,7 +95,7 @@ authenticated `/api/v1/ai/providers`, `/api/v1/ai/routes/{capability}` and
 `/api/v1/ai/status` contracts expose safe metadata, generation and effective
 routing; `POST /api/v1/ai/providers/{id}/test` performs only an explicit,
 bounded structured-output validation with separate per-call authorization.
-The Settings UI remains the next AST-11 task. Untouched installations may use
+The Settings UI is implemented in AST-11. Untouched installations may use
 clearly labeled legacy environment configuration, while managed configuration
 takes precedence and disable/remove cannot be resurrected by environment
 variables. Phase 23A–E now connect verified

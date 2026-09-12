@@ -1,16 +1,16 @@
 # Immediate execution queue
 
-Updated 2026-09-12 after AST-10 completed on `astra/AST-25-27-first-watch` at implementation commit `136d331`. AST-05 engineering, AST-23/24, AST-25/26/27, AST-33, AST-34, AST-35, AST-36, AST-37, AST-38, AST-39, AST-40, AST-06, AST-07, AST-08, AST-09 and AST-10 are accepted on the branch; AST-10 provider API, credential-safety and bounded validation qualification passed. Physical reboot/sign-in and lock/sleep/wake evidence remains a release gate; it does not block isolated product development.
+Updated 2026-09-12 after AST-11 completed on `astra/AST-25-27-first-watch` at implementation commit `226f7b8`. AST-05 engineering, AST-23/24, AST-25/26/27, AST-33, AST-34, AST-35, AST-36, AST-37, AST-38, AST-39, AST-40, AST-06, AST-07, AST-08, AST-09, AST-10 and AST-11 are accepted on the branch; AST-11 provider/cost UI and isolated fake-provider browser qualification passed. Physical reboot/sign-in and lock/sleep/wake evidence remains a release gate; it does not block isolated product development.
 
-**AST-10 — Add bounded provider validation and safe API contracts is DONE. The next queued task is AST-11 — Build functional AI Providers and cost settings; it is READY.**
+**AST-11 — Build functional AI Providers and cost settings is DONE. The next queued task is AST-28 — Implement bounded semantic vocabulary capability; it is READY.**
 
-AST-40, AST-06, AST-07, AST-08, AST-09 and AST-10 are complete. The public AI authority now has schema-39 typed metadata, versioned OS-vault credentials, durable paid admission, operation-boundary generation resolution, authenticated CRUD/route/status contracts, explicit bounded structured-output validation, safe error codes, and deletion/redirect/keyless protections. AST-41 is not READY because it depends on AST-29, which is not started; the independent managed-AI lane continues at AST-11.
+AST-40, AST-06, AST-07, AST-08, AST-09, AST-10 and AST-11 are complete. The public AI authority now has schema-39 typed metadata, versioned OS-vault credentials, durable paid admission, operation-boundary generation resolution, authenticated CRUD/route/status contracts, explicit bounded structured-output validation, safe error codes, deletion/redirect/keyless protections, and a functional owner-facing provider/cost surface. AST-12 remains superseded/decomposed historical planning; AST-41 is not READY because it depends on AST-29, which is not started.
 
 Run 1 used an isolated checkout descended from `astra/AST-05-windows-runtime-cleanup` at accepted head `18c5ee8`, cherry-picked planning commit `b20fd79`, and completed one bounded commit per AST task without merging or rewriting history. Do not begin Run 2 in this session.
 
-Following queue, AST-11 is next and all future tasks remain NOT_STARTED unless separately classified below:
+Following queue, AST-28 is next and all future tasks remain NOT_STARTED unless separately classified below:
 
-1. AST-11 — Build functional AI Providers and cost settings (Tier 2/medium), after AST-10.
+1. AST-28 — Implement bounded semantic vocabulary capability (Tier 3/high), after AST-11 and AST-27.
 
 Then AST-07–11 complete managed AI configuration before AST-28–32 add assisted terminology/discovery. This removes the older artificial dependency of basic local onboarding on a finished paid-provider settings screen.
 

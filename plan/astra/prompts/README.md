@@ -1,6 +1,6 @@
 # Current execution prompts
 
-TASKS/NEXT own status. AST-08, AST-09 and AST-10 are DONE; AST-11 is the next READY task. None has a generated prompt because its bounded contract is recorded directly in TASKS and AI_PROVIDER_SETTINGS. The following six retained prompts cover the earlier horizon; dependency code and evidence must be present in the execution checkout. No paid/trial/merge/deployment authorization is implied.
+TASKS/NEXT own status. AST-08 through AST-11 are DONE; AST-28 is the next READY task. AST-11 had no generated prompt because its bounded contract was recorded directly in TASKS and AI_PROVIDER_SETTINGS. The following six retained prompts cover the earlier horizon; dependency code and evidence must be present in the execution checkout. No paid/trial/merge/deployment authorization is implied.
 
 1. [AST-05 existing launcher qualification](AST-05-qualify-existing-launcher.md)
 2. [AST-23 paused Watch contract](AST-23-paused-watch-contract.md)

@@ -75,12 +75,12 @@
     "id": "AST-11",
     "title": "Build functional AI Providers and cost settings",
     "deps": "AST-10",
-    "files": "frontend/src/views/AdminViews.tsx; frontend/src/lib/api.ts; frontend/src/lib/types.ts; frontend/src/styles.css; newsroom/domain_api.py.",
+    "files": "frontend/src/views/AdminViews.tsx; frontend/src/components/AIProviderSettings.tsx; frontend/src/lib/api.ts; frontend/src/lib/types.ts; frontend/src/styles.css; scripts/ast11_ai_provider_browser_smoke.py; existing newsroom/domain_api.py contracts consumed unchanged.",
     "approach": "Add named Settings sections and provider Add/Edit/Test/Enable/Disable/Model/Remove/Set-default controls. Show fixed mask/configured flag, offline explanation, supported capability, active model/generation, validation and failure, paid switch and typed existing budget controls. Clear secret after submit and label estimated usage honestly. Split a component only if needed for contained readability.",
     "accept": "Full special acceptance succeeds with a fake provider and actual configured worker path; No raw secret is returned/persisted in browser state/storage after submission; User can see offline/active model/paid/budget/failure/reload state and recover without terminal.",
     "tests": "Browser fake-provider Add AI Provider acceptance, bad inputs, stale edits, failed removal, screen-reader labels, save/refresh and next worker operation.",
     "tier": "2",
-    "status": "READY",
+    "status": "DONE",
     "prompt": null
   },
   {
@@ -152,7 +152,7 @@
     "accept": "Fake provider supplies useful varied synonyms/acronyms/aliases with rationale without automatic approval; malformed/paid-disabled/uncertain responses preserve configuration; unrelated ambiguous meanings can be rejected and stay rejected.",
     "tests": "UAP variants including historical aerial wording, company/person homonyms and unrelated niche fixtures; request count/budget/validation/approval-scope regressions.",
     "tier": "3",
-    "status": "NOT_STARTED",
+    "status": "READY",
     "prompt": null
   },
   {

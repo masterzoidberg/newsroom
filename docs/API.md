@@ -117,6 +117,15 @@ Article Analysis resolves the managed configuration at each operation boundary;
 new work observes the latest generation without a process restart, while
 in-flight work retains its pinned provider/model identity.
 
+Settings & Cost consumes these contracts through the AST-11 AI Providers
+surface. The owner can add/edit/remove a connection, set or remove its
+write-only credential, explicitly authorize one bounded structured-output test,
+enable/disable it, select the Article Analysis route, and configure existing
+typed global limits. The page shows the effective provider/model/generation,
+validation result, local/offline fallback, estimated usage and the absence of
+actual billing data. The credential input is cleared after submission and is
+never placed in browser storage or rendered API responses.
+
 ## Reports, briefings, and alerts
 
 Phase 11 adds authenticated, evidence-bound output paths:

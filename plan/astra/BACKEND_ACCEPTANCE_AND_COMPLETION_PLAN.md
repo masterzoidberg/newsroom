@@ -1,6 +1,6 @@
 # Backend acceptance and app completion plan
 
-Updated 2026-09-09 from the retained Windows backend run at AST-24 head `0df1c1d39b93b47306d2093cf506599fc44888ef`. This is planning only. It does not mark AST-05 or AST-24 DONE, authorize AST-25, merge branches, deploy, contact the Phase 29 runtime, or authorize paid calls.
+Updated 2026-09-12 as a retained planning/acceptance memo based on the Windows backend run at AST-24 head `0df1c1d39b93b47306d2093cf506599fc44888ef`. Its BA-1/BA-2/BA-3 status snapshot is historical; `plan/astra/TASKS.md` and `NEXT.md` are the current status authority. AST-05, AST-24 and AST-25 have since been reconciled in the active branch, and AST-11 is complete at `226f7b8`. This memo does not authorize merge, deployment, contact with the Phase 29 runtime or paid calls.
 
 ## Objective, constraints and assumptions
 
@@ -75,7 +75,12 @@ If the full run fails, preserve it, classify the first failure, fix only the own
 
 **Dependency:** BA-A. Size S verification.
 
-## Remaining issues and adjusted completion order
+## Historical remaining issues and adjusted completion order
+
+The following sequence is retained to explain the earlier BA decision, not as a
+current queue. The current queue is the single READY entry in `TASKS.md` and
+`task-index.json` (AST-28 after AST-11); release and installed-runtime limits
+listed below remain valid unless a newer task record says otherwise.
 
 ### Immediate gates
 
