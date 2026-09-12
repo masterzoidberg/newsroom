@@ -50,6 +50,17 @@ def test_story_correction_api_exposes_controlled_workflows(tmp_path):
     )
     assert merged.status_code == 200
     assert merged.json()["source"]["lifecycle"] == "archived"
+    replayed = client.post(
+        f"/api/v1/stories/{second['id']}/merge",
+        json={"destination_story_id": first["id"], "reason": "replayed"},
+        headers=headers,
+    )
+    assert replayed.status_code == 200
+    assert replayed.json()["already_applied"] is True
+    assert replayed.json()["correction_id"] == merged.json()["correction_id"]
+    merged_history = client.get(f"/api/v1/stories/{second['id']}/corrections").json()["items"]
+    assert merged_history[0]["transitions"]
+    assert merged_history[0]["lineage"]
 
     split_source = client.post("/api/v1/stories", json={"headline": "Combined"}, headers=headers).json()
     claims = [
@@ -112,6 +123,9 @@ def test_story_correction_previews_name_affected_records_without_mutating(tmp_pa
     split_preview = client.get(f"/api/v1/stories/{source['id']}/split-preview")
     assert split_preview.status_code == 200
     assert split_preview.json()["claims"][0]["proposition"] == "Source development"
+
+    corroboration = client.get(f"/api/v1/stories/{source['id']}/corroboration")
+    assert corroboration.status_code == 200, corroboration.text
 
     history = client.get(f"/api/v1/stories/{source['id']}/corrections")
     assert history.status_code == 200

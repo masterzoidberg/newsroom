@@ -808,7 +808,7 @@ class StoryEvolutionService:
         )
         if robustness["claim_ids"]:
             result["distinct_source_count"] = robustness["distinct_source_count"] or result["distinct_source_count"]
-            result["lineage_group_count"] = robustness["lineage_group_count"] or result["lineage_group_count"]
+            result["lineage_group_count"] = robustness.get("lineage_group_count") or result["lineage_group_count"]
             result["dependency_group_count"] = robustness["dependency_group_count"]
             result["dependency_groups"] = robustness["dependency_groups"]
             result["largest_group_share"] = robustness["largest_group_share"]
