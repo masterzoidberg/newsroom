@@ -257,6 +257,95 @@ export type ExperienceState = {
   mode: "simple" | "advanced";
 };
 
+export type AIConnection = {
+  id: string;
+  display_name: string;
+  adapter_kind: "openai_compatible";
+  base_url: string;
+  model: string;
+  enabled: boolean;
+  credential_required: boolean;
+  credential_configured: boolean;
+  credential_ref_version?: number | null;
+  credential_cleanup_required: boolean;
+  credential_removal_required: boolean;
+  max_input_chars: number;
+  max_output_tokens: number;
+  revision: number;
+  config_generation: number;
+  generation: number;
+  validation_status: "unvalidated" | "passed" | "failed";
+  validation_code: string | null;
+  validation_revision: number | null;
+  validated_at: string | null;
+  created_at: string;
+  updated_at: string;
+  supported_capabilities: string[];
+};
+
+export type AIRoute = {
+  capability: string;
+  provider_route: "local" | "connection";
+  connection_id: string | null;
+  fallback_policy: "local" | "fail";
+  revision: number;
+  config_generation: number;
+  generation: number;
+  effective: {
+    provider_route: "local" | "connection";
+    provider: string;
+    model: string | null;
+    connection_id?: string | null;
+    reason: string;
+  };
+};
+
+export type AIBudgetLimit = {
+  id: string;
+  scope_type: "global" | "policy" | "job" | "research_question";
+  scope_id: string | null;
+  period: "daily" | "monthly" | "lifetime";
+  cap_type: "acquisition_units" | "local_model_units" | "paid_requests" | "usd";
+  cap_value: number;
+  enabled: boolean;
+  created_at: string;
+  updated_at: string;
+};
+
+export type AIProviderUsage = {
+  id: string;
+  capability: string;
+  provider: string | null;
+  request_type: string;
+  query_units: number;
+  token_units: number | null;
+  estimated_cost_usd: number;
+  latency_ms: number | null;
+  outcome: string | null;
+  created_at: string;
+};
+
+export type AIStatus = {
+  generation: number;
+  supported_capabilities: string[];
+  items: AIConnection[];
+  providers: AIConnection[];
+  routes: AIRoute[];
+  effective_routes: Record<string, AIRoute["effective"]>;
+  paid_enabled: boolean;
+  budget_limits: AIBudgetLimit[];
+  effective_operation_routes?: Record<string, {
+    capability: string;
+    provider_route: "local" | "connection";
+    provider: string;
+    model: string;
+    generation: number;
+    source: string;
+    reason: string;
+    connection_id: string | null;
+  }>;
+};
+
 export type Briefing = {
   id: string;
   period: "daily" | "weekly";
