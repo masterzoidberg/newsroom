@@ -2295,7 +2295,11 @@ class WatchMaintenanceService:
         configuration_resolver: AIConfigurationResolver | None = None,
     ):
         self.db_path = Path(db_path)
-        self.configuration_resolver = configuration_resolver or AIConfigurationResolver(self.db_path)
+        self.configuration_resolver = configuration_resolver or (
+            watches.configuration_resolver
+            if watches is not None
+            else AIConfigurationResolver(self.db_path)
+        )
         self.watches = watches or WatchService(
             db_path,
             configuration_resolver=self.configuration_resolver,

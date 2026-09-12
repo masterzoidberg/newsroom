@@ -60,6 +60,7 @@ from newsroom.domain import (
     InMemoryCredentialStore,
 )
 from newsroom.integrity import check_database
+from newsroom.intelligent_monitoring import WatchMaintenanceService, WatchService
 from newsroom.jobs import (
     AUTOMATIC_ALERT_STAGE_JOB_TYPE,
     AUTOMATIC_REPORT_STAGE_JOB_TYPE,
@@ -2108,6 +2109,16 @@ def test_production_worker_ai_handlers_share_one_operation_authority(tmp_db):
 
     assert processing.configuration_resolver is vocabulary.configuration_resolver
     assert processing._analysis().configuration_resolver is vocabulary.configuration_resolver
+
+
+def test_watch_maintenance_reuses_an_existing_watch_resolver(tmp_db):
+    apply_migrations(tmp_db)
+    resolver = AIConfigurationResolver(tmp_db)
+    watches = WatchService(tmp_db, configuration_resolver=resolver)
+
+    maintenance = WatchMaintenanceService(tmp_db, watches=watches)
+
+    assert maintenance.configuration_resolver is resolver
 
 
 def test_ai_credential_removal_tracks_active_version_after_orphan_cleanup(tmp_db):
