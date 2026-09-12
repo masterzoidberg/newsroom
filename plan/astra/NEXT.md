@@ -1,18 +1,18 @@
 # Immediate execution queue
 
-Updated 2026-09-11 after AST-39 completed on `astra/AST-25-27-first-watch` at the latest committed AST-39 head. AST-05 engineering, AST-23/24, AST-25/26/27, AST-33, AST-34, AST-35, AST-36, AST-37, AST-38 and AST-39 are accepted on the branch; AST-39 alert API/domain, frontend, full-suite, eval and isolated browser qualification passed. Physical reboot/sign-in and lock/sleep/wake evidence remains a release gate; it does not block isolated product development.
+Updated 2026-09-11 after AST-40 completed on `astra/AST-25-27-first-watch` at commit `064e01f`. AST-05 engineering, AST-23/24, AST-25/26/27, AST-33, AST-34, AST-35, AST-36, AST-37, AST-38, AST-39 and AST-40 are accepted on the branch; AST-40 correction API/domain, frontend, full-suite, eval and isolated Story browser qualification passed. Physical reboot/sign-in and lock/sleep/wake evidence remains a release gate; it does not block isolated product development.
 
-**AST-39 — Make alert triage scoped and complete is DONE. The next queued task is AST-40 — Expose Story changes, disagreements and correction preview; it is READY.**
+**AST-40 — Expose Story changes, disagreements and correction preview is DONE. The next queued task is AST-06 — Create typed public AI configuration metadata; it is READY.**
 
-AST-39 is complete. Its scoped alert inbox, durable acknowledgement/history, cause navigation, Watch Source rule scope and threshold controls are available for AST-40.
+AST-40 is complete. Story changes/disagreements, named correction previews, local-only cancellation, exact source navigation, time semantics, and correction audit/lineage are available. AST-41 is not READY because it depends on AST-29, which is not started; the independent managed-AI lane therefore resumes at AST-06.
 
 Run 1 used an isolated checkout descended from `astra/AST-05-windows-runtime-cleanup` at accepted head `18c5ee8`, cherry-picked planning commit `b20fd79`, and completed one bounded commit per AST task without merging or rewriting history. Do not begin Run 2 in this session.
 
-Following queue, AST-40 is next and all future tasks remain NOT_STARTED unless separately classified below:
+Following queue, AST-06 is next and all future tasks remain NOT_STARTED unless separately classified below:
 
-1. AST-40 — Story changes, disagreements and correction preview (Tier 2/medium), after AST-39.
+1. AST-06 — Create typed public AI configuration metadata (Tier 3/high), after AST-27.
 
-Then AST-06–11 complete managed AI configuration before AST-28–32 add assisted terminology/discovery. This removes the older artificial dependency of basic local onboarding on a finished paid-provider settings screen.
+Then AST-07–11 complete managed AI configuration before AST-28–32 add assisted terminology/discovery. This removes the older artificial dependency of basic local onboarding on a finished paid-provider settings screen.
 
 Release blockers: AST-05 still needs physical reboot/sign-in and lock/sleep/wake evidence; hosted automation cannot imply those manual checks. AST-16/17/18 remain blocked external value gates. These gates do not block AST-25 engineering and do not authorize runtime contact, paid execution, merge or deployment.
 

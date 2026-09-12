@@ -1,6 +1,6 @@
 # Canonical execution ledger
 
-Rebaseline transitioned 2026-09-09 after automated Gate 0 acceptance at integrated head `18c5ee8bdf56a44218af4ecd6d7e8d9ead68f8c0`. Newsroom Run 1 then completed sequentially on `astra/AST-25-27-first-watch` through AST-39 at the latest committed AST-39 head. AST-25, AST-26, AST-27, AST-33, AST-34, AST-35, AST-36, AST-37, AST-38 and AST-39 are DONE; AST-33 completed at code head `4a7c0f9` with the full local backend suite green, AST-34 completed with frontend and isolated browser qualification, AST-35 completed with frontend, trust-boundary and isolated browser qualification, AST-36 completed with backend, frontend, full-suite, eval and isolated browser qualification, AST-37 completed with backend, migration, full-suite, eval and frontend build qualification, AST-38 completed with API, frontend, full-suite, eval and isolated browser qualification, and AST-39 completed with alert API/domain tests, full-suite, frontend checks and isolated browser qualification. Physical reboot/sign-in and lock/sleep/wake evidence remains pending for release. AST-40 is the next queued task.
+Rebaseline transitioned 2026-09-09 after automated Gate 0 acceptance at integrated head `18c5ee8bdf56a44218af4ecd6d7e8d9ead68f8c0`. Newsroom Run 1 then completed sequentially on `astra/AST-25-27-first-watch` through AST-40 at the latest committed AST-40 head. AST-25, AST-26, AST-27, AST-33, AST-34, AST-35, AST-36, AST-37, AST-38, AST-39 and AST-40 are DONE; AST-33 completed at code head `4a7c0f9` with the full local backend suite green, AST-34 completed with frontend and isolated browser qualification, AST-35 completed with frontend, trust-boundary and isolated browser qualification, AST-36 completed with backend, frontend, full-suite, eval and isolated browser qualification, AST-37 completed with backend, migration, full-suite, eval and frontend build qualification, AST-38 completed with API, frontend, full-suite, eval and isolated browser qualification, AST-39 completed with alert API/domain tests, full-suite, frontend checks and isolated browser qualification, and AST-40 completed with correction API/domain tests, full-suite, frontend checks, evals and isolated Story browser qualification. Physical reboot/sign-in and lock/sleep/wake evidence remains pending for release. AST-06 is now the next READY task; AST-41 remains blocked by unfinished AST-29.
 
 ## Contract inherited by every future task
 
@@ -28,7 +28,7 @@ Statuses: READY, NOT_STARTED, IN_PROGRESS, DONE, BLOCKED, DEFERRED, SUPERSEDED. 
 | AST-03 | Runtime supervision and lease renewal | DONE | AST-02 | Historical |
 | AST-04 | Honest status and recovery UI | DONE | AST-03 | Historical |
 | AST-05 | Qualify the existing Start Newsroom launcher | DONE | AST-01, AST-02, AST-03, AST-04 | 3 |
-| AST-06 | Create typed public AI configuration metadata | NOT_STARTED | AST-27 | 3 |
+| AST-06 | Create typed public AI configuration metadata | READY | AST-27 | 3 |
 | AST-07 | Store credentials in an approved operating-system vault | NOT_STARTED | AST-06 | 3 |
 | AST-08 | Make paid admission durable across processes and reloads | NOT_STARTED | AST-07 | 3 |
 | AST-09 | Resolve provider configuration at operation boundaries | NOT_STARTED | AST-08 | 3 |
@@ -62,7 +62,7 @@ Statuses: READY, NOT_STARTED, IN_PROGRESS, DONE, BLOCKED, DEFERRED, SUPERSEDED. 
 | AST-37 | Add durable user-selected briefing schedules | DONE | AST-36 | 3 |
 | AST-38 | Expose briefing preferences and first intelligence choices | DONE | AST-37 | 2 |
 | AST-39 | Make alert triage scoped and complete | DONE | AST-38 | 2 |
-| AST-40 | Expose Story changes, disagreements and correction preview | READY | AST-35 | 2 |
+| AST-40 | Expose Story changes, disagreements and correction preview | DONE | AST-35 | 2 |
 | AST-41 | Support question-first Watches and contextual research | NOT_STARTED | AST-29, AST-35 | 3 |
 | AST-42 | Make search, saved and history discoverable by name | NOT_STARTED | AST-35, AST-41 | 2 |
 | AST-43 | Add owner verified-backup and diagnostic controls | NOT_STARTED | AST-11, AST-05 | 3 |
@@ -107,7 +107,7 @@ Full original task bodies, acceptance and completion evidence are preserved in [
 
 ## AST-06 — Create typed public AI configuration metadata
 
-- **Status:** NOT_STARTED
+- **Status:** READY
 - **Outcome / why it matters:** Create typed public AI configuration metadata. See the mapped user gap in FEATURE_GAP_ANALYSIS and milestone in COMPLETION_ROADMAP.
 - **Dependencies:** AST-27
 - **Exact scope / files:** newsroom/migrations.py; newsroom/domain.py; newsroom/domain_api.py; newsroom/article_analysis.py; tests/test_phase21_article_analysis.py.
@@ -513,7 +513,7 @@ Full original task bodies, acceptance and completion evidence are preserved in [
 
 ## AST-40 — Expose Story changes, disagreements and correction preview
 
-- **Status:** READY
+- **Status:** DONE
 - **Outcome / why it matters:** Expose Story changes, disagreements and correction preview. See the mapped user gap in FEATURE_GAP_ANALYSIS and milestone in COMPLETION_ROADMAP.
 - **Dependencies:** AST-35
 - **Exact scope / files:** frontend/src/views/StoryEvidenceView.tsx; newsroom/story_corrections.py; tests/test_phase27_story_correction_api.py
@@ -523,7 +523,7 @@ Full original task bodies, acceptance and completion evidence are preserved in [
 - **Model:** TIER 2; reasoning medium.
 - **Prompt filename:** Not generated: outside the six-task horizon. Generate `prompts/AST-40-<bounded-title>.md` after dependencies land; retained old template (if any) is historical only.
 - **Non-goals, invariants, browser evidence, rollback, cost and stop condition:** inherited in full from Contract inherited by every future task above.
-- **Completion evidence:** Not executed by this rebaseline. AST-05 has implementation on the unmerged stack but incomplete qualification; all other records describe future work or explicit external gates.
+- **Completion evidence:** DONE on `astra/AST-25-27-first-watch` at commit `064e01f` (`AST-40: surface Story changes and correction previews`). `StoryEvidenceView.tsx` now surfaces timeline-linked New Claims, exact contradictory EvidenceSpan excerpts with source navigation, recorded/known-at versus publisher publication versus Document retrieval timestamps, named merge/split preview records, Watch/Monitor effects, explicit local-only cancellation, and correction history Claim transitions/Story lineage. `story_corrections.py` enriches merge/split previews with named Story, Claim, Document and Entity records; `story_evolution.py` keeps corroboration compatible with legacy robustness payloads. Focused correction/API tests passed (13); `python -m pytest -q` passed with one expected Windows POSIX-only SIGSTOP skip; `python -m compileall -q newsroom tests`, `ruff check newsroom tests`, `python -m newsroom.evals validate`, `python -m newsroom.evals lite-contract`, `npm run build`, and `git diff --check` passed. Isolated Playwright browser qualification against the disposable Vite server passed settled Story disagreement/time rendering, named merge preview, split preview, zero mutation requests after both cancellations, exact DocumentVersion navigation, and measured 390px containment (`innerWidth`/`clientWidth`/`scrollWidth` = 390/390/390); screenshots are in `%TEMP%\ast40-story-final`. CI was not queried. No paid calls, external discovery, active-trial contact or runtime data mutation occurred. Physical reboot/sign-in and lock/sleep/wake remain release gates outside this task.
 
 ## AST-41 — Support question-first Watches and contextual research
 

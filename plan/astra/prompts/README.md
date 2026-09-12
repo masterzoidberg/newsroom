@@ -1,6 +1,6 @@
 # Current execution prompts
 
-TASKS/NEXT own status. Only AST-05 is READY. The following six prompts cover the immediate horizon; dependency code and evidence must be present in the execution checkout. No paid/trial/merge/deployment authorization is implied.
+TASKS/NEXT own status. AST-06 is READY; it has no generated prompt because its bounded contract is recorded directly in TASKS and AI_PROVIDER_SETTINGS. The following six retained prompts cover the earlier horizon; dependency code and evidence must be present in the execution checkout. No paid/trial/merge/deployment authorization is implied.
 
 1. [AST-05 existing launcher qualification](AST-05-qualify-existing-launcher.md)
 2. [AST-23 paused Watch contract](AST-23-paused-watch-contract.md)

@@ -20,7 +20,7 @@
     "accept": "Only public bounded metadata and opaque references persist; Unsupported routes/stale updates fail deterministically; local is default; Schema-36 upgrade preserves existing data and history.",
     "tests": "Fresh/upgrade schema tests, invalid metadata and secret URL rejection, stale revision, local default and metadata export policy.",
     "tier": "3",
-    "status": "NOT_STARTED",
+    "status": "READY",
     "prompt": null
   },
   {
@@ -296,7 +296,7 @@
     "accept": "User can identify new/conflicting Claims and evidence; correction preview names affected records and cancel mutates nothing; confirmed corrections retain audit/lineage and safe replay.",
     "tests": "Browser disagreement/time/preview/cancel/error/reload/phone; existing correction/reconciliation tests.",
     "tier": "2",
-    "status": "READY",
+    "status": "DONE",
     "prompt": null
   },
   {
