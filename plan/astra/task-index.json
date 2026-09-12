@@ -68,7 +68,7 @@
     "accept": "Explicit test yields a safe revision-bound capability result without raw provider body; Credential cannot be forwarded to a changed/unapproved destination; No provider call occurs on listing, edit, startup or typing; test never enables background spend.",
     "tests": "Fake transport for auth failure, timeout, malformed JSON/schema, host redirect/credential forwarding, unsupported model, stale validation revision, test cap exhaustion.",
     "tier": "3",
-    "status": "READY",
+    "status": "DONE",
     "prompt": null
   },
   {
@@ -80,7 +80,7 @@
     "accept": "Full special acceptance succeeds with a fake provider and actual configured worker path; No raw secret is returned/persisted in browser state/storage after submission; User can see offline/active model/paid/budget/failure/reload state and recover without terminal.",
     "tests": "Browser fake-provider Add AI Provider acceptance, bad inputs, stale edits, failed removal, screen-reader labels, save/refresh and next worker operation.",
     "tier": "2",
-    "status": "NOT_STARTED",
+    "status": "READY",
     "prompt": null
   },
   {

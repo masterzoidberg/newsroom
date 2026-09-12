@@ -62,6 +62,13 @@ Formal ADR records are under `docs/adr/`.
   remain explicitly local, and legacy environment configuration is accepted
   only on an untouched installation with an explicit source label; managed
   edits or removal cannot be overridden by those variables.
+- **D-017:** Provider validation is an explicit owner action, not a listing,
+  save, startup, typing, or refresh side effect. Each test uses a separate
+  durable bounded reservation and returns only a safe, revision-bound
+  structured-output result. Hosted endpoints require a credential; keyless
+  HTTP is restricted to explicit loopback destinations; credentialed clients
+  do not follow redirects, and a host change requires credential removal before
+  the new destination can be saved.
 
 Phase 0 established the evaluation subsystem (`newsroom.evals`), a 30-case
 labeled corpus, deterministic replay, reproducible metrics, and the v1 baseline.

@@ -1,6 +1,6 @@
 # Astra completion plan
 
-Audit baseline: `aad7d17ec91b56b68e1252c70bdf6521060c0bd1`, branch `main`, 2026-09-06 America/New_York (work continued after midnight UTC). Scope: audit and planning only. No application implementation is included.
+Audit baseline: `aad7d17ec91b56b68e1252c70bdf6521060c0bd1`, branch `main`, 2026-09-06 America/New_York (work continued after midnight UTC). The audit and planning baseline is retained; implementation now continues on the isolated `astra/AST-25-27-first-watch` branch.
 
 This directory is the canonical new completion layer requested by the owner. It supersedes historical task ordering, not evidence/provenance invariants, migration history, or frozen trial protocols. `plan/astra` existed but was empty when inspected. Unrelated `.kilo/` and `Newsroom -v2.zip` were preserved.
 
@@ -8,7 +8,7 @@ This directory is the canonical new completion layer requested by the owner. It 
 
 1. Read [EXECUTIVE_AUDIT.md](EXECUTIVE_AUDIT.md) and [CURRENT_STATE.md](CURRENT_STATE.md).
 2. Read [CODEX_EXECUTION_RULES.md](CODEX_EXECUTION_RULES.md), [DECISIONS.md](DECISIONS.md), and [NEXT.md](NEXT.md).
-3. Execute the first READY task in [TASKS.md](TASKS.md), using its matching [prompt](prompts/README.md). Revalidate dependencies and current HEAD first.
+3. Execute the first READY task in [TASKS.md](TASKS.md), currently AST-11, using its bounded contract and revalidating dependencies/current HEAD first.
 4. Record evidence, update task status and the immediate queue, and stop after the primary task. No task is DONE merely because its code exists.
 
 ## Planning map

@@ -95,9 +95,17 @@ Research Gaps, and reviewed explicitly.
 The authenticated AI configuration routes expose bounded non-secret provider
 metadata and the supported `article_analysis` route. `GET /ai/providers` and
 `GET /ai/providers/{id}` return configured status, credential version, effective
-route and generation, never the vault reference or credential value. Provider
-metadata writes and route changes require CSRF protection and use optimistic
-revision/generation checks.
+route and generation, never the vault reference or credential value. `POST
+/ai/providers` creates a disabled connection; `PATCH /ai/providers/{id}` uses
+an optimistic revision; `PUT /ai/providers/{id}/credential` is write-only;
+`DELETE /ai/providers/{id}/credential` disables/reroutes and reports retryable
+vault cleanup; and `DELETE /ai/providers/{id}` removes only after cleanup.
+`POST /ai/providers/{id}/test` is the only provider-call path: it requires an
+explicit per-call test authorization and returns only a safe,
+revision-bound capability result. `PUT /ai/routes/{capability}` changes the
+supported route with an optimistic generation. Provider metadata writes and
+route changes require CSRF protection and use optimistic revision/generation
+checks.
 
 `PUT /ai/providers/{id}/credential` accepts a write-only credential and
 `DELETE /ai/providers/{id}/credential` disables/reroutes before attempting

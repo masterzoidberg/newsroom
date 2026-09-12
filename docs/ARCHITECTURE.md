@@ -376,25 +376,31 @@ deterministic provider slots, its own `_OUTPUT_TYPES` entry, and
 `RoutePolicy` budgets. Exactly one real provider exists:
 `OpenAICompatibleArticleAnalysisProvider`, which calls an OpenAI-compatible
 `/chat/completions` endpoint through the official `openai` SDK with an
-explicit `httpx.Timeout` (connect/read/write) and bounded `max_retries`
-(default 2), requests the structured JSON-schema response format, and
-re-validates the response through the Pydantic contract. No multi-provider
-marketplace exists; `NEWSROOM_ANALYSIS_BASE_URL` makes the adapter usable with
-any OpenAI-compatible endpoint. The deterministic local provider
+explicit `httpx.Timeout` (connect/read/write), bounded `max_retries`
+(default 2), redirects disabled, and the structured JSON-schema response
+format; responses are re-validated through the Pydantic contract. The
+managed connection API accepts only normalized safe destinations, requires
+credentials for hosted endpoints, allows keyless HTTP only for explicit
+loopback connections, and invalidates validation before a credentialed host
+change. No multi-provider marketplace exists; an untouched installation may
+use the labeled legacy environment configuration, while managed metadata and
+the OS-vault credential are authoritative once present. The deterministic local provider
 (`LocalArticleAnalysisProvider`) returns the exact same schema from the
 verified source text — intentionally crude, honestly labeled (`provider=local`,
 `model=local`), and never presented as semantic LLM analysis.
 
 **Configuration — safe by default.** A fresh installation with no
-configuration performs zero paid calls and analyzes locally. Remote use is an
-explicit opt-in requiring `NEWSROOM_ANALYSIS_PROVIDER=openai` plus an API key
-(`NEWSROOM_ANALYSIS_API_KEY`; the conventional `OPENAI_API_KEY` that the
-openai SDK itself reads by default is accepted as a fallback — never logged),
-the bundled `openai>=1.68,<2.0` SDK, the existing `budget.paid_enabled`
-settings flag, and per-call budget limits
+configuration performs zero paid calls and analyzes locally. Managed remote
+use is created disabled, requires a configured model/destination and
+credential (or an explicitly keyless loopback connection), and is enabled and
+routed only by separate owner actions. `POST /ai/providers/{id}/test` performs
+one bounded structured-output probe only after explicit per-call test
+authorization; it does not enable background spending. Remote background use
+still requires the existing `budget.paid_enabled` setting and per-call budget
+limits
 (`NEWSROOM_ANALYSIS_MAX_PAID_CALLS`, `_MAX_PAID_COST_USD`,
 `_MAX_PAID_CALLS_PER_WORK`, `_MAX_PAID_COST_USD_PER_WORK`,
-`_REQUEST_COST_USD`). Missing key → explicit `AIConfigurationError`
+`_REQUEST_COST_USD`). Missing credential → explicit `AIConfigurationError`
 (terminal); budget disabled/exhausted → `AIDisabled` with a `blocked`
 telemetry row (no provider call). Provider choice stays behind the capability
 abstraction; the processing handler never instantiates a provider directly.

@@ -19,7 +19,7 @@ Managed selection now uses the shared `AIConfigurationResolver`: it reads the cu
 
 Retain SQLite for **public metadata only** and add a small typed provider/config service. Existing generic settings reject sensitive key names and return values; never use them for secrets. Do not add an encrypted key column to SQLite: full database backups would still carry the credential blob.
 
-Proposed additive schema (allocate next migration only after checking current ledger; audit baseline is 36):
+Implemented additive schema (migrations 0038–0039; the audit baseline was 36):
 
 - `ai_connections`: stable ID, display name, adapter kind (`openai_compatible`), normalized base URL, model, enabled flag, credential reference/version (opaque non-secret), credential requirement, output/input bounds, created/updated timestamps, validation result/code/time tied to exact config revision.
 - `ai_capability_routes`: capability primary key, connection ID or local, fallback policy, revision. Unsupported capabilities cannot be assigned. “Set default” applies only to supported capabilities and previews the affected list.
@@ -63,7 +63,7 @@ Fallback: default local when provider is disabled/removed/unconfigured or budget
 
 ## API and frontend contracts
 
-All routes below are proposed under `/api/v1`, use existing session/CSRF guards for writes, restrictive validation, safe error codes, `Cache-Control: no-store`, and no request-body logging.
+The backend routes below are implemented under `/api/v1`; they use existing session/CSRF guards for writes, restrictive validation, safe error codes, `Cache-Control: no-store`, and no request-body logging. The functional Settings UI remains AST-11.
 
 | Endpoint | Contract |
 |---|---|
@@ -79,7 +79,7 @@ All routes below are proposed under `/api/v1`, use existing session/CSRF guards 
 
 Use existing budget APIs for spending limits; no second limit ledger. Test connection may incur cost: explicit UI action explains this, requires a bounded authorized test reservation even while background paid routing is off, and never enables background spending. No validation on typing, page open, periodic refresh or migration. Count failed/uncertain sent requests conservatively; distinguish free local tests. Never treat a models-list request alone as a schema-capability pass.
 
-Settings → AI Providers explains offline operation and the precise improvement (structured Article Analysis initially). Add/Edit/Test/Enable/Disable/Model/Remove credential/Set default controls, masked fixed placeholder, configured state, validation timestamp and generation, effective routing, paid switch, limits, estimated versus actual usage, safe failure explanation. Raw key exists only in the password input/request until submission; clear it afterward, never persist it in browser storage or global state. Server validation errors must not echo input; Pydantic's raw `input` details require special handling for these request models. Shared Settings loading failures must not hide the entire provider state.
+AST-11 Settings → AI Providers must explain offline operation and the precise improvement (structured Article Analysis initially). It owns Add/Edit/Test/Enable/Disable/Model/Remove credential/Set default controls, masked fixed placeholder, configured state, validation timestamp and generation, effective routing, paid switch, limits, estimated versus actual usage, safe failure explanation. Raw key exists only in the password input/request until submission; clear it afterward, never persist it in browser storage or global state. Server validation errors must not echo input; Pydantic's raw `input` details require special handling for these request models. Shared Settings loading failures must not hide the entire provider state.
 
 ## Acceptance — Add AI Provider
 
