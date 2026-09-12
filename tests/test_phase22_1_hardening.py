@@ -11,7 +11,7 @@ from newsroom.evidence import EvidenceService
 from newsroom.evidence_promotion import ArticleAnalysisPromotionService
 from newsroom.document_processing import DocumentProcessingExecutionService
 from newsroom.jobs import JobService
-from newsroom.migrations import apply_migrations
+from newsroom.migrations import CURRENT_SCHEMA_VERSION, apply_migrations
 from newsroom.operations import export_logical
 from newsroom.workbench import ComparisonService, SearchService
 from newsroom.worker import RetryableJobFailure, WorkerProcess
@@ -443,7 +443,7 @@ def test_schema22_preserves_schema21_manual_evidence_and_child_links(tmp_db):
 
     result = apply_migrations(tmp_db)
 
-    assert result.applied_versions == (22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37)
+    assert result.applied_versions == tuple(range(22, CURRENT_SCHEMA_VERSION + 1))
     conn = storage.connect(tmp_db)
     try:
         span = conn.execute("SELECT * FROM evidence_spans WHERE id = 'span-preserve'").fetchone()

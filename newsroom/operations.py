@@ -33,6 +33,9 @@ class ExportLimitExceeded(OperationsError):
 _EXPORT_COLUMNS: dict[str, tuple[str, ...]] = {
     "schema_migrations": ("version", "applied_at"),
     "app_meta": ("key", "value"),
+    "ai_config_state": ("id", "generation", "updated_at"),
+    "ai_connections": ("id", "display_name", "adapter_kind", "base_url", "model", "enabled", "credential_ref_version", "credential_required", "max_input_chars", "max_output_tokens", "revision", "config_generation", "validation_status", "validation_code", "validation_revision", "validated_at", "created_at", "updated_at"),
+    "ai_capability_routes": ("capability", "provider_route", "connection_id", "fallback_policy", "revision", "config_generation", "updated_at"),
     "categories": ("id", "slug", "name", "created_at", "updated_at", "deleted_at"),
     "topics": ("id", "category_id", "slug", "name", "created_at", "updated_at", "deleted_at"),
     "topic_terms": ("id", "topic_id", "term", "term_type", "created_at"),

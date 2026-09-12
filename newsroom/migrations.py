@@ -3711,7 +3711,69 @@ MIGRATION_0037_CHECKSUM = hashlib.sha256(
 ).hexdigest()
 
 
-CURRENT_SCHEMA_VERSION = 37
+# 0038: establish the non-secret, typed AI configuration authority.  Secrets
+# are deliberately absent; AST-07 owns the approved credential store and can
+# attach opaque references to these rows later.
+MIGRATION_0038_STATEMENTS: tuple[str, ...] = (
+    """
+    CREATE TABLE ai_config_state (
+        id INTEGER PRIMARY KEY CHECK (id = 1),
+        generation INTEGER NOT NULL CHECK (generation >= 1),
+        updated_at TEXT NOT NULL
+    )
+    """,
+    """
+    INSERT INTO ai_config_state (id, generation, updated_at)
+    VALUES (1, 1, strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
+    """,
+    """
+    CREATE TABLE ai_connections (
+        id TEXT PRIMARY KEY,
+        display_name TEXT NOT NULL,
+        adapter_kind TEXT NOT NULL CHECK (adapter_kind IN ('openai_compatible')),
+        base_url TEXT NOT NULL,
+        model TEXT NOT NULL,
+        enabled INTEGER NOT NULL DEFAULT 0 CHECK (enabled IN (0, 1)),
+        credential_ref TEXT,
+        credential_ref_version INTEGER CHECK (credential_ref_version IS NULL OR credential_ref_version >= 1),
+        credential_required INTEGER NOT NULL DEFAULT 1 CHECK (credential_required IN (0, 1)),
+        max_input_chars INTEGER NOT NULL CHECK (max_input_chars >= 1),
+        max_output_tokens INTEGER NOT NULL CHECK (max_output_tokens >= 1),
+        revision INTEGER NOT NULL CHECK (revision >= 1),
+        config_generation INTEGER NOT NULL CHECK (config_generation >= 1),
+        validation_status TEXT NOT NULL DEFAULT 'unvalidated' CHECK (validation_status IN ('unvalidated', 'passed', 'failed')),
+        validation_code TEXT,
+        validation_revision INTEGER CHECK (validation_revision IS NULL OR validation_revision >= 1),
+        validated_at TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+    )
+    """,
+    "CREATE INDEX ai_connections_enabled_idx ON ai_connections(enabled, updated_at, id)",
+    """
+    CREATE TABLE ai_capability_routes (
+        capability TEXT PRIMARY KEY,
+        provider_route TEXT NOT NULL CHECK (provider_route IN ('local', 'connection')),
+        connection_id TEXT REFERENCES ai_connections(id) ON DELETE SET NULL,
+        fallback_policy TEXT NOT NULL DEFAULT 'local' CHECK (fallback_policy IN ('local', 'fail')),
+        revision INTEGER NOT NULL CHECK (revision >= 1),
+        config_generation INTEGER NOT NULL CHECK (config_generation >= 1),
+        updated_at TEXT NOT NULL
+    )
+    """,
+    """
+    INSERT INTO ai_capability_routes
+        (capability, provider_route, connection_id, fallback_policy, revision, config_generation, updated_at)
+    VALUES ('article_analysis', 'local', NULL, 'local', 1, 1, strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
+    """,
+)
+
+MIGRATION_0038_CHECKSUM = hashlib.sha256(
+    "\n".join(MIGRATION_0038_STATEMENTS).encode("utf-8")
+).hexdigest()
+
+
+CURRENT_SCHEMA_VERSION = 38
 
 
 @dataclass(frozen=True)
@@ -3798,6 +3860,7 @@ def apply_migrations(db_path: Optional[str | Path] = None) -> MigrationResult:
                 35: MIGRATION_0035_STATEMENTS,
                 36: MIGRATION_0036_STATEMENTS,
                 37: MIGRATION_0037_STATEMENTS,
+                38: MIGRATION_0038_STATEMENTS,
             }
             for version, statements in migrations.items():
                 if version in existing:

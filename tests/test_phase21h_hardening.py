@@ -26,7 +26,7 @@ from newsroom.domain import CoreService, DomainValidation
 from newsroom.document_processing import DocumentProcessingExecutionService, enqueue_document_version_processing_tx
 from newsroom.integrity import check_database
 from newsroom.jobs import BudgetService, JobService
-from newsroom.migrations import apply_migrations, migration_status
+from newsroom.migrations import CURRENT_SCHEMA_VERSION, apply_migrations, migration_status
 from newsroom.monitoring import (
     DocumentVersionRelevanceService,
     MonitorService,
@@ -304,9 +304,9 @@ def _insert_version_for_future_processing(db: Path, fixture: dict[str, Any], ide
 
 
 def test_phase21h_migration_is_additive_and_idempotent(tmp_db):
-    assert apply_migrations(tmp_db).current_version == 37
+    assert apply_migrations(tmp_db).current_version == CURRENT_SCHEMA_VERSION
     assert apply_migrations(tmp_db).applied_versions == ()
-    assert migration_status(tmp_db)[-1] == 37
+    assert migration_status(tmp_db)[-1] == CURRENT_SCHEMA_VERSION
     conn = storage.connect(tmp_db)
     try:
         tables = {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}

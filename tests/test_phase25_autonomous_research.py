@@ -16,7 +16,7 @@ from newsroom.domain import CoreService
 from newsroom.evidence import EvidenceService
 from newsroom.integrity import check_database
 from newsroom.jobs import JobService
-from newsroom.migrations import apply_migrations
+from newsroom.migrations import CURRENT_SCHEMA_VERSION, apply_migrations
 from newsroom.monitoring import MonitoringPolicyService
 from newsroom.operations import export_logical
 from newsroom.research_questions import (
@@ -145,8 +145,8 @@ def test_phase24_database_upgrades_to_phase25_without_reinterpreting_existing_qu
     from newsroom.migrations import migration_status
 
     result = apply_migrations(tmp_db)
-    assert result.applied_versions == (25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37)
-    assert migration_status(tmp_db) == tuple(range(1, 38))
+    assert result.applied_versions == tuple(range(25, CURRENT_SCHEMA_VERSION + 1))
+    assert migration_status(tmp_db) == tuple(range(1, CURRENT_SCHEMA_VERSION + 1))
     current = ResearchQuestionService(tmp_db).get("rq-legacy")
     assert current["status"] == "open"
     assert current["assessment_state"] == "open"

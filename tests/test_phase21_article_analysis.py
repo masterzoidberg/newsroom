@@ -50,7 +50,7 @@ from newsroom.article_analysis import (
 )
 from newsroom.content_artifacts import ContentArtifactService
 from newsroom.document_processing import DocumentProcessingExecutionService
-from newsroom.domain import CoreService
+from newsroom.domain import AIConfigurationService, CoreService, DomainConflict, DomainValidation
 from newsroom.integrity import check_database
 from newsroom.jobs import (
     AUTOMATIC_ALERT_STAGE_JOB_TYPE,
@@ -78,9 +78,11 @@ from newsroom.migrations import (
     MIGRATION_0015_STATEMENTS,
     MIGRATION_0016_STATEMENTS,
     MIGRATION_0017_STATEMENTS,
+    CURRENT_SCHEMA_VERSION,
     apply_migrations,
     migration_status,
 )
+from newsroom.operations import export_logical
 from newsroom.monitoring import (
     DocumentVersionRelevanceService,
     MonitorExecutionService,
@@ -1538,6 +1540,209 @@ def test_uap_fixture_structured_analysis_demonstrates_all_fields(tmp_db):
 
 
 # ---------------------------------------------------------------------------
+# AST-06: typed public AI configuration metadata
+# ---------------------------------------------------------------------------
+
+
+def test_ai_configuration_is_local_by_default_and_keeps_metadata_non_secret(tmp_db, tmp_path):
+    apply_migrations(tmp_db)
+    configuration = AIConfigurationService(tmp_db)
+
+    initial = configuration.list_connections()
+    assert initial["generation"] == 1
+    assert initial["effective_routes"]["article_analysis"]["provider_route"] == "local"
+    assert initial["effective_routes"]["article_analysis"]["reason"] == "default_local"
+
+    provider = configuration.create_connection(
+        {
+            "display_name": "Research gateway",
+            "base_url": "HTTPS://api.example.test/v1/",
+            "model": "structured-model",
+            "credential_ref": "vault:newsroom/research-gateway/1",
+        }
+    )
+    assert provider["enabled"] is False
+    assert provider["credential_configured"] is True
+    assert "credential_ref" not in provider
+    assert provider["base_url"] == "https://api.example.test/v1"
+    assert provider["generation"] == 2
+
+    enabled = configuration.update_connection(provider["id"], {"enabled": True}, expected_revision=1)
+    assert enabled["revision"] == 2
+    route = configuration.set_route(
+        "article_analysis",
+        provider_route="connection",
+        connection_id=provider["id"],
+        expected_generation=enabled["generation"],
+    )
+    assert route["effective"]["provider_route"] == "connection"
+    assert route["effective"]["model"] == "structured-model"
+
+    changed = configuration.update_connection(
+        provider["id"], {"model": "structured-model-v2"}, expected_revision=2
+    )
+    assert changed["revision"] == 3
+    assert changed["validation_status"] == "unvalidated"
+    with pytest.raises(DomainConflict):
+        configuration.update_connection(provider["id"], {"model": "stale"}, expected_revision=2)
+    with pytest.raises(DomainConflict):
+        configuration.set_route(
+            "article_analysis",
+            provider_route="local",
+            expected_generation=route["generation"],
+        )
+    with pytest.raises(DomainValidation):
+        configuration.set_route("embeddings", provider_route="local")
+
+    exported = export_logical(tmp_db, tmp_path / "ai-metadata.jsonl")
+    export_text = exported.read_text(encoding="utf-8")
+    assert '"table":"ai_connections"' in export_text
+    assert "vault:newsroom/research-gateway/1" not in export_text
+    assert '"credential_ref"' not in export_text
+
+
+@pytest.mark.parametrize(
+    "base_url",
+    (
+        "https://user:password@example.test/v1",
+        "https://api.example.test/v1?api_key=sentinel",
+        "https://api.example.test/v1#secret",
+        "http://10.0.0.1/v1",
+        "ftp://api.example.test/v1",
+    ),
+)
+def test_ai_configuration_rejects_unsafe_provider_urls(tmp_db, base_url):
+    apply_migrations(tmp_db)
+    with pytest.raises(DomainValidation):
+        AIConfigurationService(tmp_db).create_connection(
+            {"display_name": "Unsafe", "base_url": base_url, "model": "model"}
+        )
+
+
+def test_ai_configuration_rejects_coerced_flags_and_allows_explicit_keyless_enable(tmp_db):
+    apply_migrations(tmp_db)
+    configuration = AIConfigurationService(tmp_db)
+
+    with pytest.raises(DomainValidation):
+        configuration.create_connection(
+            {
+                "display_name": "Wrong flag type",
+                "base_url": "http://127.0.0.1:9000/v1",
+                "model": "model",
+                "enabled": 0,
+            }
+        )
+
+    keyless = configuration.create_connection(
+        {
+            "display_name": "Loopback gateway",
+            "base_url": "http://127.0.0.1:9000/v1",
+            "model": "local-compatible",
+            "credential_required": False,
+        }
+    )
+    assert keyless["credential_required"] is False
+    enabled = configuration.update_connection(
+        keyless["id"],
+        {"credential_required": False, "enabled": True},
+        expected_revision=1,
+    )
+    assert enabled["enabled"] is True
+    route = configuration.set_route(
+        "article_analysis",
+        provider_route="connection",
+        connection_id=keyless["id"],
+    )
+    assert route["effective"]["provider_route"] == "connection"
+
+
+def test_ai_configuration_fail_fallback_reports_unavailable_connection(tmp_db):
+    apply_migrations(tmp_db)
+    configuration = AIConfigurationService(tmp_db)
+    provider = configuration.create_connection(
+        {
+            "display_name": "Disabled gateway",
+            "base_url": "https://api.example.test/v1",
+            "model": "model",
+            "credential_ref": "vault:newsroom/disabled-gateway/1",
+        }
+    )
+
+    route = configuration.set_route(
+        "article_analysis",
+        provider_route="connection",
+        connection_id=provider["id"],
+        fallback_policy="fail",
+    )
+    assert route["effective"]["provider_route"] == "connection"
+    assert route["effective"]["reason"] == "connection_unavailable"
+
+
+def test_ai_configuration_api_is_authenticated_csrf_protected_and_bounded(tmp_path):
+    from fastapi.testclient import TestClient
+
+    from newsroom.app import create_app
+    from newsroom.config import RuntimeConfig
+
+    config = RuntimeConfig.for_environment("dev", root=tmp_path / "dev")
+    with TestClient(create_app(config=config, frontend_dist=tmp_path / "missing-dist")) as client:
+        password = "a-long-test-password-12345"
+        assert client.post("/api/v1/auth/setup", json={"username": "admin", "password": password}).status_code == 201
+        assert client.post("/api/v1/auth/login", json={"username": "admin", "password": password}).status_code == 200
+        headers = {"X-CSRF-Token": client.cookies.get("newsroom_csrf")}
+
+        listed = client.get("/api/v1/ai/providers")
+        assert listed.status_code == 200
+        assert listed.headers["cache-control"] == "no-store"
+        assert listed.json()["effective_routes"]["article_analysis"]["provider_route"] == "local"
+
+        denied = client.post(
+            "/api/v1/ai/providers",
+            json={"display_name": "No CSRF", "base_url": "https://api.example.test/v1", "model": "model"},
+        )
+        assert denied.status_code == 403
+
+        created = client.post(
+            "/api/v1/ai/providers",
+            headers=headers,
+            json={
+                "display_name": "Metadata only",
+                "base_url": "https://api.example.test/v1",
+                "model": "model",
+                "credential_ref": "vault:newsroom/metadata-only/1",
+            },
+        )
+        assert created.status_code == 201
+        assert "credential_ref" not in created.json()
+        assert created.json()["enabled"] is False
+        provider = created.json()
+
+        current = client.get(f"/api/v1/ai/providers/{provider['id']}")
+        assert current.status_code == 200
+        assert "credential_ref" not in current.json()
+
+        changed = client.patch(
+            f"/api/v1/ai/providers/{provider['id']}",
+            headers=headers,
+            json={"expected_revision": 1, "model": "model-v2"},
+        )
+        assert changed.status_code == 200
+        stale = client.patch(
+            f"/api/v1/ai/providers/{provider['id']}",
+            headers=headers,
+            json={"expected_revision": 1, "model": "stale-model"},
+        )
+        assert stale.status_code == 409
+
+        unsupported = client.put(
+            "/api/v1/ai/routes/embeddings",
+            headers=headers,
+            json={"provider_route": "local"},
+        )
+        assert unsupported.status_code == 422
+
+
+# ---------------------------------------------------------------------------
 # Migration 0018: fresh, upgrade, rerun
 # ---------------------------------------------------------------------------
 
@@ -1545,8 +1750,8 @@ def test_uap_fixture_structured_analysis_demonstrates_all_fields(tmp_db):
 def test_migration_0018_fresh_upgrade_and_rerun(tmp_db):
     # Fresh DB migrates through the current schema.
     apply_migrations(tmp_db)
-    assert migration_status(tmp_db) == tuple(range(1, 38))
-    assert _get(tmp_db, "SELECT value FROM app_meta WHERE key = 'schema_version'")[0] == "37"
+    assert migration_status(tmp_db) == tuple(range(1, CURRENT_SCHEMA_VERSION + 1))
+    assert _get(tmp_db, "SELECT value FROM app_meta WHERE key = 'schema_version'")[0] == str(CURRENT_SCHEMA_VERSION)
     assert _count(tmp_db, "article_analyses") == 0
 
     # Upgrade: a schema-17 DB upgrades safely with data preserved.
@@ -1594,18 +1799,100 @@ def test_migration_0018_fresh_upgrade_and_rerun(tmp_db):
         conn.close()
 
     result = apply_migrations(db2)
-    assert result.applied_versions == (18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37)
-    assert result.current_version == 37
-    assert migration_status(db2) == tuple(range(1, 38))
-    assert _get(db2, "SELECT value FROM app_meta WHERE key = 'schema_version'")[0] == "37"
+    assert result.applied_versions == tuple(range(18, CURRENT_SCHEMA_VERSION + 1))
+    assert result.current_version == CURRENT_SCHEMA_VERSION
+    assert migration_status(db2) == tuple(range(1, CURRENT_SCHEMA_VERSION + 1))
+    assert _get(db2, "SELECT value FROM app_meta WHERE key = 'schema_version'")[0] == str(CURRENT_SCHEMA_VERSION)
     assert _get(db2, "SELECT name FROM sources WHERE id = 'src-old21'")[0] == "Old"
     assert _count(db2, "article_analyses") == 0
 
     # Rerun is a no-op.
     result = apply_migrations(db2)
     assert result.applied_versions == ()
-    assert result.current_version == 37
+    assert result.current_version == CURRENT_SCHEMA_VERSION
     assert check_database(db2).ok is True
+
+
+def test_migration_0038_schema37_upgrade_preserves_data_and_history(tmp_path):
+    db_path = tmp_path / "schema37.sqlite"
+    apply_migrations(db_path)
+
+    conn = storage.connect(db_path)
+    try:
+        conn.execute("PRAGMA foreign_keys = OFF")
+        with storage.write_tx(conn):
+            conn.execute(
+                "INSERT INTO app_meta(key, value) VALUES ('ast06_preserved', 'yes')"
+            )
+            conn.execute(
+                "INSERT INTO sources (id, name, slug, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
+                ("src-schema37", "Schema 37 source", "schema37-source", T0, T0),
+            )
+            conn.execute(
+                """
+                INSERT INTO briefing_schedules
+                    (id, cadence, timezone_name, scope_json, enabled, next_due_at, created_at, updated_at)
+                VALUES (1, 'weekly', 'UTC', '{"monitor_ids":[]}', 1, ?, ?, ?)
+                """,
+                (T1, T0, T1),
+            )
+            conn.execute("DROP TABLE ai_capability_routes")
+            conn.execute("DROP TABLE ai_connections")
+            conn.execute("DROP TABLE ai_config_state")
+            conn.execute("DELETE FROM schema_migrations WHERE version = 38")
+            conn.execute("UPDATE app_meta SET value = '37' WHERE key = 'schema_version'")
+        conn.execute("PRAGMA foreign_keys = ON")
+    finally:
+        conn.close()
+
+    result = apply_migrations(db_path)
+    assert result.applied_versions == (CURRENT_SCHEMA_VERSION,)
+    assert result.current_version == CURRENT_SCHEMA_VERSION
+    assert migration_status(db_path) == tuple(range(1, CURRENT_SCHEMA_VERSION + 1))
+    assert _get(db_path, "SELECT value FROM app_meta WHERE key = 'ast06_preserved'")[0] == "yes"
+    assert _get(db_path, "SELECT name FROM sources WHERE id = 'src-schema37'")[0] == "Schema 37 source"
+    schedule = _get(db_path, "SELECT cadence, timezone_name FROM briefing_schedules WHERE id = 1")
+    assert tuple(schedule) == ("weekly", "UTC")
+    assert _get(db_path, "SELECT generation FROM ai_config_state WHERE id = 1")[0] == 1
+    assert _get(db_path, "SELECT provider_route FROM ai_capability_routes WHERE capability = 'article_analysis'")[0] == "local"
+    assert apply_migrations(db_path).applied_versions == ()
+    assert check_database(db_path).ok is True
+
+
+def test_migration_0038_schema36_upgrade_preserves_data_and_history(tmp_path):
+    db_path = tmp_path / "schema36.sqlite"
+    apply_migrations(db_path)
+
+    conn = storage.connect(db_path)
+    try:
+        conn.execute("PRAGMA foreign_keys = OFF")
+        with storage.write_tx(conn):
+            conn.execute(
+                "INSERT INTO app_meta(key, value) VALUES ('ast06_schema36_preserved', 'yes')"
+            )
+            conn.execute(
+                "INSERT INTO sources (id, name, slug, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
+                ("src-schema36", "Schema 36 source", "schema36-source", T0, T0),
+            )
+            conn.execute("DROP TABLE ai_capability_routes")
+            conn.execute("DROP TABLE ai_connections")
+            conn.execute("DROP TABLE ai_config_state")
+            conn.execute("DROP TABLE briefing_schedules")
+            conn.execute("DELETE FROM schema_migrations WHERE version IN (37, 38)")
+            conn.execute("UPDATE app_meta SET value = '36' WHERE key = 'schema_version'")
+        conn.execute("PRAGMA foreign_keys = ON")
+    finally:
+        conn.close()
+
+    result = apply_migrations(db_path)
+    assert result.applied_versions == (37, CURRENT_SCHEMA_VERSION)
+    assert result.current_version == CURRENT_SCHEMA_VERSION
+    assert _get(db_path, "SELECT value FROM app_meta WHERE key = 'ast06_schema36_preserved'")[0] == "yes"
+    assert _get(db_path, "SELECT name FROM sources WHERE id = 'src-schema36'")[0] == "Schema 36 source"
+    assert _get(db_path, "SELECT generation FROM ai_config_state WHERE id = 1")[0] == 1
+    assert _get(db_path, "SELECT provider_route FROM ai_capability_routes WHERE capability = 'article_analysis'")[0] == "local"
+    assert apply_migrations(db_path).applied_versions == ()
+    assert check_database(db_path).ok is True
 
 
 # ---------------------------------------------------------------------------

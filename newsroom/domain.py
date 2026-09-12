@@ -4,9 +4,11 @@ from __future__ import annotations
 import re
 import secrets
 import sqlite3
+from ipaddress import ip_address
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable, Mapping, Optional
+from urllib.parse import urlsplit, urlunsplit
 
 from . import storage
 from .url_norm import normalize_url, parse_url, url_fingerprint
@@ -71,6 +73,421 @@ def normalized_slug(value: str) -> str:
 
 def _as_dict(row: sqlite3.Row | None) -> dict[str, Any] | None:
     return dict(row) if row is not None else None
+
+
+AI_SUPPORTED_CAPABILITIES = ("article_analysis",)
+AI_ADAPTER_OPENAI_COMPATIBLE = "openai_compatible"
+AI_LOCAL_ROUTE = "local"
+AI_CONNECTION_ROUTE = "connection"
+AI_FALLBACK_POLICIES = frozenset({"local", "fail"})
+_AI_OPAQUE_REFERENCE_RE = re.compile(r"^[A-Za-z][A-Za-z0-9._:/-]{0,199}$")
+
+
+def _ai_text(value: object, label: str, *, maximum: int) -> str:
+    if not isinstance(value, str):
+        raise DomainValidation(f"{label} must be a string")
+    result = value.strip()
+    if not result:
+        raise DomainValidation(f"{label} must not be empty")
+    if len(result) > maximum:
+        raise DomainValidation(f"{label} is too long")
+    if any(ord(character) < 32 for character in result):
+        raise DomainValidation(f"{label} contains control characters")
+    return result
+
+
+def normalize_ai_base_url(value: object) -> str:
+    """Validate and normalize a provider base URL without accepting secrets."""
+    raw = _ai_text(value, "base_url", maximum=2048)
+    if any(character.isspace() for character in raw):
+        raise DomainValidation("base_url must not contain whitespace")
+    try:
+        parsed = urlsplit(raw)
+        hostname = parsed.hostname
+        port = parsed.port
+    except ValueError as exc:
+        raise DomainValidation("base_url has an invalid authority") from exc
+    scheme = parsed.scheme.casefold()
+    if scheme not in {"http", "https"} or not hostname:
+        raise DomainValidation("base_url must use http or https and include a host")
+    if parsed.username is not None or parsed.password is not None or "@" in parsed.netloc:
+        raise DomainValidation("base_url must not contain user information")
+    if parsed.query or parsed.fragment or "\\" in parsed.netloc or "%" in parsed.netloc:
+        raise DomainValidation("base_url must not contain query, fragment, or ambiguous authority data")
+    host = hostname.casefold().rstrip(".")
+    if not host:
+        raise DomainValidation("base_url host is invalid")
+    if scheme == "http":
+        try:
+            loopback = ip_address(host).is_loopback
+        except ValueError:
+            loopback = host == "localhost"
+        if not loopback:
+            raise DomainValidation("http base_url is allowed only for loopback endpoints")
+    if port is not None and not 1 <= port <= 65535:
+        raise DomainValidation("base_url port is invalid")
+    authority_host = f"[{host}]" if ":" in host else host
+    default_port = (scheme == "http" and port == 80) or (scheme == "https" and port == 443)
+    authority = authority_host if port is None or default_port else f"{authority_host}:{port}"
+    path = parsed.path.rstrip("/")
+    return urlunsplit((scheme, authority, path, "", ""))
+
+
+def _ai_opaque_reference(value: object | None) -> str | None:
+    if value is None:
+        return None
+    reference = _ai_text(value, "credential_ref", maximum=200)
+    if not _AI_OPAQUE_REFERENCE_RE.fullmatch(reference) or re.search(
+        r"(?:api[_-]?key|secret|token|password|sk-[A-Za-z0-9])", reference, re.IGNORECASE
+    ):
+        raise DomainValidation("credential_ref must be an opaque vault reference")
+    return reference
+
+
+def _ai_positive_int(value: object, label: str, *, maximum: int) -> int:
+    if isinstance(value, bool) or not isinstance(value, int) or not 1 <= value <= maximum:
+        raise DomainValidation(f"{label} must be an integer between 1 and {maximum}")
+    return value
+
+
+def _ai_bool(value: object, label: str) -> bool:
+    if not isinstance(value, bool):
+        raise DomainValidation(f"{label} must be a boolean")
+    return value
+
+
+class AIConfigurationService:
+    """Transactional public AI metadata and capability-route authority.
+
+    This service intentionally has no credential-store dependency.  The only
+    persisted credential field is an opaque reference for the later vault
+    integration; API projections never return it.
+    """
+
+    def __init__(self, db_path: str | Path):
+        self.db_path = Path(db_path)
+
+    @staticmethod
+    def _generation(conn: sqlite3.Connection) -> int:
+        row = conn.execute("SELECT generation FROM ai_config_state WHERE id = 1").fetchone()
+        if row is None:
+            raise DomainValidation("AI configuration schema is unavailable")
+        return int(row[0])
+
+    @staticmethod
+    def _advance_generation(conn: sqlite3.Connection, now: str) -> int:
+        current = AIConfigurationService._generation(conn)
+        next_generation = current + 1
+        conn.execute(
+            "UPDATE ai_config_state SET generation = ?, updated_at = ? WHERE id = 1",
+            (next_generation, now),
+        )
+        return next_generation
+
+    @staticmethod
+    def _connection_projection(row: sqlite3.Row, generation: int) -> dict[str, Any]:
+        result = dict(row)
+        result["enabled"] = bool(result["enabled"])
+        result["credential_required"] = bool(result["credential_required"])
+        result["credential_configured"] = bool(result.pop("credential_ref", None))
+        result["supported_capabilities"] = list(AI_SUPPORTED_CAPABILITIES)
+        result["generation"] = generation
+        return result
+
+    @staticmethod
+    def _route_projection(
+        row: sqlite3.Row | Mapping[str, Any],
+        connection: sqlite3.Row | Mapping[str, Any] | None,
+        generation: int,
+    ) -> dict[str, Any]:
+        route = dict(row)
+        route["effective"] = {
+            "provider_route": AI_LOCAL_ROUTE,
+            "provider": "local",
+            "model": "local",
+            "reason": "default_local",
+        }
+        if route["provider_route"] == AI_CONNECTION_ROUTE and connection is not None:
+            configured = bool(connection["credential_ref"])
+            if bool(connection["enabled"]) and (not bool(connection["credential_required"]) or configured):
+                route["effective"] = {
+                    "provider_route": AI_CONNECTION_ROUTE,
+                    "provider": connection["adapter_kind"],
+                    "model": connection["model"],
+                    "connection_id": connection["id"],
+                    "reason": "configured_connection",
+                }
+            elif route["fallback_policy"] == "fail":
+                route["effective"] = {
+                    "provider_route": AI_CONNECTION_ROUTE,
+                    "provider": connection["adapter_kind"],
+                    "model": connection["model"],
+                    "connection_id": connection["id"],
+                    "reason": "connection_unavailable",
+                }
+            else:
+                route["effective"]["reason"] = "connection_unavailable"
+        elif route["provider_route"] == AI_CONNECTION_ROUTE:
+            if route["fallback_policy"] == "fail":
+                route["effective"] = {
+                    "provider_route": AI_CONNECTION_ROUTE,
+                    "provider": "unavailable",
+                    "model": None,
+                    "connection_id": route["connection_id"],
+                    "reason": "connection_missing",
+                }
+            else:
+                route["effective"]["reason"] = "connection_missing"
+        route["generation"] = generation
+        return route
+
+    def _snapshot(self, conn: sqlite3.Connection) -> dict[str, Any]:
+        generation = self._generation(conn)
+        rows = conn.execute("SELECT * FROM ai_connections ORDER BY display_name, id").fetchall()
+        items = [self._connection_projection(row, generation) for row in rows]
+        by_id = {row["id"]: row for row in rows}
+        stored_routes = {
+            row["capability"]: row
+            for row in conn.execute("SELECT * FROM ai_capability_routes ORDER BY capability")
+        }
+        routes: list[dict[str, Any]] = []
+        for capability in AI_SUPPORTED_CAPABILITIES:
+            route = stored_routes.get(capability)
+            if route is None:
+                route = {
+                    "capability": capability,
+                    "provider_route": AI_LOCAL_ROUTE,
+                    "connection_id": None,
+                    "fallback_policy": "local",
+                    "revision": 0,
+                    "config_generation": generation,
+                    "updated_at": None,
+                }
+            routes.append(self._route_projection(route, by_id.get(route["connection_id"]), generation))
+        return {
+            "generation": generation,
+            "supported_capabilities": list(AI_SUPPORTED_CAPABILITIES),
+            "items": items,
+            "providers": items,
+            "routes": routes,
+            "effective_routes": {route["capability"]: route["effective"] for route in routes},
+        }
+
+    def list_connections(self) -> dict[str, Any]:
+        conn = storage.connect(self.db_path)
+        try:
+            return self._snapshot(conn)
+        finally:
+            conn.close()
+
+    def get_connection(self, identifier: str) -> dict[str, Any]:
+        conn = storage.connect(self.db_path)
+        try:
+            generation = self._generation(conn)
+            row = conn.execute("SELECT * FROM ai_connections WHERE id = ?", (identifier,)).fetchone()
+            if row is None:
+                raise DomainNotFound("AI connection not found")
+            return self._connection_projection(row, generation)
+        finally:
+            conn.close()
+
+    def create_connection(self, data: Mapping[str, Any]) -> dict[str, Any]:
+        display_name = _ai_text(data.get("display_name"), "display_name", maximum=200)
+        adapter_kind = data.get("adapter_kind", AI_ADAPTER_OPENAI_COMPATIBLE)
+        if adapter_kind != AI_ADAPTER_OPENAI_COMPATIBLE:
+            raise DomainValidation("unsupported AI adapter kind")
+        base_url = normalize_ai_base_url(data.get("base_url"))
+        model = _ai_text(data.get("model"), "model", maximum=200)
+        enabled = _ai_bool(data.get("enabled", False), "enabled")
+        if enabled:
+            raise DomainValidation("new AI connections must be created disabled")
+        credential_ref = _ai_opaque_reference(data.get("credential_ref"))
+        credential_version = data.get("credential_ref_version")
+        if credential_version is not None:
+            credential_version = _ai_positive_int(credential_version, "credential_ref_version", maximum=1_000_000)
+        if credential_version is not None and credential_ref is None:
+            raise DomainValidation("credential_ref_version requires credential_ref")
+        credential_required = _ai_bool(
+            data.get("credential_required", True), "credential_required"
+        )
+        max_input_chars = _ai_positive_int(
+            data.get("max_input_chars", 24_000), "max_input_chars", maximum=1_000_000
+        )
+        max_output_tokens = _ai_positive_int(
+            data.get("max_output_tokens", 1_200), "max_output_tokens", maximum=100_000
+        )
+        now = utc_now()
+        identifier = new_id("aic")
+        conn = storage.connect(self.db_path)
+        try:
+            with storage.write_tx(conn):
+                generation = self._advance_generation(conn, now)
+                conn.execute(
+                    """
+                    INSERT INTO ai_connections
+                        (id, display_name, adapter_kind, base_url, model, enabled,
+                         credential_ref, credential_ref_version, credential_required,
+                         max_input_chars, max_output_tokens, revision, config_generation,
+                         validation_status, validation_code, validation_revision,
+                         validated_at, created_at, updated_at)
+                    VALUES (?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, 1, ?, 'unvalidated', NULL, NULL, NULL, ?, ?)
+                    """,
+                    (
+                        identifier,
+                        display_name,
+                        adapter_kind,
+                        base_url,
+                        model,
+                        credential_ref,
+                        credential_version,
+                        int(credential_required),
+                        max_input_chars,
+                        max_output_tokens,
+                        generation,
+                        now,
+                        now,
+                    ),
+                )
+        finally:
+            conn.close()
+        return self.get_connection(identifier)
+
+    def update_connection(
+        self,
+        identifier: str,
+        data: Mapping[str, Any],
+        *,
+        expected_revision: int | None = None,
+    ) -> dict[str, Any]:
+        if expected_revision is not None:
+            expected_revision = _ai_positive_int(expected_revision, "expected_revision", maximum=1_000_000)
+        allowed = {
+            "display_name",
+            "adapter_kind",
+            "base_url",
+            "model",
+            "enabled",
+            "credential_required",
+            "max_input_chars",
+            "max_output_tokens",
+        }
+        changes = {key: value for key, value in data.items() if key in allowed}
+        if not changes:
+            raise DomainValidation("at least one AI connection field must be supplied")
+        conn = storage.connect(self.db_path)
+        try:
+            with storage.write_tx(conn):
+                current = conn.execute("SELECT * FROM ai_connections WHERE id = ?", (identifier,)).fetchone()
+                if current is None:
+                    raise DomainNotFound("AI connection not found")
+                if expected_revision is not None and int(current["revision"]) != expected_revision:
+                    raise DomainConflict("AI connection changed; refresh and retry")
+                values: dict[str, Any] = {}
+                for key, value in changes.items():
+                    if key == "display_name":
+                        values[key] = _ai_text(value, key, maximum=200)
+                    elif key == "adapter_kind":
+                        if value != AI_ADAPTER_OPENAI_COMPATIBLE:
+                            raise DomainValidation("unsupported AI adapter kind")
+                        values[key] = value
+                    elif key == "base_url":
+                        values[key] = normalize_ai_base_url(value)
+                    elif key == "model":
+                        values[key] = _ai_text(value, key, maximum=200)
+                    elif key == "enabled":
+                        values[key] = int(_ai_bool(value, key))
+                    elif key == "credential_required":
+                        values[key] = int(_ai_bool(value, key))
+                    elif key == "max_input_chars":
+                        values[key] = _ai_positive_int(value, key, maximum=1_000_000)
+                    elif key == "max_output_tokens":
+                        values[key] = _ai_positive_int(value, key, maximum=100_000)
+                next_enabled = bool(values.get("enabled", current["enabled"]))
+                next_credential_required = bool(
+                    values.get("credential_required", current["credential_required"])
+                )
+                if next_enabled and next_credential_required and not current["credential_ref"]:
+                    raise DomainConflict("AI connection credentials are not configured")
+                now = utc_now()
+                generation = self._advance_generation(conn, now)
+                revision = int(current["revision"]) + 1
+                values.update({"revision": revision, "config_generation": generation, "updated_at": now})
+                if any(key in values for key in ("base_url", "model", "adapter_kind", "max_input_chars", "max_output_tokens")):
+                    values.update({"validation_status": "unvalidated", "validation_code": None, "validation_revision": None, "validated_at": None})
+                assignments = ", ".join(f"{key} = ?" for key in values)
+                conn.execute(
+                    f"UPDATE ai_connections SET {assignments} WHERE id = ?",
+                    [*values.values(), identifier],
+                )
+        finally:
+            conn.close()
+        return self.get_connection(identifier)
+
+    def set_route(
+        self,
+        capability: str,
+        *,
+        provider_route: str | None = None,
+        connection_id: str | None = None,
+        fallback_policy: str = "local",
+        expected_generation: int | None = None,
+    ) -> dict[str, Any]:
+        capability = _ai_text(capability, "capability", maximum=100)
+        if capability not in AI_SUPPORTED_CAPABILITIES:
+            raise DomainValidation("unsupported AI capability")
+        if provider_route is None:
+            provider_route = AI_CONNECTION_ROUTE if connection_id else AI_LOCAL_ROUTE
+        else:
+            provider_route = _ai_text(provider_route, "provider_route", maximum=32)
+        if provider_route not in {AI_LOCAL_ROUTE, AI_CONNECTION_ROUTE}:
+            raise DomainValidation("unsupported AI route")
+        fallback_policy = _ai_text(fallback_policy, "fallback_policy", maximum=32)
+        if fallback_policy not in AI_FALLBACK_POLICIES:
+            raise DomainValidation("unsupported AI fallback policy")
+        if connection_id is not None:
+            connection_id = _ai_text(connection_id, "connection_id", maximum=200)
+        if provider_route == AI_LOCAL_ROUTE:
+            if connection_id is not None:
+                raise DomainValidation("local AI route cannot include a connection")
+        elif not connection_id:
+            raise DomainValidation("connection AI route requires connection_id")
+        if expected_generation is not None:
+            expected_generation = _ai_positive_int(expected_generation, "expected_generation", maximum=1_000_000_000)
+        now = utc_now()
+        conn = storage.connect(self.db_path)
+        try:
+            with storage.write_tx(conn):
+                generation = self._generation(conn)
+                if expected_generation is not None and generation != expected_generation:
+                    raise DomainConflict("AI configuration changed; refresh and retry")
+                if connection_id is not None:
+                    if conn.execute("SELECT 1 FROM ai_connections WHERE id = ?", (connection_id,)).fetchone() is None:
+                        raise DomainNotFound("AI connection not found")
+                existing = conn.execute(
+                    "SELECT revision FROM ai_capability_routes WHERE capability = ?", (capability,)
+                ).fetchone()
+                revision = int(existing[0]) + 1 if existing is not None else 1
+                next_generation = self._advance_generation(conn, now)
+                conn.execute(
+                    """
+                    INSERT INTO ai_capability_routes
+                        (capability, provider_route, connection_id, fallback_policy,
+                         revision, config_generation, updated_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(capability) DO UPDATE SET
+                        provider_route = excluded.provider_route,
+                        connection_id = excluded.connection_id,
+                        fallback_policy = excluded.fallback_policy,
+                        revision = excluded.revision,
+                        config_generation = excluded.config_generation,
+                        updated_at = excluded.updated_at
+                    """,
+                    (capability, provider_route, connection_id, fallback_policy, revision, next_generation, now),
+                )
+        finally:
+            conn.close()
+        result = self.list_connections()
+        return next(route for route in result["routes"] if route["capability"] == capability)
 
 
 class CoreService:
@@ -1147,9 +1564,12 @@ class CoreService:
 
 
 __all__ = [
+    "AIConfigurationService",
+    "AI_SUPPORTED_CAPABILITIES",
     "CoreService",
     "DomainConflict",
     "DomainError",
     "DomainNotFound",
     "DomainValidation",
+    "normalize_ai_base_url",
 ]

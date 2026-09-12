@@ -19,7 +19,7 @@ import newsroom.intelligent_monitoring as intelligent_monitoring
 from newsroom.intelligent_monitoring import WatchMaintenanceService, WatchService
 from newsroom.jobs import BudgetService, JobService, SchedulerService
 from newsroom import migrations
-from newsroom.migrations import apply_migrations, migration_status
+from newsroom.migrations import CURRENT_SCHEMA_VERSION, apply_migrations, migration_status
 from newsroom.monitoring import MonitorService, MonitoringPolicyService
 from newsroom.operations import backup_database, export_logical, restore_database
 from newsroom.report_automation import AutomaticReportStageExecutionService
@@ -1988,8 +1988,8 @@ def test_phase23_database_upgrades_to_phase24_without_recreating_monitors(tmp_db
 
     result = apply_migrations(tmp_db)
 
-    assert result.applied_versions == (24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37)
-    assert migration_status(tmp_db) == tuple(range(1, 38))
+    assert result.applied_versions == tuple(range(24, CURRENT_SCHEMA_VERSION + 1))
+    assert migration_status(tmp_db) == tuple(range(1, CURRENT_SCHEMA_VERSION + 1))
     assert apply_migrations(tmp_db).applied_versions == ()
     preserved = MonitorService(tmp_db).get(legacy_monitor["id"])
     assert preserved["target_id"] == source["id"]

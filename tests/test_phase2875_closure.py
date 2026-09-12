@@ -7,7 +7,7 @@ from newsroom.attention import AttentionService
 from newsroom.domain import CoreService, new_id, utc_now
 from newsroom.evidence import EvidenceService
 from newsroom.integrity import check_database
-from newsroom.migrations import apply_migrations
+from newsroom.migrations import CURRENT_SCHEMA_VERSION, apply_migrations
 from newsroom.hypotheses import HypothesisService
 from newsroom.operations import export_logical, import_logical
 from newsroom.research_questions import ResearchQuestionExecutionService, ResearchQuestionService
@@ -123,7 +123,7 @@ def test_schema32_history_and_hypothesis_gap_survive_upgrade(tmp_path):
 
     result = apply_migrations(db_path)
 
-    assert result.current_version == 37
+    assert result.current_version == CURRENT_SCHEMA_VERSION
     conn = sqlite3.connect(db_path)
     conn.row_factory = sqlite3.Row
     try:
@@ -167,7 +167,7 @@ def test_schema32_history_and_hypothesis_gap_survive_upgrade(tmp_path):
 
 def test_fresh_and_schema34_migrations_are_idempotent(tmp_path):
     fresh = tmp_path / "fresh.sqlite"
-    assert apply_migrations(fresh).current_version == 37
+    assert apply_migrations(fresh).current_version == CURRENT_SCHEMA_VERSION
     assert apply_migrations(fresh).applied_versions == ()
 
     schema34 = tmp_path / "schema34.sqlite"
@@ -213,7 +213,7 @@ def test_fresh_and_schema34_migrations_are_idempotent(tmp_path):
         conn.close()
 
     result = apply_migrations(schema34)
-    assert result.applied_versions == (35, 36, 37)
+    assert result.applied_versions == tuple(range(35, CURRENT_SCHEMA_VERSION + 1))
     assert apply_migrations(schema34).applied_versions == ()
 
 

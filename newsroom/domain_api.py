@@ -16,7 +16,7 @@ from .acquisition import (
     SourceSuggestionService,
 )
 from .article_analysis import ArticleAnalysisService
-from .domain import CoreService, DomainConflict, DomainNotFound, DomainValidation
+from .domain import AIConfigurationService, CoreService, DomainConflict, DomainNotFound, DomainValidation
 from .evidence import EvidenceService
 from .jobs import BudgetService, JobService, SchedulerService, compose_completion_hooks
 from .intelligent_monitoring import WatchMaintenanceService, WatchService
@@ -708,6 +708,51 @@ class PaidEnabledWrite(StrictModel):
     enabled: bool
 
 
+class AIConnectionCreate(StrictModel):
+    display_name: str = Field(min_length=1, max_length=200)
+    adapter_kind: Literal["openai_compatible"] = "openai_compatible"
+    base_url: str = Field(min_length=1, max_length=2048)
+    model: str = Field(min_length=1, max_length=200)
+    enabled: bool = False
+    credential_ref: Optional[str] = Field(default=None, max_length=200)
+    credential_ref_version: Optional[int] = Field(default=None, ge=1, le=1_000_000)
+    credential_required: bool = True
+    max_input_chars: int = Field(default=24_000, ge=1, le=1_000_000)
+    max_output_tokens: int = Field(default=1_200, ge=1, le=100_000)
+
+
+class AIConnectionPatch(StrictModel):
+    expected_revision: int = Field(ge=1, le=1_000_000)
+    display_name: Optional[str] = Field(default=None, min_length=1, max_length=200)
+    adapter_kind: Optional[Literal["openai_compatible"]] = None
+    base_url: Optional[str] = Field(default=None, min_length=1, max_length=2048)
+    model: Optional[str] = Field(default=None, min_length=1, max_length=200)
+    enabled: Optional[bool] = None
+    credential_required: Optional[bool] = None
+    max_input_chars: Optional[int] = Field(default=None, ge=1, le=1_000_000)
+    max_output_tokens: Optional[int] = Field(default=None, ge=1, le=100_000)
+
+    @model_validator(mode="after")
+    def require_connection_change(self):
+        if not self.model_fields_set - {"expected_revision"}:
+            raise ValueError("at least one AI connection field must be supplied")
+        return self
+
+
+class AICapabilityRouteWrite(StrictModel):
+    provider_route: Optional[Literal["local", "connection"]] = None
+    route: Optional[Literal["local", "connection"]] = None
+    connection_id: Optional[str] = Field(default=None, max_length=200)
+    fallback_policy: Literal["local", "fail"] = "local"
+    expected_generation: Optional[int] = Field(default=None, ge=1, le=1_000_000_000)
+
+    @model_validator(mode="after")
+    def reconcile_route_names(self):
+        if self.provider_route and self.route and self.provider_route != self.route:
+            raise ValueError("provider_route and route must match when both are supplied")
+        return self
+
+
 class StoryRevisionCreate(StrictModel):
     headline: str = Field(min_length=1, max_length=500)
     summary: str = Field(default="", max_length=10000)
@@ -1055,6 +1100,7 @@ def create_domain_router(
     experience = ExperienceService(service.db_path)
     research_prioritization = ResearchPrioritizationService(service.db_path)
     analyses = ArticleAnalysisService(service.db_path)
+    ai_configuration = AIConfigurationService(service.db_path)
     knowledge = KnowledgeService(service.db_path)
     corrections = StoryCorrectionService(service.db_path)
 
@@ -2712,6 +2758,56 @@ def create_domain_router(
     async def set_paid_enabled(request: Request, payload: PaidEnabledWrite):
         write_guard(request)
         return budgets.set_paid_enabled(payload.enabled)
+
+    @router.get("/ai/providers")
+    async def list_ai_providers(request: Request, response: Response):
+        read_guard(request)
+        response.headers["Cache-Control"] = "no-store"
+        return ai_configuration.list_connections()
+
+    @router.get("/ai/providers/{identifier}")
+    async def get_ai_provider(request: Request, response: Response, identifier: str):
+        read_guard(request)
+        response.headers["Cache-Control"] = "no-store"
+        return ai_configuration.get_connection(identifier)
+
+    @router.post("/ai/providers", status_code=201)
+    async def create_ai_provider(request: Request, response: Response, payload: AIConnectionCreate):
+        write_guard(request)
+        response.headers["Cache-Control"] = "no-store"
+        return ai_configuration.create_connection(payload.model_dump(exclude_none=True))
+
+    @router.patch("/ai/providers/{identifier}")
+    async def patch_ai_provider(request: Request, response: Response, identifier: str, payload: AIConnectionPatch):
+        write_guard(request)
+        response.headers["Cache-Control"] = "no-store"
+        data = payload.model_dump(exclude={"expected_revision"}, exclude_none=True)
+        return ai_configuration.update_connection(
+            identifier,
+            data,
+            expected_revision=payload.expected_revision,
+        )
+
+    @router.put("/ai/routes/{capability}")
+    async def set_ai_route(request: Request, response: Response, capability: str, payload: AICapabilityRouteWrite):
+        write_guard(request)
+        response.headers["Cache-Control"] = "no-store"
+        return ai_configuration.set_route(
+            capability,
+            provider_route=payload.provider_route or payload.route,
+            connection_id=payload.connection_id,
+            fallback_policy=payload.fallback_policy,
+            expected_generation=payload.expected_generation,
+        )
+
+    @router.get("/ai/status")
+    async def get_ai_status(request: Request, response: Response):
+        read_guard(request)
+        response.headers["Cache-Control"] = "no-store"
+        result = ai_configuration.list_connections()
+        result["paid_enabled"] = budgets.paid_enabled()
+        result["budget_limits"] = budgets.list_limits()
+        return result
 
     @router.post("/scheduler/tick")
     async def scheduler_tick(request: Request):

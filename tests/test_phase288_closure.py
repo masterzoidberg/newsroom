@@ -15,7 +15,7 @@ from newsroom.evals.benchmark import (
 from newsroom.evals.lite import LiteBenchmarkError, LiteHarness, bind_contract, load_contract
 from newsroom.evals.semantic import SEMANTIC_CASE_IDS, SemanticCaseRunner, run_normal_evaluation
 from newsroom.evidence import EvidenceService
-from newsroom.migrations import apply_migrations
+from newsroom.migrations import CURRENT_SCHEMA_VERSION, apply_migrations
 from newsroom.research_questions import ResearchQuestionExecutionService, ResearchQuestionService
 
 
@@ -422,7 +422,7 @@ def test_schema36_history_field_and_query_execution_columns_are_truthful(tmp_pat
 
     result = apply_migrations(db)
 
-    assert result.current_version == 37
+    assert result.current_version == CURRENT_SCHEMA_VERSION
     conn = sqlite3.connect(db)
     columns = {row[1] for row in conn.execute("PRAGMA table_info(blind_spot_review_history)")}
     query_columns = {row[1] for row in conn.execute("PRAGMA table_info(research_task_queries)")}
