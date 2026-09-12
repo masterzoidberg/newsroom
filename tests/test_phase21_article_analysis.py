@@ -89,7 +89,7 @@ from newsroom.migrations import (
     apply_migrations,
     migration_status,
 )
-from newsroom.operations import export_logical
+from newsroom.operations import backup_database, export_logical
 from newsroom.monitoring import (
     DocumentVersionRelevanceService,
     MonitorExecutionService,
@@ -1722,6 +1722,10 @@ def test_ai_credentials_are_versioned_and_never_persisted_or_echoed(tmp_db, tmp_
     assert "sentinel-secret-v1" not in export_text
     assert "sentinel-secret-v2" not in export_text
     assert '"credential_ref"' not in export_text
+    backup = backup_database(tmp_db, tmp_path / "credential-backups")
+    backup_bytes = backup["path"].read_bytes()
+    assert b"sentinel-secret-v1" not in backup_bytes
+    assert b"sentinel-secret-v2" not in backup_bytes
 
     removed = configuration.remove_credential(
         provider["id"], expected_revision=rotated["revision"]
