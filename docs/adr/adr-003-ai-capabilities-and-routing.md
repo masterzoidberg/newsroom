@@ -41,6 +41,16 @@ compatibility fallback for callers that provide no durable budget authority;
 they never define global spending for production paths. Explicit connection
 tests require per-call authorization and do not enable background paid routing.
 
+Managed provider configuration is resolved through one shared
+`AIConfigurationResolver` at each new operation boundary. It reads the current
+SQLite generation, obtains a credential only for the selected managed route,
+and pins the provider/model/generation for the operation. API and long-lived
+worker paths share this authority; unsupported capabilities remain explicitly
+local. An untouched installation may expose a clearly labeled legacy
+environment route, but once managed configuration exists those variables cannot
+reactivate a removed or disabled provider. Generation and configuration-source
+metadata are included in AI telemetry and safe status projections.
+
 Provider responses are parsed through closed Pydantic models with forbidden extra
 fields and bounded numeric/string/list fields. Invalid output, provider errors,
 and timeouts never reach the domain writer. The router records route, provider,

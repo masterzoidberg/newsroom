@@ -54,14 +54,14 @@ Baseline and checks: [AUDIT_EVIDENCE.md](AUDIT_EVIDENCE.md). Status describes th
 |---|---|---|
 | Local route | MOSTLY DONE | `ai.py:CapabilityBundle.local_defaults`; heuristic embedding/ranking/entailment/extraction/synthesis; not an installed local LLM. |
 | Remote route | MOSTLY DONE | `OpenAICompatibleArticleAnalysisProvider`; JSON-schema chat completions required, bounded SDK; endpoint compatibility must be tested. |
-| Provider selection | PARTIAL | `AIConfigurationService` provides typed public metadata, supported Article Analysis routing, local/fail effective-route state and a monotonic generation in migration 0038; versioned credential metadata is now backed by AST-07's explicit OS-vault path. `AnalysisProviderConfig.from_env` remains analysis-specific until AST-09 resolves configuration at operation boundaries. |
+| Provider selection | MOSTLY DONE | `AIConfigurationService` provides typed public metadata, supported Article Analysis routing, local/fail effective-route state and a monotonic generation in migration 0038; versioned credential metadata is backed by AST-07's explicit OS-vault path. `AIConfigurationResolver` now snapshots managed metadata/vault state at each operation boundary, labels the untouched-installation legacy environment path, and prevents environment resurrection after managed edits/removal. |
 | Credential persistence/UI | MOSTLY DONE | `domain.py:OSCredentialStore` explicitly selects Windows Credential Manager, macOS Keychain or Linux Secret Service; `AIConfigurationService` provides versioned set/rotate/read/remove with same-installation namespace, compensation and durable cleanup state in migration 0039; authenticated write-only API routes are present. Provider management UI remains AST-11, and unsupported/headless stores fail closed to local-only behavior. |
 | Budgets | MOSTLY DONE | `BudgetService` durable analysis reservations and generic paid-capability reservations; `AIRouter` in-memory counters remain only a legacy fallback when no durable budget authority is supplied. Connection-test admission requires explicit authorization and never enables background paid routing. |
 | AI telemetry | MOSTLY DONE | `SQLiteTelemetrySink`, invocation identity, token usage; provider billing cost unavailable and estimated cost must remain labeled. |
-| Model identity | MOSTLY DONE | analysis identity includes model/config/prompt inputs; effective configuration should be surfaced per capability and generation. |
+| Model identity | MOSTLY DONE | analysis identity includes model/config/prompt inputs; safe effective configuration and generation/source telemetry are surfaced for operation-boundary routes. |
 | Capability coverage | PARTIAL | remote Article Analysis only in ordinary production; Watch vocabulary and research routers local; normal Ask local; eval remote synthesis is not product integration. |
-| Failure handling | MOSTLY DONE | safe codes, validation/timeouts, uncertain invocation handling; disabling current remote route can currently raise AIDisabled rather than transparently choose local. |
-| Dynamic reload | NOT STARTED | analysis service captures config at construction; no shared versioned reload authority. |
+| Failure handling | MOSTLY DONE | safe codes, validation/timeouts, uncertain invocation handling; unavailable, disabled, removed, or budget-blocked managed routes choose a labeled local fallback for new work. |
+| Dynamic reload | MOSTLY DONE | shared operation-boundary resolver reads the persisted generation on each new operation; in-flight work keeps its pinned snapshot and long-lived worker/API construction no longer captures environment configuration. |
 
 ## Frontend
 

@@ -22,6 +22,7 @@ provider adapter is exercised with mocked SDK responses.
 from __future__ import annotations
 
 import json
+import multiprocessing
 import sqlite3
 import threading
 from typing import Any
@@ -38,6 +39,7 @@ from newsroom.ai import (
     ArticleAnalysisRequest,
     DeterministicArticleAnalysisProvider,
     LocalArticleAnalysisProvider,
+    VocabularyRequest,
 )
 from newsroom.article_analysis import (
     ANALYSIS_PROMPT_VERSION,
@@ -118,6 +120,21 @@ UAP_ARTICLE = (
 )
 
 FAKE_KEY = "sk-p21-test-secret-not-real"
+
+
+def _resolve_generation_in_process(db_path: str, result_queue: Any) -> None:
+    try:
+        resolution = AIConfigurationResolver(db_path).resolve("vocabulary")
+        result_queue.put(
+            (
+                resolution.generation,
+                resolution.source,
+                resolution.reason,
+                resolution.provider_route,
+            )
+        )
+    except BaseException as exc:  # pragma: no cover - assertion below reports it
+        result_queue.put(("error", type(exc).__name__, str(exc)))
 
 
 class CountingTransport:
@@ -2085,6 +2102,73 @@ def test_unsupported_capabilities_use_the_explicit_local_resolution(tmp_db):
     assert resolved.config.provider == "local"
     assert resolved.source == "managed"
     assert resolved.reason == "unsupported_capability"
+
+
+def test_unsupported_capabilities_stay_local_with_legacy_environment_present(tmp_db, monkeypatch):
+    apply_migrations(tmp_db)
+    monkeypatch.setenv("NEWSROOM_ANALYSIS_PROVIDER", "openai")
+    monkeypatch.setenv("NEWSROOM_ANALYSIS_API_KEY", "legacy-secret-must-not-route-vocabulary")
+
+    resolved = AIConfigurationResolver(tmp_db).resolve("vocabulary")
+
+    assert resolved.config.provider == "local"
+    assert resolved.provider_route == "local"
+    assert resolved.source == "legacy_environment"
+    assert resolved.reason == "unsupported_capability"
+
+
+def test_configuration_generation_persists_across_a_process_restart(tmp_db):
+    apply_migrations(tmp_db)
+    configuration = AIConfigurationService(tmp_db)
+    route = configuration.set_route(
+        "article_analysis",
+        provider_route="local",
+        expected_generation=1,
+    )
+    context = multiprocessing.get_context("spawn")
+    result_queue = context.Queue()
+    process = context.Process(
+        target=_resolve_generation_in_process,
+        args=(str(tmp_db), result_queue),
+    )
+    try:
+        process.start()
+        process.join(timeout=15)
+        result = result_queue.get(timeout=5)
+    finally:
+        if process.is_alive():
+            process.terminate()
+        process.join(timeout=5)
+        result_queue.close()
+
+    assert process.exitcode == 0
+    assert result == (route["generation"], "managed", "unsupported_capability", "local")
+
+
+def test_operation_router_records_effective_generation_and_source(tmp_db):
+    apply_migrations(tmp_db)
+    configuration = AIConfigurationService(tmp_db)
+    route = configuration.set_route(
+        "article_analysis",
+        provider_route="local",
+        expected_generation=1,
+    )
+    resolver = AIConfigurationResolver(tmp_db, configuration_service=configuration)
+    events: list[Any] = []
+    router = resolver.local_router("vocabulary", telemetry=events)
+
+    router.vocabulary(
+        VocabularyRequest(
+            watch_name="UAP Watch",
+            target_type="topic",
+            approved_terms=("UAP",),
+            max_suggestions=5,
+        ),
+        work_id="watch:vocabulary",
+    )
+
+    assert events[0].config_generation == route["generation"]
+    assert events[0].config_source == "managed"
 
 
 def test_document_processing_uses_the_shared_operation_boundary_resolver(tmp_db):

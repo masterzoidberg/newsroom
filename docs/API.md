@@ -105,7 +105,9 @@ vault deletion. Both responses are `no-store`; a failed vault operation leaves
 an explicit retryable cleanup state. Values are stored only through the
 explicitly selected OS keyring backend and are never written to SQLite,
 backups, logs or logical exports. Unsupported/headless backends fail closed;
-operation-boundary use of this managed configuration remains AST-09 work.
+Article Analysis resolves the managed configuration at each operation boundary;
+new work observes the latest generation without a process restart, while
+in-flight work retains its pinned provider/model identity.
 
 ## Reports, briefings, and alerts
 

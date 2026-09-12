@@ -693,6 +693,14 @@ selected OS-backed `keyring` backend, namespaced by installation UUID,
 connection ID and credential version; values remain outside SQLite. Its
 authenticated write-only routes disable/reroute before deletion and preserve
 truthful cleanup state when the vault and database cannot commit atomically.
+The shared `AIConfigurationResolver` reads one immutable generation snapshot at
+each Article Analysis operation boundary, obtains a selected managed
+credential just in time, and passes generation/source metadata into provider
+telemetry. Long-lived workers and API services therefore observe edits without
+restarting; an in-flight operation keeps its original snapshot. Unsupported AI
+capabilities use the same resolver but remain explicitly local, and an
+untouched installation's legacy environment route is labeled and cannot
+reactivate after managed configuration exists.
 These analytical records do not replace the canonical evidence ledger.
 
 Due Research Questions use a separate bounded scheduler path: each tick can

@@ -90,8 +90,10 @@ adds only a non-secret credential-cleanup marker. AST-07 now stores write-only
 provider credentials through an explicitly selected OS vault (Windows
 Credential Manager, macOS Keychain, or Linux Secret Service); credential values
 remain outside SQLite, backups, logs and exports. Article Analysis still uses
-its environment-specific provider configuration until AST-09 wires operation-
-boundary resolution. Phase 23A–E now connect verified
+its managed metadata and vault credential at each operation boundary. Untouched
+installations may use clearly labeled legacy environment configuration, while
+managed configuration takes precedence and disable/remove cannot be resurrected
+by environment variables. Phase 23A–E now connect verified
 automatic Claims to deterministic Story resolution, audited Claim acceptance,
 evidence-bound Living Reports, exact-cause Alerts, and durable in-app delivery.
 The complete chain has bounded compatibility/status APIs, logical-export

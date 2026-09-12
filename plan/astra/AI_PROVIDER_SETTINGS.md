@@ -4,16 +4,16 @@
 
 | Path | Construction and effective capability |
 |---|---|
-| Changed document | `runtime.build_worker_handlers` → `DocumentProcessingExecutionService` → `ArticleAnalysisService`; `AnalysisProviderConfig.from_env` captured in service construction |
+| Changed document | `runtime.build_worker_handlers` → `DocumentProcessingExecutionService` → `ArticleAnalysisService`; shared `AIConfigurationResolver` snapshots managed configuration at each operation boundary |
 | Article Analysis remote | `OpenAICompatibleArticleAnalysisProvider` uses existing `openai` SDK, chat completions + JSON-schema response format, configured model/base URL/timeouts; exact input/provenance retained |
 | Local AI | `CapabilityBundle.local_defaults` supplies deterministic heuristics, not a local language-model server; vocabulary returns no suggestions and research planner an empty plan for deterministic fallback |
-| Watch vocabulary | API `WatchService` and worker `WatchMaintenanceService` construct local bundles; no global remote provider setting |
-| Research planning | runtime explicitly constructs a local research router; optional planner injection is not in-app provider integration |
+| Watch vocabulary | API `WatchService` and worker `WatchMaintenanceService` resolve the shared authority per operation and remain explicitly local because vocabulary is unsupported for managed remote routing |
+| Research planning | production worker uses the deterministic local path; optional planner injection remains test/integration-only and is not in-app provider integration |
 | Relevance | `monitoring.RelevanceCascade` remains explicitly deterministic/local; do not casually replace its approved-scope semantics |
 | Ask | normal frontend sends `provider_mode: local`; default `AskService(hosted_enabled=False)`; injectable synthesis path and eval provider exist but are not a supported product paid path |
 | Synthesis/extraction/ranking/etc. | capability interfaces and local implementations exist; production paid coverage is not inferred from interfaces |
 
-Current selection still requires `NEWSROOM_ANALYSIS_PROVIDER=openai`, a Newsroom-specific API key or `OPENAI_API_KEY`, and `budget.paid_enabled` until AST-09 moves resolution to operation boundaries. Article Analysis uses durable paid invocation reservations. AST-08 adds durable generic paid-capability reservations through `BudgetService` and the existing `provider_usage` ledger; `AIRouter` instance-local counters remain only a compatibility fallback when no durable authority is supplied. Actual billing cost is unavailable from the current adapter; token counts and estimated reservation cost are different facts. `_resolve_route` raises when remote is selected but credentials/paid permission are absent: graceful local fallback is a design change owned by AST-09.
+Managed selection now uses the shared `AIConfigurationResolver`: it reads the current metadata generation, obtains the selected vault credential just in time, and resolves unavailable, disabled, removed, or budget-blocked routes to an explicitly labeled local result for new work. An untouched installation may use `NEWSROOM_ANALYSIS_PROVIDER=openai` with `NEWSROOM_ANALYSIS_API_KEY` or `OPENAI_API_KEY`, but that source is explicitly labeled and is never allowed to reactivate after managed configuration exists. Article Analysis uses durable paid invocation reservations. AST-08 adds durable generic paid-capability reservations through `BudgetService` and the existing `provider_usage` ledger; `AIRouter` instance-local counters remain only a compatibility fallback when no durable authority is supplied. Actual billing cost is unavailable from the current adapter; token counts and estimated reservation cost are different facts. Explicit `AnalysisProviderConfig` injection remains a compatibility/test override and may still report a terminal configuration error rather than silently changing its requested route.
 
 ## One coherent configuration authority
 

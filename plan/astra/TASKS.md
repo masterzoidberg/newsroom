@@ -1,6 +1,6 @@
 # Canonical execution ledger
 
-Rebaseline transitioned 2026-09-09 after automated Gate 0 acceptance at integrated head `18c5ee8bdf56a44218af4ecd6d7e8d9ead68f8c0`. Newsroom Run 1 then completed sequentially on `astra/AST-25-27-first-watch` through AST-40 at the latest committed AST-40 head. AST-25, AST-26, AST-27, AST-33, AST-34, AST-35, AST-36, AST-37, AST-38, AST-39, AST-40, AST-06, AST-07 and AST-08 are DONE; AST-33 completed at code head `4a7c0f9` with the full local backend suite green, AST-34 completed with frontend and isolated browser qualification, AST-35 completed with frontend, trust-boundary and isolated browser qualification, AST-36 completed with backend, frontend, full-suite, eval and isolated browser qualification, AST-37 completed with backend, migration, full-suite, eval and frontend build qualification, AST-38 completed with API, frontend, full-suite, eval and isolated browser qualification, AST-39 completed with alert API/domain tests, full-suite, frontend checks and isolated browser qualification, AST-40 completed with correction API/domain tests, full-suite, frontend checks, evals and isolated Story browser qualification, AST-06 completed with migration, metadata-service, API, export-policy, full-suite, evaluation and frontend-build qualification, AST-07 completed with credential-store lifecycle, migration, export-policy, full-suite, evaluation, frontend-build and disposable same-user Windows vault qualification, and AST-08 completed with durable generic paid admission, multiprocessing regression coverage and telemetry-finalization qualification. Physical reboot/sign-in and lock/sleep/wake evidence remains pending for release. AST-09 is now the sole READY task; AST-41 remains blocked by unfinished AST-29.
+Rebaseline transitioned 2026-09-09 after automated Gate 0 acceptance at integrated head `18c5ee8bdf56a44218af4ecd6d7e8d9ead68f8c0`. Newsroom Run 1 then completed sequentially on `astra/AST-25-27-first-watch` through AST-40 at the latest committed AST-40 head. AST-25, AST-26, AST-27, AST-33, AST-34, AST-35, AST-36, AST-37, AST-38, AST-39, AST-40, AST-06, AST-07, AST-08 and AST-09 are DONE; AST-33 completed at code head `4a7c0f9` with the full local backend suite green, AST-34 completed with frontend and isolated browser qualification, AST-35 completed with frontend, trust-boundary and isolated browser qualification, AST-36 completed with backend, frontend, full-suite, eval and isolated browser qualification, AST-37 completed with backend, migration, full-suite, eval and frontend build qualification, AST-38 completed with API, frontend, full-suite, eval and isolated browser qualification, AST-39 completed with alert API/domain tests, full-suite, frontend checks and isolated browser qualification, AST-40 completed with correction API/domain tests, full-suite, frontend checks, evals and isolated Story browser qualification, AST-06 completed with migration, metadata-service, API, export-policy, full-suite, evaluation and frontend-build qualification, AST-07 completed with credential-store lifecycle, migration, export-policy, full-suite, evaluation, frontend-build and disposable same-user Windows vault qualification, AST-08 completed with durable generic paid admission, multiprocessing regression coverage and telemetry-finalization qualification, and AST-09 completed with operation-boundary resolver, shared API/worker wiring, reload/fallback coverage and process-restart generation evidence. Physical reboot/sign-in and lock/sleep/wake evidence remains pending for release. AST-10 is now the sole READY task; AST-41 remains blocked by unfinished AST-29.
 
 ## Contract inherited by every future task
 
@@ -31,8 +31,8 @@ Statuses: READY, NOT_STARTED, IN_PROGRESS, DONE, BLOCKED, DEFERRED, SUPERSEDED. 
 | AST-06 | Create typed public AI configuration metadata | DONE | AST-27 | 3 |
 | AST-07 | Store credentials in an approved operating-system vault | DONE | AST-06 | 3 |
 | AST-08 | Make paid admission durable across processes and reloads | DONE | AST-07 | 3 |
-| AST-09 | Resolve provider configuration at operation boundaries | READY | AST-08 | 3 |
-| AST-10 | Add bounded provider validation and safe API contracts | NOT_STARTED | AST-09 | 3 |
+| AST-09 | Resolve provider configuration at operation boundaries | DONE | AST-08 | 3 |
+| AST-10 | Add bounded provider validation and safe API contracts | READY | AST-09 | 3 |
 | AST-11 | Build functional AI Providers and cost settings | NOT_STARTED | AST-10 | 2 |
 | AST-12 | Original broad task, preserved below | SUPERSEDED | Replaced by AST-23–29,32,41,42,52–55 | — |
 | AST-13 | Original broad task, preserved below | SUPERSEDED | Replaced by AST-45–46 | — |
@@ -149,7 +149,7 @@ Full original task bodies, acceptance and completion evidence are preserved in [
 
 ## AST-09 — Resolve provider configuration at operation boundaries
 
-- **Status:** READY
+- **Status:** DONE
 - **Outcome / why it matters:** Resolve provider configuration at operation boundaries. See the mapped user gap in FEATURE_GAP_ANALYSIS and milestone in COMPLETION_ROADMAP.
 - **Dependencies:** AST-08
 - **Exact scope / files:** newsroom/runtime.py; newsroom/article_analysis.py; newsroom/document_processing.py; newsroom/domain_api.py; newsroom/intelligent_monitoring.py.
@@ -159,11 +159,11 @@ Full original task bodies, acceptance and completion evidence are preserved in [
 - **Model:** TIER 3; reasoning high.
 - **Prompt filename:** Not generated: outside the six-task horizon. Generate `prompts/AST-09-<bounded-title>.md` after dependencies land; retained old template (if any) is historical only.
 - **Non-goals, invariants, browser evidence, rollback, cost and stop condition:** inherited in full from Contract inherited by every future task above.
-- **Completion evidence:** Not executed by this rebaseline. AST-05 has implementation on the unmerged stack but incomplete qualification; all other records describe future work or explicit external gates.
+- **Completion evidence:** DONE on 2026-09-12 at implementation commits `f08deea` and `3a5fc61`. Added immutable `AIConfigurationResolver` generation snapshots and just-in-time managed vault lookup to Article Analysis, with local fallback for unavailable/disabled/removed/budget-blocked routes, explicit untouched-installation legacy-environment labeling, and an environment-resurrection guard after managed configuration exists. Added generation/source fields to `TelemetryEvent`, persisted telemetry metadata, safe effective operation-route reporting on `/api/v1/ai/status`, shared resolver injection through the API and long-lived worker construction paths, and operation-boundary local routing for unsupported Watch capabilities. Explicit `AnalysisProviderConfig` injection remains compatible for tests and legacy callers. Added in-flight generation pinning, reload/model change, disable/removal, environment precedence, unsupported-capability, shared-handler, Watch ownership, process-restart and effective-telemetry regression coverage. `python -m pytest -q` passed with 965 tests passed and one documented POSIX-only supervisor skip; `python -m ruff check newsroom tests`, `python -m compileall -q newsroom scripts tests`, `python -m newsroom.evals validate`, and `git diff --check` passed. No paid/provider call was made and the active trial/runtime roots were not contacted. Provider endpoint validation and UI remain AST-10/AST-11 work.
 
 ## AST-10 — Add bounded provider validation and safe API contracts
 
-- **Status:** NOT_STARTED
+- **Status:** READY
 - **Outcome / why it matters:** Add bounded provider validation and safe API contracts. See the mapped user gap in FEATURE_GAP_ANALYSIS and milestone in COMPLETION_ROADMAP.
 - **Dependencies:** AST-09
 - **Exact scope / files:** newsroom/domain_api.py; newsroom/app.py; newsroom/article_analysis.py; provider service from AST-06/09; tests/test_phase21_article_analysis.py.

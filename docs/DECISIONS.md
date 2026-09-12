@@ -55,6 +55,13 @@ Formal ADR records are under `docs/adr/`.
   and static assets, bypasses API requests, and labels offline state; browser
   notification permission is optional and never replaces durable in-app alerts.
   See ADR-010.
+- **D-016:** Managed AI configuration is resolved from one immutable generation
+  snapshot at each operation boundary. API and long-lived worker paths share
+  the metadata/vault authority; new work observes edits without restart while
+  in-flight work retains its provider/model identity. Unsupported capabilities
+  remain explicitly local, and legacy environment configuration is accepted
+  only on an untouched installation with an explicit source label; managed
+  edits or removal cannot be overridden by those variables.
 
 Phase 0 established the evaluation subsystem (`newsroom.evals`), a 30-case
 labeled corpus, deterministic replay, reproducible metrics, and the v1 baseline.
