@@ -341,13 +341,19 @@ class StoryCorrectionService:
                 conn, source_story_id, destination_story_id, metadata_decisions or {}
             )
             return {
-                "source": dict(source), "destination": dict(destination),
+                "source": self._story_preview(conn, source), "destination": self._story_preview(conn, destination),
                 "source_claim_count": conn.execute("SELECT COUNT(*) FROM claims WHERE story_id = ?", (source_story_id,)).fetchone()[0],
                 "destination_claim_count": conn.execute("SELECT COUNT(*) FROM claims WHERE story_id = ?", (destination_story_id,)).fetchone()[0],
+                "source_claims": self._claim_previews(conn, source_story_id),
+                "destination_claims": self._claim_previews(conn, destination_story_id),
                 "source_documents": self._current_document_ids(conn, source_story_id),
                 "destination_documents": self._current_document_ids(conn, destination_story_id),
+                "source_document_records": self._current_document_previews(conn, source_story_id),
+                "destination_document_records": self._current_document_previews(conn, destination_story_id),
                 "source_entity_ids": self._current_entity_ids(conn, source_story_id),
                 "destination_entity_ids": self._current_entity_ids(conn, destination_story_id),
+                "source_entity_records": self._current_entity_previews(conn, source_story_id),
+                "destination_entity_records": self._current_entity_previews(conn, destination_story_id),
                 "watch_consequences": self._watch_preview(conn, source_story_id, destination_story_id),
                 "expected_claim_moves": [row[0] for row in conn.execute("SELECT id FROM claims WHERE story_id = ? ORDER BY created_at, id", (source_story_id,))],
                 "expected_current_state_fingerprint": fingerprint,
@@ -494,10 +500,12 @@ class StoryCorrectionService:
                 (source_story_id,),
             )]
             return {
-                "source": dict(source),
+                "source": self._story_preview(conn, source),
                 "claims": claims,
                 "current_document_ids": self._current_document_ids(conn, source_story_id),
+                "current_document_records": self._current_document_previews(conn, source_story_id),
                 "current_entity_ids": self._current_entity_ids(conn, source_story_id),
+                "current_entity_records": self._current_entity_previews(conn, source_story_id),
                 "watch_consequences": [
                     dict(row) for row in conn.execute(
                         "SELECT id, 'watch' AS kind, name FROM watches WHERE target_type = 'story' AND target_id = ? "
@@ -784,6 +792,65 @@ class StoryCorrectionService:
     def _current_entity_ids(conn: sqlite3.Connection, story_id: str) -> list[str]:
         from .story_context import effective_story_entity_ids
         return list(effective_story_entity_ids(conn, story_id))
+
+    @staticmethod
+    def _story_preview(conn: sqlite3.Connection, story: sqlite3.Row) -> dict[str, Any]:
+        result = dict(story)
+        revision = conn.execute(
+            "SELECT id, revision_number, headline, summary, why_it_matters FROM story_revisions "
+            "WHERE story_id = ? ORDER BY revision_number DESC, id DESC LIMIT 1",
+            (story["id"],),
+        ).fetchone()
+        if revision is not None:
+            result["headline"] = revision["headline"]
+            result["summary"] = revision["summary"]
+            result["why_it_matters"] = revision["why_it_matters"]
+            result["current_revision"] = dict(revision)
+        return result
+
+    @staticmethod
+    def _claim_previews(conn: sqlite3.Connection, story_id: str) -> list[dict[str, Any]]:
+        return [dict(row) for row in conn.execute(
+            "SELECT id, proposition, importance, state FROM claims WHERE story_id = ? ORDER BY created_at, id",
+            (story_id,),
+        )]
+
+    @classmethod
+    def _current_document_previews(cls, conn: sqlite3.Connection, story_id: str) -> list[dict[str, Any]]:
+        from .story_context import current_story_documents
+
+        documents = current_story_documents(conn, story_id)
+        source_names = {
+            row[0]: row[1]
+            for row in conn.execute(
+                "SELECT id, name FROM sources WHERE id IN ({})".format(",".join("?" for _ in documents)),
+                [row["source_id"] for row in documents],
+            )
+        } if documents else {}
+        return [
+            {
+                "id": row["document_id"],
+                "title": row["title"],
+                "source_id": row["source_id"],
+                "source_name": source_names.get(row["source_id"], "Unknown source"),
+                "published_at": row["published_at"],
+                "retrieved_at": row["retrieved_at"],
+                "first_retrieved_at": row["first_retrieved_at"],
+            }
+            for row in documents
+        ]
+
+    @classmethod
+    def _current_entity_previews(cls, conn: sqlite3.Connection, story_id: str) -> list[dict[str, Any]]:
+        entity_ids = cls._current_entity_ids(conn, story_id)
+        if not entity_ids:
+            return []
+        placeholders = ",".join("?" for _ in entity_ids)
+        rows = conn.execute(
+            f"SELECT id, canonical_name FROM entities WHERE id IN ({placeholders}) ORDER BY canonical_name, id",
+            entity_ids,
+        ).fetchall()
+        return [dict(row) for row in rows]
 
     @staticmethod
     def _watch_state(conn: sqlite3.Connection, story_id: str) -> list[dict[str, Any]]:

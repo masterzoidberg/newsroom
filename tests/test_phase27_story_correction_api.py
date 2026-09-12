@@ -77,3 +77,44 @@ def test_story_correction_api_exposes_controlled_workflows(tmp_path):
     lineage = client.get(f"/api/v1/stories/{split_source['id']}/lineage")
     assert lineage.status_code == 200
     assert len(lineage.json()["outgoing"]) == 2
+
+
+def test_story_correction_previews_name_affected_records_without_mutating(tmp_path):
+    client, headers = _client(tmp_path)
+    source = client.post("/api/v1/stories", json={"headline": "Source story"}, headers=headers).json()
+    destination = client.post("/api/v1/stories", json={"headline": "Destination story"}, headers=headers).json()
+    source_claim = client.post(
+        f"/api/v1/stories/{source['id']}/claims",
+        json={"proposition": "Source development"},
+        headers=headers,
+    ).json()
+    destination_claim = client.post(
+        f"/api/v1/stories/{destination['id']}/claims",
+        json={"proposition": "Destination development"},
+        headers=headers,
+    ).json()
+
+    merge_preview = client.post(
+        f"/api/v1/stories/{source['id']}/merge-preview",
+        json={"destination_story_id": destination["id"]},
+    )
+    assert merge_preview.status_code == 200, merge_preview.text
+    merge_payload = merge_preview.json()
+    assert merge_payload["source"]["headline"] == "Source story"
+    assert merge_payload["destination"]["headline"] == "Destination story"
+    assert merge_payload["source_claims"] == [
+        {"id": source_claim["id"], "proposition": "Source development", "importance": "relevant", "state": "pending"}
+    ]
+    assert merge_payload["destination_claims"] == [
+        {"id": destination_claim["id"], "proposition": "Destination development", "importance": "relevant", "state": "pending"}
+    ]
+
+    split_preview = client.get(f"/api/v1/stories/{source['id']}/split-preview")
+    assert split_preview.status_code == 200
+    assert split_preview.json()["claims"][0]["proposition"] == "Source development"
+
+    history = client.get(f"/api/v1/stories/{source['id']}/corrections")
+    assert history.status_code == 200
+    assert history.json()["items"] == []
+    assert client.get(f"/api/v1/stories/{source['id']}").json()["lifecycle"] == "developing"
+    assert client.get(f"/api/v1/stories/{source['id']}/claims").json()["items"][0]["story_id"] == source["id"]
