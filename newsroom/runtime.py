@@ -46,7 +46,7 @@ from .runtime_identity import (
 from .runtime_supervisor import ManagedRoleContext, RuntimeSupervisor, SupervisorError
 from .schema_authority import (
     SchemaAuthorityError,
-    apply_migrations_with_fence,
+    apply_component_migrations,
     verify_schema_ready,
 )
 from .report_automation import (
@@ -322,9 +322,10 @@ def _run_api(
                 # supervisor must have prepared the database before spawning.
                 verify_schema_ready(config.database_path)
             else:
-                # Direct dev/test API owns its API role lock already; fence the
-                # remaining managed writers while preserving fresh initialization.
-                apply_migrations_with_fence(config, held_role="api")
+                # Direct dev/test API uses the complete writer fence. Normal
+                # runtime entry already owns the API component role lock;
+                # focused direct callers safely acquire all component locks.
+                apply_component_migrations(config, "api")
         except SchemaAuthorityError as exc:
             print(f"Newsroom schema is not ready: {exc}", file=sys.stderr)
             return 3
@@ -420,10 +421,7 @@ def _run_component(config: RuntimeConfig, options: Any) -> int:
                 if options.managed_child:
                     verify_schema_ready(config.database_path)
                 else:
-                    apply_migrations_with_fence(
-                        config,
-                        held_role=options.command,
-                    )
+                    apply_component_migrations(config, options.command)
             except SchemaAuthorityError as exc:
                 print(f"Newsroom schema is not ready: {exc}", file=sys.stderr)
                 return 3

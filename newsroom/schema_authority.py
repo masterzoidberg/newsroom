@@ -1,10 +1,11 @@
 """Schema readiness and managed migration-authority guards.
 
 Managed runtime children are readers/writers of an already-prepared schema, not
-schema mutation authorities.  The supervisor and explicit operator migration
+schema mutation authorities. The supervisor and explicit operator migration
 commands acquire the existing component locks as a mechanical writer fence
-before applying migrations.  Direct development components may migrate only
-while holding their own managed-role lock plus the remaining writer locks.
+before applying migrations. Direct development components use the same fence;
+when they already own one managed-role lock, that ownership is reused rather
+than re-acquired.
 """
 from __future__ import annotations
 
@@ -86,16 +87,16 @@ def verify_schema_ready(db_path: str | Path) -> tuple[int, ...]:
     path = Path(db_path)
     try:
         conn = sqlite3.connect(_readonly_uri(path), uri=True)
+    except sqlite3.Error as exc:
+        raise SchemaNotReady("schema metadata cannot be opened read-only") from exc
+    try:
         row = conn.execute(
             "SELECT value FROM app_meta WHERE key = 'schema_version'"
         ).fetchone()
     except sqlite3.Error as exc:
         raise SchemaNotReady("schema metadata cannot be read") from exc
     finally:
-        try:
-            conn.close()
-        except UnboundLocalError:
-            pass
+        conn.close()
     if row is None or str(row[0]) != str(CURRENT_SCHEMA_VERSION):
         raise SchemaNotReady(
             "schema metadata does not match the migration ledger"
@@ -113,6 +114,16 @@ def _verify_held_role(config: RuntimeConfig, role: str) -> None:
         )
 
 
+def current_process_held_role(config: RuntimeConfig, role: str) -> str | None:
+    """Return role only when this process already owns its managed-role lock."""
+    if role not in RUNTIME_ROLES:
+        raise SchemaAuthorityError(f"unsupported writer role: {role}")
+    owner = current_owner(config, role)
+    if owner is not None and owner.pid == os.getpid():
+        return role
+    return None
+
+
 @contextmanager
 def migration_writer_fence(
     config: RuntimeConfig,
@@ -121,10 +132,10 @@ def migration_writer_fence(
 ) -> Iterator[None]:
     """Hold all managed writer locks across a schema mutation boundary.
 
-    ``held_role`` is only for a direct development child already inside its
-    ManagedRoleContext.  The caller's ownership is verified before the other
-    locks are acquired.  Supervisor/operator paths must leave it unset and
-    therefore acquire every component writer lock themselves.
+    ``held_role`` is only for a development child already inside its
+    ManagedRoleContext. The caller's ownership is verified before the other
+    locks are acquired. Supervisor/operator paths leave it unset and acquire
+    every component writer lock themselves.
     """
     if held_role is not None:
         _verify_held_role(config, held_role)
@@ -157,11 +168,25 @@ def apply_migrations_with_fence(
         return result
 
 
+def apply_component_migrations(config: RuntimeConfig, role: str) -> MigrationResult:
+    """Migrate for a direct component without assuming how it was invoked.
+
+    Normal runtime entry goes through ``ManagedRoleContext`` and therefore
+    already owns ``role``. Focused tests and narrow embedding callers may invoke
+    the component runner directly; in that case the function acquires all
+    managed writer locks itself. Either route preserves the same writer fence.
+    """
+    held_role = current_process_held_role(config, role)
+    return apply_migrations_with_fence(config, held_role=held_role)
+
+
 __all__ = [
     "MigrationAuthorityBusy",
     "SchemaAuthorityError",
     "SchemaNotReady",
+    "apply_component_migrations",
     "apply_migrations_with_fence",
+    "current_process_held_role",
     "migration_writer_fence",
     "schema_versions_readonly",
     "verify_schema_ready",
