@@ -53,7 +53,7 @@ def test_waiting_launch_takes_released_lock_when_initial_owner_dies(tmp_path, mo
         assert holder.stdout is not None
         assert holder.stdout.readline().strip() == "locked"
         monkeypatch.setattr(runtime, "resolve_release_id", lambda: "release-test")
-        monkeypatch.setattr(runtime, "apply_migrations", lambda _path: None)
+        monkeypatch.setattr(runtime, "apply_component_migrations", lambda _config, _role: None)
         monkeypatch.setattr(runtime, "create_app", lambda **_kwargs: object())
         monkeypatch.setattr(runtime.uvicorn, "run", lambda *_args, **_kwargs: None)
 
