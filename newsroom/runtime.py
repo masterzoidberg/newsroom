@@ -224,6 +224,74 @@ def _run_scheduler(config: RuntimeConfig, options: Any, *, stop_event: threading
     return 0
 
 
+def _reuse_existing_api(
+    config: RuntimeConfig,
+    options: Any,
+    *,
+    installation,
+    release_id: str,
+    timeout_seconds: float = 5.0,
+) -> int:
+    """Wait for the API process that already owns the managed API role.
+
+    A caller reaches this path only after losing the managed-role lock. It must
+    never acquire the legacy API launch lock or attempt migration, because doing
+    so can invert the two lock orders and steal schema authority from the real
+    owner during concurrent startup.
+    """
+    deadline = time.monotonic() + timeout_seconds
+    reason = "owner metadata is missing or invalid"
+    while time.monotonic() < deadline:
+        owner = read_api_owner(config)
+        verified, reason = verify_api_owner(
+            config,
+            owner,
+            installation=installation,
+            release_id=release_id,
+            host=options.host,
+            port=options.port,
+        )
+        if verified and owner is not None:
+            diagnosis = diagnose_endpoint(
+                options.host,
+                options.port,
+                expected_installation_id=installation.installation_id,
+                expected_release_id=release_id,
+                expected_owner=owner,
+            )
+            if diagnosis.status is EndpointStatus.MATCHING:
+                print(diagnosis_message(options.host, options.port, diagnosis), file=sys.stderr)
+                return 0
+            if diagnosis.status in {
+                EndpointStatus.MISMATCHED,
+                EndpointStatus.UNMANAGED,
+                EndpointStatus.FOREIGN,
+            }:
+                print(diagnosis_message(options.host, options.port, diagnosis), file=sys.stderr)
+                return 3
+        else:
+            diagnosis = diagnose_endpoint(
+                options.host,
+                options.port,
+                expected_installation_id=installation.installation_id,
+                expected_release_id=release_id,
+            )
+            if diagnosis.status in {
+                EndpointStatus.MISMATCHED,
+                EndpointStatus.UNMANAGED,
+                EndpointStatus.FOREIGN,
+            }:
+                print(diagnosis_message(options.host, options.port, diagnosis), file=sys.stderr)
+                return 3
+        time.sleep(0.05)
+    print(
+        f"Newsroom API ownership at {options.host}:{options.port} could not be verified "
+        f"after another API process acquired the managed role ({reason}). No process was stopped.",
+        file=sys.stderr,
+    )
+    return 3
+
+
 def _run_api(
     config: RuntimeConfig,
     options: Any,
@@ -430,7 +498,12 @@ def _run_component(config: RuntimeConfig, options: Any) -> int:
             return _run_scheduler(config, options, stop_event=stop_event)
     except SupervisorError as exc:
         if options.command == "api":
-            return _run_api(config, options, stop_event=stop_event)
+            return _reuse_existing_api(
+                config,
+                options,
+                installation=installation,
+                release_id=release_id,
+            )
         print(str(exc), file=sys.stderr)
         return 3
 
