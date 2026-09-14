@@ -20,7 +20,7 @@ dependencies = [
 dev = ["pytest>=8.0", "httpx>=0.24", "ruff>=0.6", "mypy>=1.11"]
 
 [tool.setuptools]
-packages = ["newsroom", "newsroom.evals"]
+packages = ["newsroom", "newsroom.evals", "newsroom.migrations"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
