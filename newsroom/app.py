@@ -7,7 +7,7 @@ import re
 import time
 import uuid
 from pathlib import Path
-from typing import Optional
+from typing import Literal, Optional
 
 from fastapi import APIRouter, BackgroundTasks, FastAPI, Request
 from fastapi.exceptions import RequestValidationError
@@ -34,6 +34,7 @@ from .evidence import EvidenceService
 from .integrity import check_database
 from .migrations import apply_migrations
 from .runtime_status import RuntimeControlAction, RuntimeControlUnavailable, RuntimeStatusService
+from .schema_authority import verify_schema_ready
 from .security import RateLimitDecision, RequestLimiter, subsystem_for_path
 from .telemetry import OperationalTelemetry
 
@@ -103,10 +104,19 @@ def create_app(
     frontend_dist: str | Path | None = None,
     runtime_identity: dict[str, object] | None = None,
     ai_provider_factory: object | None = None,
+    schema_mode: Literal["migrate", "verify"] = "migrate",
 ) -> FastAPI:
     runtime = config or RuntimeConfig.for_environment("dev")
     runtime.ensure_runtime_dirs()
-    apply_migrations(runtime.database_path)
+    if schema_mode == "migrate":
+        # Explicit disposable/test development construction retains the
+        # historical convenience path. Managed runtime children always pass
+        # ``verify`` and therefore cannot mutate schema here.
+        apply_migrations(runtime.database_path)
+    elif schema_mode == "verify":
+        verify_schema_ready(runtime.database_path)
+    else:  # pragma: no cover - Literal protects ordinary typed callers.
+        raise ValueError(f"unsupported schema mode: {schema_mode}")
     auth = AuthService(runtime.database_path)
     runtime_status_service = RuntimeStatusService(runtime, runtime_identity)
 

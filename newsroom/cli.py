@@ -18,6 +18,7 @@ from .operations import (
     upgrade_database,
     verify_database,
 )
+from .schema_authority import migration_writer_fence
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -46,7 +47,10 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
     config.ensure_runtime_dirs()
 
     if args.command == "migrate":
-        result = apply_migrations(config.database_path)
+        # Explicit operator migration is schema-mutation authority, but only
+        # while every managed component writer is mechanically fenced out.
+        with migration_writer_fence(config):
+            result = apply_migrations(config.database_path)
         print(
             json.dumps(
                 {
@@ -100,7 +104,10 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
         print(json.dumps({**report, "path": str(report["path"]), "environment": config.environment}, sort_keys=True))
         return 0 if report["ok"] else 1
     if args.command == "upgrade":
-        result = upgrade_database(config.database_path)
+        # Upgrade includes backup/integrity semantics from operations.py, while
+        # this CLI remains the runtime authority that fences live writers.
+        with migration_writer_fence(config):
+            result = upgrade_database(config.database_path)
         print(json.dumps({"environment": config.environment, "applied_versions": list(result["applied_versions"]), "verified": result["verified"]}, sort_keys=True))
         return 0
     if args.command == "export":

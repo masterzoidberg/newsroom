@@ -27,7 +27,6 @@ from .document_processing import (
 )
 from .intelligent_monitoring import WatchMaintenanceService
 from .jobs import JobService, compose_completion_hooks, compose_rerun_factories
-from .migrations import apply_migrations
 from .monitoring import MonitorExecutionService, monitor_job_completion_hook
 from .runtime_identity import (
     EndpointDiagnosis,
@@ -45,6 +44,11 @@ from .runtime_identity import (
     write_api_owner,
 )
 from .runtime_supervisor import ManagedRoleContext, RuntimeSupervisor, SupervisorError
+from .schema_authority import (
+    SchemaAuthorityError,
+    apply_migrations_with_fence,
+    verify_schema_ready,
+)
 from .report_automation import (
     AutomaticReportStageExecutionService,
     automatic_report_stage_completion_hook,
@@ -311,12 +315,27 @@ def _run_api(
             port=options.port,
         )
         write_api_owner(config, identity)
-        if not bool(getattr(options, "managed_child", False)):
-            apply_migrations(config.database_path)
-
-        app = create_app(config=config, runtime_identity=identity.public_payload())
+        managed_child = bool(getattr(options, "managed_child", False))
         try:
-            if bool(getattr(options, "managed_child", False)):
+            if managed_child:
+                # Managed children are never schema mutation authorities. The
+                # supervisor must have prepared the database before spawning.
+                verify_schema_ready(config.database_path)
+            else:
+                # Direct dev/test API owns its API role lock already; fence the
+                # remaining managed writers while preserving fresh initialization.
+                apply_migrations_with_fence(config, held_role="api")
+        except SchemaAuthorityError as exc:
+            print(f"Newsroom schema is not ready: {exc}", file=sys.stderr)
+            return 3
+
+        app = create_app(
+            config=config,
+            runtime_identity=identity.public_payload(),
+            schema_mode="verify",
+        )
+        try:
+            if managed_child:
                 managed_stop = stop_event or _stop_event()
                 server = uvicorn.Server(
                     uvicorn.Config(
@@ -397,8 +416,17 @@ def _run_component(config: RuntimeConfig, options: Any) -> int:
         ):
             if options.command == "api":
                 return _run_api(config, options, stop_event=stop_event)
-            if not options.managed_child:
-                apply_migrations(config.database_path)
+            try:
+                if options.managed_child:
+                    verify_schema_ready(config.database_path)
+                else:
+                    apply_migrations_with_fence(
+                        config,
+                        held_role=options.command,
+                    )
+            except SchemaAuthorityError as exc:
+                print(f"Newsroom schema is not ready: {exc}", file=sys.stderr)
+                return 3
             if options.command == "worker":
                 return _run_worker(config, options, stop_event=stop_event)
             return _run_scheduler(config, options, stop_event=stop_event)

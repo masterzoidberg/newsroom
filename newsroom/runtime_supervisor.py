@@ -12,7 +12,6 @@ from typing import Callable, Sequence
 
 from .config import RuntimeConfig
 from .migrations import apply_migrations
-from .runtime_identity import ExclusiveFileLock
 from .runtime_managed import (
     ComponentState,
     ManagedOwner,
@@ -27,6 +26,11 @@ from .runtime_managed import (
     component_state,
     ensure_runtime_manifest,
     request_component_stop,
+)
+from .schema_authority import (
+    MigrationAuthorityBusy,
+    migration_writer_fence,
+    verify_schema_ready,
 )
 
 RUNTIME_ROLES = ("api", "worker", "scheduler")
@@ -178,29 +182,34 @@ class RuntimeSupervisor:
                 return ComponentState(role, "starting", detail, state.owner)
         return state
 
-    def _any_component_lock_held(self) -> bool:
-        for role in RUNTIME_ROLES:
-            lock = ExclusiveFileLock(component_lock_path(self.config, role))
-            if not lock.acquire():
-                return True
-            lock.release()
-        return False
-
     def prepare(self) -> None:
-        active_components = self._any_component_lock_held()
-        ensure_runtime_manifest(
-            self.config,
-            installation_id=self.installation_id,
-            release_id=self.release_id,
-            host=self.host,
-            port=self.port,
-            allow_release_update=not active_components,
-        )
-        # Only the supervisor performs normal managed migrations, and only when
-        # every managed writer role is stopped. Reconciliation of an existing
-        # same-release child set deliberately skips migration writes.
-        if not active_components:
-            apply_migrations(self.config.database_path)
+        """Prepare schema only while the complete managed-writer fence is held."""
+        try:
+            with migration_writer_fence(self.config):
+                ensure_runtime_manifest(
+                    self.config,
+                    installation_id=self.installation_id,
+                    release_id=self.release_id,
+                    host=self.host,
+                    port=self.port,
+                    allow_release_update=True,
+                )
+                apply_migrations(self.config.database_path)
+                verify_schema_ready(self.config.database_path)
+                return
+        except MigrationAuthorityBusy:
+            # Reconciliation of an existing same-release child set remains
+            # supported, but it is strictly read-only. A pending migration now
+            # fails readiness instead of racing an active writer.
+            ensure_runtime_manifest(
+                self.config,
+                installation_id=self.installation_id,
+                release_id=self.release_id,
+                host=self.host,
+                port=self.port,
+                allow_release_update=False,
+            )
+            verify_schema_ready(self.config.database_path)
 
     def _spawn(self, role: str) -> None:
         if role == "api":
