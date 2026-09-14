@@ -30,7 +30,6 @@ No second scheduler, transport, worker system, root Research entity, report mode
 
 Final review also requires implementation to prove: unchanged content creates missing Research obligations; scope transitions are atomic; paused/detached subscribers cannot admit new work; in-flight operations cannot widen paid permission; shared global Claim/Story text cannot bypass scoped rendering; feed/article comparison is representation-specific; check closure waits for durable descendants or explicit terminal failure. These are acceptance gates, not optional polish.
 
-
 ## Final M0 audit decisions — append-only refinements
 
 | ID | Decision and authority | Supersedes / reason |
@@ -43,4 +42,14 @@ Final review also requires implementation to prove: unchanged content creates mi
 | D25 | M0 becomes six review-gated slices; each ships recovery/integrity. Minimal shared endpoint coordination moves to M0.5; M1 extends it. | Supersedes monolithic M0 and deferral of all shared-fetch work to M1. Same MVP/queue/scheduler, safer dependency order. Watch Run closure must bypass legacy jobs-only finalizer. |
 | D26 | Projection owns eligibility only; membership writes, admission and check coordination have separate bounded owners. Keep canonical promotion identities and global truth. | Refines research_context module responsibility; no new Story truth table, semantic ledger or universal Research service. |
 
-No owner decision is required for these corrections: identity, retention, cost, privacy, Source authority and MVP boundaries are preserved. A destructive real-data migration or requested expansion of private logical export would require a separate decision; neither is proposed.
+## Full-codebase adversarial review decisions — 2026-09-14
+
+| ID | Decision and authority | Supersedes / reason |
+|---|---|---|
+| D27 | Managed migration authority is single-sourced: supervisor/explicit upgrade owns schema mutation after writer quiescence; managed API startup verifies readiness and fails closed instead of independently applying migrations. | Existing `create_app()` migration behavior conflicts with the supervisor's stated managed-upgrade contract. This is an operational correctness fix before the M0 migration series, not a new migration framework. |
+| D28 | The old Phase 19 invariant “one DocumentVersion means one downstream processing obligation” is superseded once contextual processing lands. Acquisition/version identity stays global; missing semantic obligations are per Research observation/version/Monitor/scope and may be created after 304/unchanged without refetching the body. | Refines D06/D22. Existing tests encode the obsolete global-completion assumption and must be deliberately changed rather than preserved as compatibility behavior. |
+| D29 | Do not add new runtime acquisition semantics for non-Source Monitor targets. Preserve legacy/API compatibility until measured deprecation is safe; new code should model acquisition as Source Monitor plus information-need/Research context. | The runtime already supports real acquisition only for Source targets. Expanding generic polymorphism would add complexity without current capability value. This is a deprecation direction, not immediate destructive schema removal. |
+| D30 | M7 is also a product-value gate. Before major post-MVP intelligence subsystems, collect real evidence for time-to-first-useful Update, human minutes per useful development, useful/noisy yield, and whether Ask/Briefing materially outperform a simpler feed/search workflow; run the frozen Full-vs-Lite comparison when eligible. | Engineering correctness is necessary but Phase 29 still does not establish longitudinal product value. Further intelligence architecture is deferred until the core earns its complexity. |
+| D31 | Every discovered URL transition re-enters the deterministic acquisition safety boundary. Parent URL approval never authorizes child feed/article/redirect/canonical/Scout URLs. | Linked-article retrieval and Source Scout increase URL graph depth. Reusing the existing SSRF/DNS/redirect/byte/time policy at every hop is simpler and safer than inventing trust inheritance. |
+
+No owner decision is required for D20–D31 because they preserve product identity, evidence authority, privacy, cost controls and MVP boundaries while correcting implementation assumptions. A destructive real-data migration, expansion of private logical export, or new paid/background capability would require a separate owner decision.
