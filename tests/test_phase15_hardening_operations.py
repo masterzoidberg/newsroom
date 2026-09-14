@@ -220,3 +220,21 @@ def test_request_limits_metrics_cache_control_and_error_redaction(tmp_path, capl
         assert "private" not in json.dumps(payload)
         assert "password" not in json.dumps(payload).lower()
     assert all(PASSWORD not in record.getMessage() for record in caplog.records)
+
+
+def test_static_assets_do_not_consume_api_rate_limit(tmp_path):
+    config = RuntimeConfig.for_environment("dev", root=tmp_path / "dev")
+    frontend_dist = tmp_path / "frontend-dist"
+    frontend_dist.mkdir()
+    (frontend_dist / "index.html").write_text("<html>Newsroom</html>", encoding="utf-8")
+    (frontend_dist / "manifest.webmanifest").write_text("{}", encoding="utf-8")
+    app = create_app(config=config, frontend_dist=frontend_dist)
+
+    with TestClient(app) as client:
+        static_shell = client.get("/manifest.webmanifest")
+        first_health = client.get("/api/v1/health")
+
+    assert static_shell.status_code == 200
+    assert "X-RateLimit-Limit" not in static_shell.headers
+    assert first_health.status_code == 200
+    assert first_health.headers["X-RateLimit-Remaining"] == "119"

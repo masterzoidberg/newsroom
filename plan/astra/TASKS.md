@@ -1,6 +1,6 @@
 # Canonical execution ledger
 
-Rebaseline transitioned 2026-09-09 after automated Gate 0 acceptance at integrated head `18c5ee8bdf56a44218af4ecd6d7e8d9ead68f8c0`. Newsroom Run 1 then completed sequentially on `astra/AST-25-27-first-watch` through AST-40 at the latest committed AST-40 head. AST-25, AST-26, AST-27, AST-33, AST-34, AST-35, AST-36, AST-37, AST-38, AST-39, AST-40, AST-06, AST-07, AST-08, AST-09, AST-10 and AST-11 are DONE; AST-33 completed at code head `4a7c0f9` with the full local backend suite green, AST-34 completed with frontend and isolated browser qualification, AST-35 completed with frontend, trust-boundary and isolated browser qualification, AST-36 completed with backend, frontend, full-suite, eval and isolated browser qualification, AST-37 completed with backend, migration, full-suite, eval and frontend build qualification, AST-38 completed with API, frontend, full-suite, eval and isolated browser qualification, AST-39 completed with alert API/domain tests, full-suite, frontend checks and isolated browser qualification, AST-40 completed with correction API/domain tests, full-suite, frontend checks, evals and isolated Story browser qualification, AST-06 completed with migration, metadata-service, API, export-policy, full-suite, evaluation and frontend-build qualification, AST-07 completed with credential-store lifecycle, migration, export-policy, full-suite, evaluation, frontend-build and disposable same-user Windows vault qualification, AST-08 completed with durable generic paid admission, multiprocessing regression coverage and telemetry-finalization qualification, AST-09 completed with operation-boundary resolver, shared API/worker wiring, reload/fallback coverage and process-restart generation evidence, AST-10 completed with bounded provider CRUD/credential/test contracts, safe destination handling and full offline qualification, and AST-11 completed with the functional provider/cost Settings UI, typed contracts, fake-provider browser journey and responsive correction. Physical reboot/sign-in and lock/sleep/wake evidence remains pending for release. AST-28 is now the sole READY task; AST-12 remains superseded/decomposed historical planning, and AST-41 remains blocked by unfinished AST-29.
+Rebaseline transitioned 2026-09-09 after automated Gate 0 acceptance at integrated head `18c5ee8bdf56a44218af4ecd6d7e8d9ead68f8c0`. Newsroom Run 1 then completed sequentially on `astra/AST-25-27-first-watch` through AST-40 at the latest committed AST-40 head. AST-25, AST-26, AST-27, AST-31, AST-33, AST-34, AST-35, AST-36, AST-37, AST-38, AST-39, AST-40, AST-06, AST-07, AST-08, AST-09, AST-10, AST-11, AST-28 and AST-29 and AST-32 are DONE; AST-33 completed at code head `4a7c0f9` with the full local backend suite green, AST-34 completed with frontend and isolated browser qualification, AST-35 completed with frontend, trust-boundary and isolated browser qualification, AST-36 completed with backend, frontend, full-suite, eval and isolated browser qualification, AST-37 completed with backend, migration, full-suite, eval and frontend build qualification, AST-38 completed with API, frontend, full-suite, eval and isolated browser qualification, AST-39 completed with alert API/domain tests, full-suite, frontend checks and isolated browser qualification, AST-40 completed with correction API/domain tests, full-suite, frontend checks, evals and isolated Story browser qualification, AST-06 completed with migration, metadata-service, API, export-policy, full-suite, evaluation and frontend-build qualification, AST-07 completed with credential-store lifecycle, migration, export-policy, full-suite, evaluation, frontend-build and disposable same-user Windows vault qualification, AST-08 completed with durable generic paid admission, multiprocessing regression coverage and telemetry-finalization qualification, AST-09 completed with operation-boundary resolver, shared API/worker wiring, reload/fallback coverage and process-restart generation evidence, AST-10 completed with bounded provider CRUD/credential/test contracts, safe destination handling and full offline qualification, AST-11 completed with the functional provider/cost Settings UI, typed contracts, fake-provider browser journey and responsive correction, AST-28 completed with the bounded managed vocabulary route and offline regression evidence, AST-29 completed with the owner-facing review flow, focused frontend contract coverage, full offline qualification and isolated fixture-browser evidence. Physical reboot/sign-in and lock/sleep/wake evidence remains pending for release. AST-32 is DONE after AST-31's implementation and verification; AST-12 remains superseded/decomposed historical planning, and AST-41 is the next READY task.
 
 ## Contract inherited by every future task
 
@@ -33,7 +33,7 @@ Statuses: READY, NOT_STARTED, IN_PROGRESS, DONE, BLOCKED, DEFERRED, SUPERSEDED. 
 | AST-08 | Make paid admission durable across processes and reloads | DONE | AST-07 | 3 |
 | AST-09 | Resolve provider configuration at operation boundaries | DONE | AST-08 | 3 |
 | AST-10 | Add bounded provider validation and safe API contracts | DONE | AST-09 | 3 |
-| AST-11 | Build functional AI Providers and cost settings | READY | AST-10 | 2 |
+| AST-11 | Build functional AI Providers and cost settings | DONE | AST-10 | 2 |
 | AST-12 | Original broad task, preserved below | SUPERSEDED | Replaced by AST-23–29,32,41,42,52–55 | — |
 | AST-13 | Original broad task, preserved below | SUPERSEDED | Replaced by AST-45–46 | — |
 | AST-14 | Original broad task, preserved below | SUPERSEDED | Replaced by AST-43–44 | — |
@@ -50,11 +50,11 @@ Statuses: READY, NOT_STARTED, IN_PROGRESS, DONE, BLOCKED, DEFERRED, SUPERSEDED. 
 | AST-25 | Add and reuse Watch Sources by name or URL | DONE | AST-24 | 2 |
 | AST-26 | Expose Watch cadence as plain scheduling choices | DONE | AST-25 | 2 |
 | AST-27 | Connect review and Start to honest first-value progress | DONE | AST-26 | 2 |
-| AST-28 | Implement bounded semantic vocabulary capability | NOT_STARTED | AST-11, AST-27 | 3 |
-| AST-29 | Make terminology review understandable in setup | NOT_STARTED | AST-28 | 2 |
-| AST-30 | Decide and freeze fresh-corpus source recommendation contract | NOT_STARTED | AST-29 | A |
-| AST-31 | Implement bounded fresh-corpus source candidates | NOT_STARTED | AST-30 | 3 |
-| AST-32 | Connect recommended Sources and source health to setup | NOT_STARTED | AST-31, AST-25 | 2 |
+| AST-28 | Implement bounded semantic vocabulary capability | DONE | AST-11, AST-27 | 3 |
+| AST-29 | Make terminology review understandable in setup | DONE | AST-28 | 2 |
+| AST-30 | Decide and freeze fresh-corpus source recommendation contract | DONE | AST-29 | A |
+| AST-31 | Implement bounded fresh-corpus source candidates | DONE | AST-30 | 3 |
+| AST-32 | Connect recommended Sources and source health to setup | DONE | AST-31, AST-25 | 2 |
 | AST-33 | Persist and query the returning-user review boundary | DONE | AST-27 | 3 |
 | AST-34 | Build Watch overview and since-visit Home | DONE | AST-33 | 2 |
 | AST-35 | Connect summary through Claim to exact source Evidence | DONE | AST-34 | 2 |
@@ -63,7 +63,7 @@ Statuses: READY, NOT_STARTED, IN_PROGRESS, DONE, BLOCKED, DEFERRED, SUPERSEDED. 
 | AST-38 | Expose briefing preferences and first intelligence choices | DONE | AST-37 | 2 |
 | AST-39 | Make alert triage scoped and complete | DONE | AST-38 | 2 |
 | AST-40 | Expose Story changes, disagreements and correction preview | DONE | AST-35 | 2 |
-| AST-41 | Support question-first Watches and contextual research | NOT_STARTED | AST-29, AST-35 | 3 |
+| AST-41 | Support question-first Watches and contextual research | READY | AST-29, AST-35 | 3 |
 | AST-42 | Make search, saved and history discoverable by name | NOT_STARTED | AST-35, AST-41 | 2 |
 | AST-43 | Add owner verified-backup and diagnostic controls | NOT_STARTED | AST-11, AST-05 | 3 |
 | AST-44 | Provide controlled restore, update recovery and export guidance | NOT_STARTED | AST-43 | 3 |
@@ -345,7 +345,7 @@ Full original task bodies, acceptance and completion evidence are preserved in [
 
 ## AST-28 — Implement bounded semantic vocabulary capability
 
-- **Status:** READY
+- **Status:** DONE
 - **Outcome / why it matters:** Implement bounded semantic vocabulary capability. See the mapped user gap in FEATURE_GAP_ANALYSIS and milestone in COMPLETION_ROADMAP.
 - **Dependencies:** AST-11, AST-27
 - **Exact scope / files:** newsroom/ai.py; newsroom/intelligent_monitoring.py; newsroom/runtime.py; tests/test_phase24_intelligent_monitoring.py
@@ -355,11 +355,11 @@ Full original task bodies, acceptance and completion evidence are preserved in [
 - **Model:** TIER 3; reasoning high.
 - **Prompt filename:** Not generated: outside the six-task horizon. Generate `prompts/AST-28-<bounded-title>.md` after dependencies land; retained old template (if any) is historical only.
 - **Non-goals, invariants, browser evidence, rollback, cost and stop condition:** inherited in full from Contract inherited by every future task above.
-- **Completion evidence:** Not executed by this rebaseline. AST-05 has implementation on the unmerged stack but incomplete qualification; all other records describe future work or explicit external gates.
+- **Completion evidence:** DONE on `astra/AST-25-27-first-watch` in the scoped working tree after AST-11. Added `OpenAICompatibleVocabularyProvider` with bounded JSON-schema chat completions, enabled `vocabulary` in the managed capability resolver and public capability set, and routed Watch suggestions through durable generic paid admission with approved target/Watch context. Suggestions remain `suggested`/disabled until review; malformed, unavailable, paid-disabled, low-confidence and provider-failure paths preserve the existing configuration, while rejected provider terms remain rejected across later runs. Added focused coverage for historical aerial wording, company/person homonyms, unrelated niche terms, approved-context bounds, structured output, durable reservation/work identity, paid-disabled fallback, low confidence and provider initialization failure. `python -m pytest -q tests/test_phase21_article_analysis.py tests/test_phase24_intelligent_monitoring.py`, `python -m pytest -q`, `python -m compileall -q newsroom tests`, and `git diff --check` passed; the full suite retains one documented POSIX-only supervisor skip. No paid provider, active trial, port 8127 or external network was contacted. The repository `.git` directory is read-only in this checkout, so the scoped implementation remains uncommitted and the plan validator's code-change guard is expected to remain open until a writable Git checkout is available.
 
 ## AST-29 — Make terminology review understandable in setup
 
-- **Status:** NOT_STARTED
+- **Status:** DONE
 - **Outcome / why it matters:** Make terminology review understandable in setup. See the mapped user gap in FEATURE_GAP_ANALYSIS and milestone in COMPLETION_ROADMAP.
 - **Dependencies:** AST-28
 - **Exact scope / files:** frontend/src/views/WatchManagementView.tsx; frontend/src/lib/types.ts
@@ -369,39 +369,39 @@ Full original task bodies, acceptance and completion evidence are preserved in [
 - **Model:** TIER 2; reasoning medium.
 - **Prompt filename:** Not generated: outside the six-task horizon. Generate `prompts/AST-29-<bounded-title>.md` after dependencies land; retained old template (if any) is historical only.
 - **Non-goals, invariants, browser evidence, rollback, cost and stop condition:** inherited in full from Contract inherited by every future task above.
-- **Completion evidence:** Not executed by this rebaseline. AST-05 has implementation on the unmerged stack but incomplete qualification; all other records describe future work or explicit external gates.
+- **Completion evidence:** DONE in the scoped working tree. Added typed `VocabularyKind`/`WatchVocabularyTerm` contracts and the `TerminologyReview` setup step in `frontend/src/lib/types.ts` and `frontend/src/views/WatchManagementView.tsx`. The flow visibly separates suggested/inactive, approved/active and rejected/excluded terms; supports explicit approve/reject, editable kind/expansion/rationale, manual approved terms including exclusions, explicit bounded suggestion requests, provider route/cost explanation, error/retry recovery, and durable reload state. Suggested terms remain inert until server review; editing creates an approved owner term and rejects only the original suggestion. Verified with `python -m pytest -q tests/test_phase29_frontend.py`, `npm run lint`, `npm run typecheck`, `npm run build`, `python -m pytest -q`, `python -m compileall -q newsroom tests plan/astra`, `python plan/astra/validate_plan.py`, and `git diff --check`. Isolated local fixture-browser evidence covered direct approve/reject, edit, manual exclusion payload, error/retry, empty state, reload, keyboard focus, measured 390 CSS-pixel no-overflow and 200% page scale; no paid provider, active trial, port 8127 or external network was contacted. The repository `.git` directory is read-only in this checkout, so the scoped implementation remains uncommitted.
 
 ## AST-30 — Decide and freeze fresh-corpus source recommendation contract
 
-- **Status:** NOT_STARTED
+- **Status:** DONE
 - **Outcome / why it matters:** Decide and freeze fresh-corpus source recommendation contract. See the mapped user gap in FEATURE_GAP_ANALYSIS and milestone in COMPLETION_ROADMAP.
 - **Dependencies:** AST-29
 - **Exact scope / files:** plan/astra/DECISIONS.md; plan/astra/AI_PROVIDER_SETTINGS.md; newsroom/intelligent_monitoring.py; newsroom/acquisition.py
-- **Implementation approach:** Tier A reviews a bounded candidate-suggestion capability using the managed compatible adapter, followed by existing safe URL/feed validation. Separate model-proposed unverified URLs from corpus-derived observed URLs. Decide whether an external search adapter is actually necessary using empty-corpus fixtures; if so record one provider/transport/cost contract and human preference only if materially needed. Deliver a small schema/API contract and refined AST-31 prompt before coding; do not promise exhaustive web discovery.
-- **Acceptance criteria:** Candidate provenance, reason, validation and rejection semantics are fixed; no automatic source attachment or evidence creation; AST-31 has no unresolved provider/schema decisions.
+- **Implementation approach:** Tier A freezes a bounded source_discovery candidate-suggestion capability on the existing OpenAI-compatible structured adapter, operation-boundary resolver and durable budget authority. The contract separates model-proposed unverified URLs from corpus-observed URLs, defines strict bounded request/output shapes, staged structural/acquisition validation, server-owned provenance, explicit review/dedupe/rejection and honest fallback/cancellation semantics. Empty information-need corpus cases use the model-only lane; no external search adapter, migration, crawler, SDK or second ledger is required, and exhaustive web discovery is not promised.
+- **Acceptance criteria:** Candidate provenance, reason, validation, fallback, cancellation and rejection semantics are fixed; no automatic source attachment, fetch, Document, Claim or Evidence creation; the existing API/job result shape remains compatible; AST-31 has no unresolved provider/schema/ledger decisions.
 - **Tests / verification:** Design review against empty UAP/person/event cases, SSRF limits, source approval and zero-paid fallback; no paid calls.
 - **Model:** TIER A; reasoning high.
 - **Prompt filename:** Not generated: outside the six-task horizon. Generate `prompts/AST-30-<bounded-title>.md` after dependencies land; retained old template (if any) is historical only.
 - **Non-goals, invariants, browser evidence, rollback, cost and stop condition:** inherited in full from Contract inherited by every future task above.
-- **Completion evidence:** Not executed by this rebaseline. AST-05 has implementation on the unmerged stack but incomplete qualification; all other records describe future work or explicit external gates.
+- **Completion evidence:** DONE on 2026-09-12 in the scoped working tree. `AI_PROVIDER_SETTINGS.md` freezes the distinct `source_discovery` capability, existing OpenAI-compatible adapter/resolver/durable-budget boundary, empty information-need corpus trigger, provider-neutral bounded request/output shapes, server-owned provenance, per-Watch dedupe and rejection retention, staged structural-versus-acquisition URL validation, backward-compatible API/job result semantics, manual/corpus fallback and cancellation/uncertain-call accounting. It explicitly decides that AST-31 needs no external search adapter, crawler, SDK, migration or second ledger. `intelligent_monitoring.py` and `acquisition.py` document the inert-candidate and per-hop acquisition boundaries. Verified by coordinated plan/state review and zero-paid design checks; no provider, active trial, port 8127 or external network was contacted. The repository `.git` directory is read-only in this checkout, so the scoped implementation remains uncommitted.
 
 ## AST-31 — Implement bounded fresh-corpus source candidates
 
-- **Status:** NOT_STARTED
+- **Status:** DONE
 - **Outcome / why it matters:** Implement bounded fresh-corpus source candidates. See the mapped user gap in FEATURE_GAP_ANALYSIS and milestone in COMPLETION_ROADMAP.
 - **Dependencies:** AST-30
 - **Exact scope / files:** newsroom/intelligent_monitoring.py; newsroom/ai.py; newsroom/domain_api.py; tests/test_phase24_intelligent_monitoring.py
-- **Implementation approach:** Implement exactly AST-30 approved adapter/contract using existing candidate persistence and durable limits. Model suggestions are unverified until safe transport validation; enrich accepted candidates with rationale, discovery provenance and limitations. Preserve corpus discovery and rejection/dedupe. Stop if adapter requires another provider or unanticipated schema.
-- **Acceptance criteria:** Empty corpus can return bounded explained candidates through a fake supported capability; bad/unsafe/hallucinated URLs never activate collection or become Evidence; paid-disabled mode returns honest manual/corpus fallback.
-- **Tests / verification:** Fake discovery, invalid URL/redirect/private destinations, repeated/rejected candidates, budget/cancellation and no mutation before approval.
+- **Implementation approach:** Implement AST-30's provider-neutral SourceDiscoveryRequest/SourceDiscoveryOutput schemas with strict bounds in newsroom/ai.py; register only source_discovery on the existing OpenAI-compatible adapter/resolver and durable provider_usage. Extend WatchService/existing authenticated routes to call only for empty information-need corpora, preserve deterministic proposals, validate every model URL with structural AcquisitionPolicy rules before persistence, write inert server-provenance ai_suggestion rows, and keep the explicit review/dedupe/attachment boundary. No migration, external search adapter, auto-fetch, auto-approval or Evidence path.
+- **Acceptance criteria:** Empty corpus returns bounded explained candidates through a fake source_discovery route; deterministic corpus proposals short-circuit without provider calls; malformed, structurally unsafe, private, redirect-unsafe or hallucinated URLs never activate collection or become a Document, Claim or Evidence; repeated and rejected candidates retain identity/history; disabled, unavailable, budget-blocked, failed and cancelled runs return honest manual/corpus fallback with no unintended mutation; approved candidates still require the existing explicit review path.
+- **Tests / verification:** Fake source-discovery adapter; strict schema/extra-field/bounds, empty/populated corpus, invalid/private URL, acquisition redirect/peer checks, repeated/rejected dedupe, durable budget/cancellation/uncertain-call accounting, API/job result and no mutation before approval.
 - **Model:** TIER 3; reasoning high.
 - **Prompt filename:** Not generated: outside the six-task horizon. Generate `prompts/AST-31-<bounded-title>.md` after dependencies land; retained old template (if any) is historical only.
 - **Non-goals, invariants, browser evidence, rollback, cost and stop condition:** inherited in full from Contract inherited by every future task above.
-- **Completion evidence:** Not executed by this rebaseline. AST-05 has implementation on the unmerged stack but incomplete qualification; all other records describe future work or explicit external gates.
+- **Completion evidence:** DONE in the scoped working tree on 2026-09-12. Implemented strict `SourceDiscoveryRequest`/`SourceDiscoveryOutput` contracts and the OpenAI-compatible structured adapter; registered the managed resolver/provider-factory path with durable `provider_usage`; restricted model recommendations to empty information-need corpora; applied structural URL/SSRF validation and per-hop acquisition safeguards; added server-owned unverified provenance; preserved atomic inert candidate persistence, per-Watch dedupe, rejection retention and explicit approval; and returned honest fallback/cancellation results. Maintenance jobs pass stable `job_id` work identities, poll cancellation and return the complete discovery metadata. Verified with `python -m pytest -q tests/test_phase24_intelligent_monitoring.py`, `python -m pytest -q`, `python -m compileall -q newsroom tests plan/astra`, `python plan/astra/validate_plan.py`, and `git diff --check`. The full suite has one intentional Windows-only SIGSTOP lifecycle skip. `poetry run format` remains unavailable because its configured Python interpreter is stale, and the active interpreter has no Ruff/Black installation; no dependency or environment change was made. No provider, active trial, port 8127 or external network was contacted. The repository `.git` directory is read-only in this checkout, so the scoped implementation remains uncommitted.
 
 ## AST-32 — Connect recommended Sources and source health to setup
 
-- **Status:** NOT_STARTED
+- **Status:** DONE
 - **Outcome / why it matters:** Connect recommended Sources and source health to setup. See the mapped user gap in FEATURE_GAP_ANALYSIS and milestone in COMPLETION_ROADMAP.
 - **Dependencies:** AST-31, AST-25
 - **Exact scope / files:** frontend/src/views/WatchManagementView.tsx; frontend/src/views/AdminViews.tsx
@@ -411,7 +411,7 @@ Full original task bodies, acceptance and completion evidence are preserved in [
 - **Model:** TIER 2; reasoning medium.
 - **Prompt filename:** Not generated: outside the six-task horizon. Generate `prompts/AST-32-<bounded-title>.md` after dependencies land; retained old template (if any) is historical only.
 - **Non-goals, invariants, browser evidence, rollback, cost and stop condition:** inherited in full from Contract inherited by every future task above.
-- **Completion evidence:** Not executed by this rebaseline. AST-05 has implementation on the unmerged stack but incomplete qualification; all other records describe future work or explicit external gates.
+- **Completion evidence:** DONE in the scoped working tree on 2026-09-12. Connected the AST-31 bounded candidate route to Watch setup with explicit recommended, existing-Source and manual preview paths; surfaced server provenance and visible `unverified` labeling; kept approval/rejection review-only and preserved canonical-URL dedupe/rejection history; and added per-Source page/feed health, last-check/failure detail, retry, shared-Source disclosure and global Sources diagnostics. An isolated offline Playwright fixture smoke verified populated, empty, unsafe-filtered and unavailable discovery, manual/existing fallback, explicit approval and dedupe, partial failure with successful sibling visibility, retry requests and approved-source counts at desktop, 390px, keyboard focus and 200% visual zoom. The smoke found and fixed a 390px Watch action-group overflow by wrapping section-card actions below 760px. `python -m pytest -q tests/test_phase32_frontend.py`, frontend `npm run lint`, frontend `npm run build`, `python plan/astra/validate_plan.py`, `python -m pytest -q`, `python -m compileall -q newsroom tests plan/astra`, and `git diff --check` passed; the full suite has one intentional Windows-only SIGSTOP lifecycle skip. The browser smoke used only local route interception and did not contact a provider, active trial, port 8127 or external network. The repository `.git` directory is read-only in this checkout, so the scoped implementation remains uncommitted.
 
 ## AST-33 — Persist and query the returning-user review boundary
 
@@ -527,7 +527,7 @@ Full original task bodies, acceptance and completion evidence are preserved in [
 
 ## AST-41 — Support question-first Watches and contextual research
 
-- **Status:** NOT_STARTED
+- **Status:** READY
 - **Outcome / why it matters:** Support question-first Watches and contextual research. See the mapped user gap in FEATURE_GAP_ANALYSIS and milestone in COMPLETION_ROADMAP.
 - **Dependencies:** AST-29, AST-35
 - **Exact scope / files:** frontend/src/views/WatchManagementView.tsx; frontend/src/views/AdminViews.tsx; newsroom/domain_api.py; tests/test_phase25_autonomous_research.py

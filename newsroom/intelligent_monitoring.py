@@ -16,7 +16,6 @@ enter the existing Phase 18-23 pipeline.
 """
 from __future__ import annotations
 
-import ipaddress
 import json
 import sqlite3
 import uuid
@@ -25,11 +24,14 @@ from typing import Any, Callable, Mapping, Sequence
 from urllib.parse import urlparse
 
 from . import storage
+from .acquisition import AcquisitionBlocked, AcquisitionPolicy
 from .ai import (
     AIError,
     AIRouter,
     CapabilityBundle,
     SQLiteTelemetrySink,
+    SourceDiscoveryOutput,
+    SourceDiscoveryRequest,
     VocabularyOutput,
     VocabularyRequest,
 )
@@ -56,7 +58,6 @@ from .monitoring import (
     TARGET_TABLES,
     _scope_for_target,
 )
-from .url_norm import normalize_url
 from .worker import RetryableJobFailure
 
 WATCH_STATUSES = frozenset({"active", "paused", "disabled"})
@@ -87,11 +88,19 @@ DISCOVERY_METHODS = frozenset(
 MAX_TERM_LENGTH = 300
 MAX_RATIONALE_LENGTH = 2000
 MAX_SUGGESTIONS_PER_RUN = 50
+MIN_VOCABULARY_PROVIDER_CONFIDENCE = 0.7
 MAX_CANDIDATES_PER_RUN = 25
 MAX_QUERY_VARIANTS = 12
 MAX_ACTIVE_QUERY_TERMS = 100
 MAX_PAGE_SIZE = 100
 MAX_SETUP_INTEREST_LENGTH = 2_000
+_UNVERIFIED_LIMITATION = (
+    "Model-proposed URL is unverified until explicit review and successful acquisition."
+)
+
+
+class _DiscoveryCancelled(RuntimeError):
+    """Internal signal used to roll back a discovery candidate batch."""
 
 WATCH_SETUP_CATEGORY_SLUG = "watch-setup"
 WATCH_SETUP_CATEGORY_NAME = "Watch setup"
@@ -109,36 +118,23 @@ WATCH_SETUP_LOCAL_MODEL_BUDGET = 100
 _NEEDLESS_TARGET = "source"
 
 
-def _safe_url(value: Any) -> str:
-    """Validate an externally supplied Source URL before it can be persisted.
+def _safe_url(value: Any, *, policy: AcquisitionPolicy | None = None) -> str:
+    """Apply the structural candidate URL gate before persistence.
 
     Phase 24 accepts URLs from provider suggestions and discovered Documents,
     so a candidate must never be able to point monitoring at loopback, link
-    local, or otherwise non-global infrastructure.
+    local, or otherwise non-global infrastructure. This is deliberately a
+    non-network check: DNS resolution, connected-peer verification, and every
+    redirect remain acquisition-time checks in ``AcquisitionPolicy``. A
+    structurally valid candidate is still unverified until a human review and
+    a normal bounded acquisition succeed.
     """
     try:
-        url = normalize_url(str(value or "").strip())
+        return (policy or AcquisitionPolicy()).check_url(str(value or "").strip())
+    except AcquisitionBlocked as exc:
+        raise DomainValidation(str(exc)) from exc
     except ValueError as exc:
         raise DomainValidation(str(exc)) from exc
-    parsed = urlparse(url)
-    if parsed.scheme not in {"http", "https"}:
-        raise DomainValidation("source candidate URL must be http or https")
-    host = (parsed.hostname or "").casefold()
-    if not host:
-        raise DomainValidation("source candidate URL requires a hostname")
-    try:
-        address = ipaddress.ip_address(host.strip("[]"))
-    except ValueError:
-        address = None
-    if address is not None and not address.is_global:
-        raise DomainValidation(
-            "source candidate URL must not target a private or local address"
-        )
-    if host == "localhost" or host.endswith((".localhost", ".local", ".internal")):
-        raise DomainValidation(
-            "source candidate URL must not target a private or local host"
-        )
-    return url
 
 
 def _normalized_candidate_url(url: str) -> str:
@@ -174,15 +170,24 @@ class WatchService:
         *,
         router: AIRouter | None = None,
         configuration_resolver: AIConfigurationResolver | None = None,
+        acquisition_policy: AcquisitionPolicy | None = None,
     ):
         self.db_path = Path(db_path)
         self.router = router
         self.configuration_resolver = configuration_resolver or AIConfigurationResolver(self.db_path)
+        self.acquisition_policy = acquisition_policy or AcquisitionPolicy()
 
-    def _operation_router(self) -> AIRouter:
+    def _operation_router(
+        self,
+        capability: str = "vocabulary",
+        *,
+        max_paid_cost_usd: float | None = None,
+    ) -> AIRouter:
         if self.router is not None:
             return self.router
-        return self.configuration_resolver.local_router("vocabulary")
+        return self.configuration_resolver.operation_router(
+            capability, max_paid_cost_usd=max_paid_cost_usd
+        )
 
     # ------------------------------------------------------------------
     # Watch lifecycle
@@ -1380,9 +1385,17 @@ class WatchService:
         is not a well-formed suggestion is dropped rather than persisted.
         """
         if isinstance(payload, VocabularyOutput):
+            if payload.confidence < MIN_VOCABULARY_PROVIDER_CONFIDENCE:
+                return []
             payload = [item.model_dump() for item in payload.suggestions]
         elif isinstance(payload, Mapping) and "suggestions" in payload:
-            payload = payload["suggestions"]
+            try:
+                structured = VocabularyOutput.model_validate(payload)
+            except Exception as exc:  # noqa: BLE001 - malformed optional output is inert
+                raise DomainValidation("vocabulary provider returned malformed structured output") from exc
+            if structured.confidence < MIN_VOCABULARY_PROVIDER_CONFIDENCE:
+                return []
+            payload = [item.model_dump() for item in structured.suggestions]
         if not isinstance(payload, Sequence) or isinstance(payload, (str, bytes)):
             raise DomainValidation("vocabulary provider must return a sequence")
         validated: list[tuple[str, str, str | None, str, str]] = []
@@ -1425,33 +1438,56 @@ class WatchService:
         conn = storage.connect(self.db_path)
         try:
             watch = self._require_watch(conn, watch_id)
+            effective_work_id = work_id or f"watch:{watch_id}:{new_id('vocabulary')}"
             candidates = self._deterministic_terms(conn, watch)
             if provider is None:
-                operation_router = self._operation_router()
                 policy = conn.execute(
                     "SELECT paid_budget_usd FROM monitoring_policies WHERE id = ?",
                     (watch["policy_id"],),
                 ).fetchone()
-                paid_route_allowed = not operation_router.policy.paid_enabled
-                if operation_router.policy.paid_enabled:
+                paid_budget_usd = float(policy["paid_budget_usd"] or 0.0) if policy is not None else 0.0
+                try:
+                    operation_router = self._operation_router(
+                        max_paid_cost_usd=paid_budget_usd
+                    )
+                except AIError:
+                    operation_router = None
+                paid_route_allowed = operation_router is not None and not operation_router.policy.paid_enabled
+                if operation_router is not None and operation_router.policy.paid_enabled:
                     paid_route_allowed = bool(
                         policy is not None
-                        and float(policy["paid_budget_usd"] or 0.0) >= operation_router.policy.paid_request_cost_usd
+                        and paid_budget_usd >= operation_router.policy.paid_request_cost_usd
                         and BudgetService(self.db_path).paid_enabled()
                     )
-                if paid_route_allowed:
+                if paid_route_allowed and operation_router is not None:
                     scope = _scope_for_target(
                         conn, watch["target_type"], watch["target_id"]
                     )
+                    approved_watch_terms = conn.execute(
+                        """
+                        SELECT term FROM watch_vocabulary
+                        WHERE watch_id = ? AND status = 'approved' AND enabled = 1
+                        ORDER BY created_at, id
+                        LIMIT ?
+                        """,
+                        (watch_id, MAX_ACTIVE_QUERY_TERMS),
+                    ).fetchall()
                     request = VocabularyRequest(
                         watch_name=str(watch["name"]),
                         target_type=str(watch["target_type"]),
-                        approved_terms=tuple(dict.fromkeys(scope.all_terms()))[:200],
+                        approved_terms=tuple(
+                            dict.fromkeys(
+                                (
+                                    *scope.all_terms(),
+                                    *(row["term"] for row in approved_watch_terms),
+                                )
+                            )
+                        )[:200],
                         max_suggestions=limit,
                     )
                     try:
                         payload = operation_router.vocabulary(
-                            request, work_id=work_id or f"watch:{watch_id}"
+                            request, work_id=effective_work_id
                         )
                     except AIError:
                         payload = None
@@ -1767,14 +1803,17 @@ class WatchService:
         payload["provenance"] = json.loads(payload.pop("provenance_json"))
         return payload
 
-    def add_source_candidate(
-        self, watch_id: str, data: Mapping[str, Any]
-    ) -> dict[str, Any]:
-        """Record a candidate Source for human review.
+    def _add_source_candidate_tx(
+        self, conn: sqlite3.Connection, watch_id: str, data: Mapping[str, Any]
+    ) -> str:
+        """Record an inert candidate Source for human review.
 
-        A candidate is never monitored. It only becomes an active Watch Source
-        through `review_source_candidate`, which goes through the normal
-        Source and Monitor services.
+        Candidate URLs are structurally normalized and checked before the row
+        is written. No remote URL is fetched here, and a candidate is never
+        monitored. It only becomes an active Watch Source through
+        ``review_source_candidate``, which goes through the normal Source and
+        Monitor services; acquisition remains the authority for resolved
+        destination, redirect, and content validation.
         """
         name = str(data.get("name", "")).strip()
         rationale = str(data.get("rationale", "")).strip()
@@ -1785,86 +1824,120 @@ class WatchService:
             )
         requested_source_id = str(data.get("source_id") or "").strip() or None
         identifier = new_id("cand")
-        now = utc_now()
+        self._require_watch(conn, watch_id)
+        selected_source = None
+        if requested_source_id:
+            selected_source = conn.execute(
+                """
+                SELECT id, homepage_url, feed_url
+                FROM sources
+                WHERE id = ? AND deleted_at IS NULL
+                """,
+                (requested_source_id,),
+            ).fetchone()
+            if selected_source is None:
+                raise DomainNotFound("source not found")
+        homepage_value = data.get("homepage_url") or data.get("feed_url") or (
+            selected_source["homepage_url"] or selected_source["feed_url"]
+            if selected_source is not None
+            else None
+        )
+        if not homepage_value:
+            raise DomainValidation(
+                "source candidate requires a usable homepage or feed URL"
+            )
+        url = _safe_url(homepage_value, policy=self.acquisition_policy)
+        feed_value = data.get("feed_url") or (
+            selected_source["feed_url"] if selected_source is not None else None
+        )
+        feed = _safe_url(feed_value, policy=self.acquisition_policy) if feed_value else None
+        normalized = _normalized_candidate_url(url)
+        existing = conn.execute(
+            "SELECT id FROM source_candidates WHERE watch_id = ? AND normalized_url = ?",
+            (watch_id, normalized),
+        ).fetchone()
+        if existing is not None:
+            return str(existing[0])
+        source = selected_source or conn.execute(
+            """
+            SELECT id FROM sources
+            WHERE deleted_at IS NULL
+              AND (homepage_url = ? OR (feed_url IS NOT NULL AND feed_url = ?))
+            ORDER BY id
+            LIMIT 1
+            """,
+            (url, feed or url),
+        ).fetchone()
+        provenance = data.get("provenance") or {}
+        if not isinstance(provenance, Mapping):
+            raise DomainValidation("source candidate provenance must be an object")
+        conn.execute(
+            """
+            INSERT INTO source_candidates(
+                id, watch_id, source_id, name, homepage_url, normalized_url,
+                feed_url, discovery_method, rationale, authority_context,
+                limitations, provenance_json, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                identifier,
+                watch_id,
+                source[0] if source else None,
+                name[:200],
+                url,
+                normalized,
+                feed,
+                method,
+                rationale[:MAX_RATIONALE_LENGTH],
+                str(data.get("authority_context", ""))[:MAX_RATIONALE_LENGTH],
+                str(data.get("limitations", ""))[:MAX_RATIONALE_LENGTH],
+                json.dumps(dict(provenance), sort_keys=True, separators=(",", ":")),
+                utc_now(),
+            ),
+        )
+        return identifier
+
+    def add_source_candidate(
+        self, watch_id: str, data: Mapping[str, Any]
+    ) -> dict[str, Any]:
+        """Record one inert candidate through the ordinary review boundary."""
+        conn = storage.connect(self.db_path)
+        try:
+            with storage.write_tx(conn):
+                identifier = self._add_source_candidate_tx(conn, watch_id, data)
+        finally:
+            conn.close()
+        return self.get_source_candidate(identifier)
+
+    def _persist_candidate_batch(
+        self,
+        watch_id: str,
+        candidates: Sequence[Mapping[str, Any]],
+        *,
+        cancel_check: Callable[[], bool] | None = None,
+    ) -> list[dict[str, Any]]:
+        """Persist a validated candidate batch atomically and review-only."""
+        identifiers: list[str] = []
         conn = storage.connect(self.db_path)
         try:
             with storage.write_tx(conn):
                 self._require_watch(conn, watch_id)
-                selected_source = None
-                if requested_source_id:
-                    selected_source = conn.execute(
-                        """
-                        SELECT id, homepage_url, feed_url
-                        FROM sources
-                        WHERE id = ? AND deleted_at IS NULL
-                        """,
-                        (requested_source_id,),
-                    ).fetchone()
-                    if selected_source is None:
-                        raise DomainNotFound("source not found")
-                homepage_value = data.get("homepage_url") or (
-                    selected_source["homepage_url"] or selected_source["feed_url"]
-                    if selected_source is not None
-                    else None
-                )
-                if not homepage_value:
-                    raise DomainValidation(
-                        "source candidate requires a usable homepage or feed URL"
-                    )
-                url = _safe_url(homepage_value)
-                feed_value = data.get("feed_url") or (
-                    selected_source["feed_url"] if selected_source is not None else None
-                )
-                feed = _safe_url(feed_value) if feed_value else None
-                normalized = _normalized_candidate_url(url)
-                existing = conn.execute(
-                    "SELECT id FROM source_candidates WHERE watch_id = ? AND normalized_url = ?",
-                    (watch_id, normalized),
-                ).fetchone()
-                if existing is not None:
-                    identifier = existing[0]
-                else:
-                    source = selected_source or conn.execute(
-                            """
-                            SELECT id FROM sources
-                            WHERE deleted_at IS NULL
-                              AND (homepage_url = ? OR (feed_url IS NOT NULL AND feed_url = ?))
-                            ORDER BY id
-                            LIMIT 1
-                            """,
-                            (url, feed or url),
-                        ).fetchone()
-                    conn.execute(
-                        """
-                        INSERT INTO source_candidates(
-                            id, watch_id, source_id, name, homepage_url, normalized_url,
-                            feed_url, discovery_method, rationale, authority_context,
-                            limitations, provenance_json, created_at)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                        """,
-                        (
-                            identifier,
-                            watch_id,
-                            source[0] if source else None,
-                            name[:200],
-                            url,
-                            normalized,
-                            feed,
-                            method,
-                            rationale[:MAX_RATIONALE_LENGTH],
-                            str(data.get("authority_context", ""))[:MAX_RATIONALE_LENGTH],
-                            str(data.get("limitations", ""))[:MAX_RATIONALE_LENGTH],
-                            json.dumps(
-                                dict(data.get("provenance") or {}),
-                                sort_keys=True,
-                                separators=(",", ":"),
-                            ),
-                            now,
-                        ),
-                    )
+                for candidate in candidates:
+                    if cancel_check is not None and cancel_check():
+                        raise _DiscoveryCancelled()
+                    try:
+                        identifier = self._add_source_candidate_tx(
+                            conn, watch_id, candidate
+                        )
+                    except DomainValidation:
+                        continue
+                    if identifier not in identifiers:
+                        identifiers.append(identifier)
+                if cancel_check is not None and cancel_check():
+                    raise _DiscoveryCancelled()
         finally:
             conn.close()
-        return self.get_source_candidate(identifier)
+        return [self.get_source_candidate(identifier) for identifier in identifiers]
 
     def get_source_candidate(self, candidate_id: str) -> dict[str, Any]:
         conn = storage.connect(self.db_path)
@@ -1957,6 +2030,13 @@ class WatchService:
     def review_source_candidate(
         self, watch_id: str, candidate_id: str, status: str, reviewed_by: str
     ) -> dict[str, Any]:
+        """Apply the only explicit review gate for a Watch source candidate.
+
+        Approval attaches the candidate through the ordinary Watch Source and
+        Monitor path but does not fetch the URL or create Evidence. The next
+        acquisition re-runs resolved-address and redirect checks, so a DNS
+        result is never treated as a permanent verification fact.
+        """
         if status not in {"approved", "rejected"}:
             raise DomainValidation(
                 "source candidate may only be approved or rejected"
@@ -2026,8 +2106,212 @@ class WatchService:
     # Deterministic Source discovery
     # ------------------------------------------------------------------
 
+    @staticmethod
+    def _has_relevant_corpus(conn: sqlite3.Connection, watch_id: str) -> bool:
+        row = conn.execute(
+            """
+            SELECT 1
+            FROM document_version_relevance AS r
+            JOIN watch_sources AS ws ON ws.monitor_id = r.monitor_id
+            JOIN document_versions AS dv ON dv.id = r.document_version_id
+            JOIN documents AS d ON d.id = dv.document_id
+            WHERE ws.watch_id = ? AND r.relevant = 1
+            LIMIT 1
+            """,
+            (watch_id,),
+        ).fetchone()
+        return row is not None
+
+    @staticmethod
+    def _unique_source_terms(values: Sequence[str], *, limit: int = 100) -> tuple[str, ...]:
+        result: list[str] = []
+        seen: set[str] = set()
+        for value in values:
+            term = str(value).strip()
+            identity = normalized_text(term)
+            if not identity or identity in seen:
+                continue
+            seen.add(identity)
+            result.append(term)
+            if len(result) >= limit:
+                break
+        return tuple(result)
+
+    def _source_discovery_request(
+        self,
+        conn: sqlite3.Connection,
+        watch: Mapping[str, Any],
+        *,
+        max_candidates: int,
+    ) -> SourceDiscoveryRequest:
+        scope = _scope_for_target(conn, watch["target_type"], watch["target_id"])
+        approved = list(scope.all_terms())
+        excluded = list(scope.exclusions)
+        rows = conn.execute(
+            """
+            SELECT term, kind
+            FROM watch_vocabulary
+            WHERE watch_id = ? AND status = 'approved' AND enabled = 1
+            ORDER BY created_at, id
+            LIMIT ?
+            """,
+            (watch["id"], MAX_ACTIVE_QUERY_TERMS),
+        ).fetchall()
+        for row in rows:
+            if row["kind"] == "exclude":
+                excluded.append(row["term"])
+            else:
+                approved.append(row["term"])
+        return SourceDiscoveryRequest(
+            watch_name=str(watch["name"]),
+            target_type=str(watch["target_type"]),
+            approved_terms=self._unique_source_terms(approved),
+            excluded_terms=self._unique_source_terms(excluded),
+            max_candidates=max_candidates,
+        )
+
+    @staticmethod
+    def _safe_fallback_reason(reason: str | None) -> str:
+        if reason in {"paid_disabled", "budget_exhausted", "provider_failed", "cancelled", "no_candidates"}:
+            return reason
+        return "route_unavailable"
+
+    def _source_route(
+        self,
+        *,
+        paid_budget_usd: float,
+    ) -> tuple[AIRouter | None, str | None]:
+        resolution_reason: str | None = None
+        if self.router is None:
+            try:
+                resolution_reason = self.configuration_resolver.resolve(
+                    "source_discovery"
+                ).reason
+            except AIError:
+                resolution_reason = "route_unavailable"
+        try:
+            router = self._operation_router(
+                "source_discovery", max_paid_cost_usd=paid_budget_usd
+            )
+        except AIError:
+            return None, "route_unavailable"
+        if not router.policy.paid_enabled:
+            if resolution_reason == "paid_disabled":
+                return router, "paid_disabled"
+            return router, "route_unavailable"
+        if not BudgetService(self.db_path).paid_enabled():
+            return router, "paid_disabled"
+        if (
+            router.policy.max_paid_calls < 1
+            or router.policy.paid_request_cost_usd > paid_budget_usd + 1e-12
+            or router.policy.max_paid_cost_usd < router.policy.paid_request_cost_usd
+            or router.policy.max_paid_cost_usd_per_work < router.policy.paid_request_cost_usd
+        ):
+            return router, "budget_exhausted"
+        return router, None
+
+    @staticmethod
+    def _server_unverified_limitations(value: str) -> str:
+        limitation = str(value).strip()
+        if "unverified" in limitation.casefold():
+            return limitation[:MAX_RATIONALE_LENGTH]
+        separator = " " if limitation else ""
+        available = MAX_RATIONALE_LENGTH - len(separator) - len(_UNVERIFIED_LIMITATION)
+        prefix = limitation[:max(0, available)].rstrip()
+        return f"{prefix}{separator}{_UNVERIFIED_LIMITATION}"[:MAX_RATIONALE_LENGTH]
+
+    @staticmethod
+    def _source_provider_metadata(router: AIRouter, work_id: str) -> dict[str, Any]:
+        event = next(
+            (
+                item
+                for item in reversed(router.last_execution_events)
+                if item.capability == "source_discovery"
+            ),
+            None,
+        )
+        return {
+            "kind": "ai_suggestion",
+            "capability": "source_discovery",
+            "trigger": "empty_corpus",
+            "provider_route": event.route if event is not None else "paid",
+            "provider": event.provider if event is not None else "unknown",
+            "model": event.model if event is not None else None,
+            "config_generation": router.config_generation,
+            "config_source": router.config_source,
+            "work_id": work_id,
+            "unverified": True,
+        }
+
+    def _validated_source_provider_candidates(
+        self,
+        output: SourceDiscoveryOutput,
+        *,
+        router: AIRouter,
+        work_id: str,
+    ) -> list[dict[str, Any]]:
+        provenance = self._source_provider_metadata(router, work_id)
+        result: list[dict[str, Any]] = []
+        seen: set[str] = set()
+        for item in output.candidates[:10]:
+            try:
+                homepage = (
+                    _safe_url(item.homepage_url, policy=self.acquisition_policy)
+                    if item.homepage_url
+                    else None
+                )
+                feed = (
+                    _safe_url(item.feed_url, policy=self.acquisition_policy)
+                    if item.feed_url
+                    else None
+                )
+            except DomainValidation:
+                # One unsafe URL rejects this candidate, including its second
+                # URL; keeping a sanitized half would weaken the boundary.
+                continue
+            identity = _normalized_candidate_url(homepage or feed or "")
+            if not identity or identity in seen:
+                continue
+            seen.add(identity)
+            result.append(
+                {
+                    "name": item.name,
+                    "homepage_url": homepage or feed,
+                    "feed_url": feed,
+                    "discovery_method": "ai_suggestion",
+                    "rationale": item.rationale,
+                    "authority_context": item.authority_context,
+                    "limitations": self._server_unverified_limitations(item.limitations),
+                    "provenance": dict(provenance),
+                }
+            )
+        return result
+
+    def _finish_discovery(
+        self, watch_id: str, *, ran_at: str, error: str | None = None
+    ) -> None:
+        conn = storage.connect(self.db_path)
+        try:
+            with storage.write_tx(conn):
+                self._require_watch(conn, watch_id)
+                conn.execute(
+                    """
+                    UPDATE watches
+                       SET last_discovery_at = ?, discovery_error = ?, updated_at = ?
+                     WHERE id = ?
+                    """,
+                    (ran_at, error, ran_at, watch_id),
+                )
+        finally:
+            conn.close()
+
     def discover_sources(
-        self, watch_id: str, *, limit: int = MAX_CANDIDATES_PER_RUN
+        self,
+        watch_id: str,
+        *,
+        limit: int = MAX_CANDIDATES_PER_RUN,
+        work_id: str | None = None,
+        cancel_check: Callable[[], bool] | None = None,
     ) -> dict[str, Any]:
         """Propose candidate Sources from persisted corpus state only.
 
@@ -2046,14 +2330,21 @@ class WatchService:
           syndicated original publisher, which has no Source record yet.
 
         A run that finds nothing is a successful run, not a failure.
+
+        AST-30 freezes an optional later ``source_discovery`` assistance lane
+        for empty corpora. AST-31 must keep that lane separate from these
+        observed corpus proposals and must not turn this deterministic path
+        into an implicit web search.
         """
-        if not 1 <= limit <= MAX_CANDIDATES_PER_RUN:
+        if isinstance(limit, bool) or not 1 <= limit <= MAX_CANDIDATES_PER_RUN:
             raise DomainValidation(
                 f"source discovery limit must be 1-{MAX_CANDIDATES_PER_RUN}"
             )
+        effective_work_id = work_id or f"watch:{watch_id}:source-discovery:{new_id('run')}"
+        base_methods = ["existing_source", "document_link", "feed_discovery"]
         conn = storage.connect(self.db_path)
         try:
-            self._require_watch(conn, watch_id)
+            watch = dict(self._require_watch(conn, watch_id))
             attached = {
                 row[0]
                 for row in conn.execute(
@@ -2062,39 +2353,160 @@ class WatchService:
                 )
             }
             proposals = self._discovery_proposals(conn, watch_id, attached, limit)
+            corpus_state = "populated" if self._has_relevant_corpus(conn, watch_id) else "empty"
+            policy = conn.execute(
+                "SELECT paid_budget_usd FROM monitoring_policies WHERE id = ?",
+                (watch["policy_id"],),
+            ).fetchone()
+            paid_budget_usd = float(policy["paid_budget_usd"] or 0.0) if policy else 0.0
         finally:
             conn.close()
 
-        created: list[dict[str, Any]] = []
-        for proposal in proposals:
-            try:
-                created.append(self.add_source_candidate(watch_id, proposal))
-            except DomainValidation:
-                # An unusable persisted URL must not fail the whole run.
-                continue
+        def result(
+            *,
+            ran_at: str,
+            outcome: str,
+            candidates: Sequence[Mapping[str, Any]] = (),
+            provider_requests: int = 0,
+            methods: Sequence[str] = base_methods,
+            fallback_reason: str | None = None,
+        ) -> dict[str, Any]:
+            return {
+                "watch_id": watch_id,
+                "ran_at": ran_at,
+                "outcome": outcome,
+                "corpus_state": corpus_state,
+                "methods": list(methods),
+                "candidates": list(candidates),
+                "candidate_count": len(candidates),
+                "external_requests": 0,
+                "provider_requests": provider_requests,
+                "fallback_reason": fallback_reason,
+            }
 
-        now = utc_now()
+        if cancel_check is not None and cancel_check():
+            return result(
+                ran_at=utc_now(), outcome="manual_fallback", fallback_reason="cancelled"
+            )
+
+        if proposals:
+            try:
+                created = self._persist_candidate_batch(
+                    watch_id, proposals, cancel_check=cancel_check
+                )
+            except _DiscoveryCancelled:
+                return result(
+                    ran_at=utc_now(),
+                    outcome="manual_fallback",
+                    fallback_reason="cancelled",
+                )
+            now = utc_now()
+            self._finish_discovery(watch_id, ran_at=now)
+            return result(ran_at=now, outcome="completed", candidates=created)
+
+        if corpus_state == "populated" or watch["target_type"] not in {
+            "topic",
+            "subject",
+            "story",
+            "research_question",
+        }:
+            now = utc_now()
+            self._finish_discovery(watch_id, ran_at=now)
+            return result(ran_at=now, outcome="completed")
+
+        if not bool(watch["discovery_enabled"]):
+            now = utc_now()
+            self._finish_discovery(watch_id, ran_at=now)
+            return result(
+                ran_at=now,
+                outcome="manual_fallback",
+                fallback_reason="route_unavailable",
+            )
+
         conn = storage.connect(self.db_path)
         try:
-            with storage.write_tx(conn):
-                conn.execute(
-                    """
-                    UPDATE watches
-                       SET last_discovery_at = ?, discovery_error = NULL, updated_at = ?
-                     WHERE id = ?
-                    """,
-                    (now, now, watch_id),
-                )
+            request = self._source_discovery_request(
+                conn,
+                watch,
+                max_candidates=min(limit, 10),
+            )
         finally:
             conn.close()
-        return {
-            "watch_id": watch_id,
-            "ran_at": now,
-            "methods": ["existing_source", "document_link", "feed_discovery"],
-            "candidates": created,
-            "candidate_count": len(created),
-            "external_requests": 0,
-        }
+        if cancel_check is not None and cancel_check():
+            return result(
+                ran_at=utc_now(), outcome="manual_fallback", fallback_reason="cancelled"
+            )
+
+        router, route_reason = self._source_route(paid_budget_usd=paid_budget_usd)
+        if router is None or route_reason is not None:
+            now = utc_now()
+            self._finish_discovery(watch_id, ran_at=now)
+            return result(
+                ran_at=now,
+                outcome="manual_fallback",
+                fallback_reason=self._safe_fallback_reason(route_reason),
+            )
+
+        if cancel_check is not None and cancel_check():
+            return result(
+                ran_at=utc_now(), outcome="manual_fallback", fallback_reason="cancelled"
+            )
+
+        try:
+            output = router.source_discovery(request, work_id=effective_work_id)
+        except AIError:
+            now = utc_now()
+            self._finish_discovery(watch_id, ran_at=now, error="provider_failed")
+            return result(
+                ran_at=now,
+                outcome="manual_fallback",
+                provider_requests=1,
+                methods=[*base_methods, "ai_suggestion"],
+                fallback_reason="provider_failed",
+            )
+
+        if cancel_check is not None and cancel_check():
+            return result(
+                ran_at=utc_now(),
+                outcome="manual_fallback",
+                provider_requests=1,
+                methods=[*base_methods, "ai_suggestion"],
+                fallback_reason="cancelled",
+            )
+        candidates = self._validated_source_provider_candidates(
+            output, router=router, work_id=effective_work_id
+        )
+        if not candidates:
+            now = utc_now()
+            self._finish_discovery(watch_id, ran_at=now)
+            return result(
+                ran_at=now,
+                outcome="manual_fallback",
+                provider_requests=1,
+                methods=[*base_methods, "ai_suggestion"],
+                fallback_reason="no_candidates",
+            )
+        try:
+            created = self._persist_candidate_batch(
+                watch_id, candidates, cancel_check=cancel_check
+            )
+        except _DiscoveryCancelled:
+            return result(
+                ran_at=utc_now(),
+                outcome="manual_fallback",
+                provider_requests=1,
+                methods=[*base_methods, "ai_suggestion"],
+                fallback_reason="cancelled",
+            )
+        now = utc_now()
+        self._finish_discovery(watch_id, ran_at=now)
+        return result(
+            ran_at=now,
+            outcome="completed",
+            candidates=created,
+            provider_requests=1,
+            methods=[*base_methods, "ai_suggestion"],
+        )
 
     def record_discovery_error(self, watch_id: str, message: str) -> None:
         """Persist a bounded discovery failure without disturbing monitoring."""
@@ -2364,12 +2776,35 @@ class WatchMaintenanceService:
             raise DomainValidation("watch job payload is missing watch_id")
         return watch_id
 
+    def _job_cancel_requested(self, job_id: str) -> bool:
+        if not job_id:
+            return False
+        conn = storage.connect(self.db_path)
+        try:
+            row = conn.execute(
+                "SELECT cancel_requested_at FROM jobs WHERE id = ?", (job_id,)
+            ).fetchone()
+            return bool(row and row[0])
+        finally:
+            conn.close()
+
     def handle_discovery(self, job: Mapping[str, Any]) -> dict[str, Any]:
         watch_id = self._watch_id(job)
         payload = job["payload"]
         limit = int(payload.get("limit") or MAX_CANDIDATES_PER_RUN)
+        job_id = str(job.get("id") or "").strip()
+        work_id = job_id or None
+
+        def cancel_check() -> bool:
+            return self._job_cancel_requested(job_id)
+
         try:
-            result = self.watches.discover_sources(watch_id, limit=limit)
+            result = self.watches.discover_sources(
+                watch_id,
+                limit=limit,
+                work_id=work_id,
+                cancel_check=cancel_check,
+            )
         except DomainNotFound:
             # The Watch was removed between enqueue and execution; a stale
             # obligation must not retry forever.
@@ -2382,10 +2817,13 @@ class WatchMaintenanceService:
         # Finding nothing is a successful run, not a failure (§86).
         return {
             "watch_id": watch_id,
-            "outcome": "completed",
+            "outcome": result["outcome"],
+            "corpus_state": result["corpus_state"],
             "candidate_count": result["candidate_count"],
             "methods": result["methods"],
             "external_requests": result["external_requests"],
+            "provider_requests": result["provider_requests"],
+            "fallback_reason": result["fallback_reason"],
         }
 
     def handle_suggestion(self, job: Mapping[str, Any]) -> dict[str, Any]:

@@ -18,6 +18,10 @@ import type { AIBudgetLimit, AIConnection, AIProviderUsage, AIStatus, AIRoute } 
 import { Badge, EmptyState, ErrorState, LoadingState, SectionCard, Stat } from "./ViewPrimitives";
 
 type ProviderAction = "test" | "enable" | "disable" | "remove-credential" | "remove" | "default" | "local";
+type ProviderPreset = "custom" | "minimax_token_plan";
+
+const MINIMAX_TOKEN_PLAN_BASE_URL = "https://api.minimax.cn/v1";
+const MINIMAX_TOKEN_PLAN_KEY_URL = "https://platform.minimaxi.com/user-center/payment/token-plan";
 
 function errorMessage(error: unknown): string {
   if (error instanceof ApiError) return error.message;
@@ -60,6 +64,7 @@ type ProviderEditorProps = {
 };
 
 function ProviderEditor({ provider, onSaved, onCancel }: ProviderEditorProps) {
+  const [preset, setPreset] = useState<ProviderPreset>("custom");
   const [displayName, setDisplayName] = useState(provider?.display_name ?? "");
   const [baseUrl, setBaseUrl] = useState(provider?.base_url ?? "https://api.openai.com/v1");
   const [model, setModel] = useState(provider?.model ?? "gpt-4o-mini");
@@ -69,6 +74,16 @@ function ProviderEditor({ provider, onSaved, onCancel }: ProviderEditorProps) {
   const [secret, setSecret] = useState("");
   const [working, setWorking] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const isMiniMax = !provider && preset === "minimax_token_plan";
+
+  function applyPreset(value: ProviderPreset) {
+    setPreset(value);
+    if (value !== "minimax_token_plan") return;
+    setDisplayName("MiniMax Token Plan");
+    setBaseUrl(MINIMAX_TOKEN_PLAN_BASE_URL);
+    setModel("MiniMax-M3");
+    setCredentialRequired(true);
+  }
 
   async function submit(event: FormEvent) {
     event.preventDefault();
@@ -115,12 +130,13 @@ function ProviderEditor({ provider, onSaved, onCancel }: ProviderEditorProps) {
       <div className="ai-editor-heading">
         <div>
           <h3>{provider ? "Edit provider" : "Add AI provider"}</h3>
-          <p className="muted">OpenAI-compatible structured Article Analysis only. New connections start disabled.</p>
+          <p className="muted">{isMiniMax ? "MiniMax Token Plan connects through its OpenAI-compatible API using a subscription key." : "OpenAI-compatible structured Article Analysis only."} New connections start disabled.</p>
         </div>
         <button className="quiet-button" type="button" onClick={onCancel} disabled={working}>Cancel</button>
       </div>
       {error && <p className="form-error" role="alert">{error}</p>}
       <div className="ai-editor-grid">
+        {!provider && <div className="ai-editor-wide"><label htmlFor="ai-provider-preset">Provider preset</label><select id="ai-provider-preset" value={preset} onChange={(event) => applyPreset(event.target.value as ProviderPreset)}><option value="custom">OpenAI-compatible (custom)</option><option value="minimax_token_plan">MiniMax Token Plan</option></select><small>Use a preset to fill the documented endpoint and model, then review them before saving.</small></div>}
         <div><label htmlFor="ai-provider-name">Display name</label><input id="ai-provider-name" required maxLength={200} value={displayName} onChange={(event) => setDisplayName(event.target.value)} /></div>
         <div><label htmlFor="ai-provider-model">Model</label><input id="ai-provider-model" required maxLength={200} value={model} onChange={(event) => setModel(event.target.value)} /></div>
         <div className="ai-editor-wide"><label htmlFor="ai-provider-url">Base URL</label><input id="ai-provider-url" required maxLength={2048} type="url" value={baseUrl} onChange={(event) => setBaseUrl(event.target.value)} aria-describedby="ai-provider-url-help" /><small id="ai-provider-url-help">Hosted endpoints require HTTPS. HTTP is allowed only for an explicit loopback endpoint.</small></div>
@@ -128,7 +144,7 @@ function ProviderEditor({ provider, onSaved, onCancel }: ProviderEditorProps) {
         <div><label htmlFor="ai-provider-output-limit">Output token limit</label><input id="ai-provider-output-limit" required min={1} max={100000} type="number" value={maxOutputTokens} onChange={(event) => setMaxOutputTokens(event.target.value)} /></div>
       </div>
       <label className="checkbox-field" htmlFor="ai-provider-credential-required"><input id="ai-provider-credential-required" type="checkbox" checked={credentialRequired} onChange={(event) => setCredentialRequired(event.target.checked)} /> <span>Endpoint requires a credential <small>Uncheck only for a deliberate loopback service.</small></span></label>
-      <div><label htmlFor="ai-provider-secret">{provider?.credential_configured ? "Replace credential (optional)" : "Credential (optional until enable)"}</label><input id="ai-provider-secret" type="password" autoComplete="new-password" value={secret} onChange={(event) => setSecret(event.target.value)} placeholder={provider?.credential_configured ? "Leave blank to keep configured credential" : "Enter once; it is cleared after save"} aria-describedby="ai-provider-secret-help" /><small id="ai-provider-secret-help">Stored only in the approved OS vault; it is never returned to this page.</small></div>
+      <div><label htmlFor="ai-provider-secret">{isMiniMax ? "MiniMax Token Plan subscription key" : provider?.credential_configured ? "Replace credential (optional)" : "Credential (optional until enable)"}</label><input id="ai-provider-secret" type="password" autoComplete="new-password" value={secret} onChange={(event) => setSecret(event.target.value)} placeholder={provider?.credential_configured ? "Leave blank to keep configured credential" : "Enter once; it is cleared after save"} aria-describedby="ai-provider-secret-help" /><small id="ai-provider-secret-help">Stored only in the approved OS vault; it is never returned to this page.{isMiniMax && <> MiniMax uses a subscription key here, not its separate pay-as-you-go API key. <a href={MINIMAX_TOKEN_PLAN_KEY_URL} target="_blank" rel="noreferrer">Get a Token Plan key</a>.</>}</small></div>
       <div className="button-row"><button className="primary-button" type="submit" disabled={working}>{working ? "Saving…" : provider ? "Save provider" : "Add provider"}</button><button className="secondary-button" type="button" onClick={onCancel} disabled={working}>Cancel</button></div>
     </form>
   );

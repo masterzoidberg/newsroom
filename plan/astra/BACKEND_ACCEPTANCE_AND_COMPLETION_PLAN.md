@@ -79,14 +79,14 @@ If the full run fails, preserve it, classify the first failure, fix only the own
 
 The following sequence is retained to explain the earlier BA decision, not as a
 current queue. The current queue is the single READY entry in `TASKS.md` and
-`task-index.json` (AST-28 after AST-11); release and installed-runtime limits
+`task-index.json` (AST-41 after AST-32); release and installed-runtime limits
 listed below remain valid unless a newer task record says otherwise.
 
 ### Immediate gates
 
-1. **AST-05 installed qualification remains the sole READY task.** Its physical Windows branch is at `dded2ff`; finish actual duplicate launch, browser-closed operation, sign-in/wake, conflict, and recovery checks. BA-1/BA-2 belong here because they are Windows lifecycle defects. A harness pass cannot substitute for physical wake/sign-in evidence.
+1. **AST-05 installed qualification remains a release gate, while AST-41 is the current READY product task.** AST-05's physical Windows branch is at `dded2ff`; finish actual duplicate launch, browser-closed operation, sign-in/wake, conflict, and recovery checks. BA-1/BA-2 belong here because they are Windows lifecycle defects. A harness pass cannot substitute for physical wake/sign-in evidence.
 2. **AST-24 is correction-complete but acceptance-failed.** Preserve `0df1c1d` and the failed retained log as evidence. After the lifecycle fix is incorporated, execute BA-3. Do not reopen the four corrected Watch behaviors unless integration invalidates their evidence.
-3. **AST-25 remains held.** Promote it only after AST-05 is accepted, AST-23/24 ancestry is preserved, and AST-24 has a retained full-suite pass.
+3. **AST-25 is reconciled as DONE in the canonical ledger.** Its Source workflow remains covered by AST-32's setup/recovery evidence; no separate promotion step is pending here.
 
 ### Product completion sequence
 
@@ -94,7 +94,7 @@ After those gates, retain the canonical vertical-slice order:
 
 1. AST-25–27: complete Sources, cadence, review/Start, and truthful first result.
 2. AST-06–11: managed provider metadata, vault, durable budgets, routing, validation, and owner UI before any paid-provider feature.
-3. AST-28–32 and AST-50–53: assisted terminology/discovery and explicit geography/time contracts.
+3. AST-28–32 are complete; AST-41 and AST-50–53 cover the next question-first, geography/time and named-target contracts.
 4. AST-33–42 and AST-54–55: returning-user intelligence, reports, briefings, alerts, questions, and search.
 5. AST-43–49: backup/restore, update, accessibility/mobile/PWA, real-use content qualification, installed candidate, and owner documentation.
 6. AST-16–18: complete the unchanged observation/comparison/human-value gates. These remain external blockers; elapsed time alone is not evidence.

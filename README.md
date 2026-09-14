@@ -17,8 +17,10 @@ the isolated development target and current reproducibility record.
 The standalone deterministic core, evaluation foundation, evidence-ledger
 vertical slice, Phase 05 local-first AI routing, Phase 06 bounded source
 acquisition, Phase 07 durable jobs/scheduling, and Phase 08 persistent monitor
-and relevance infrastructure are implemented. Autonomous Source discovery and
-automatic post-acquisition relevance remain incomplete. Phase 09 Story evolution,
+and relevance infrastructure are implemented. A bounded model-only, review-only
+Source recommendation lane is implemented in the current Astra stack, while
+autonomous Source discovery and automatic post-acquisition relevance remain
+incomplete. Phase 09 Story evolution,
 lineage, novelty classification, and review-independent material-update
 resurfacing are implemented. Phase 10 Research Questions, evidence-gap
 suggestions, and bounded follow-up Jobs are implemented. Phase 11

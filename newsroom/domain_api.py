@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 from dataclasses import asdict
+import json
+import sqlite3
 from typing import Any, Callable, Literal, Optional
 
 from fastapi import APIRouter, Query, Request, Response
@@ -20,10 +22,29 @@ from .article_analysis import (
     AIProviderValidationService,
     ArticleAnalysisService,
 )
-from .domain import AIConfigurationService, CoreService, DomainConflict, DomainNotFound, DomainValidation
+from . import storage
+from .domain import (
+    AIConfigurationService,
+    CoreService,
+    DomainConflict,
+    DomainNotFound,
+    DomainValidation,
+    new_id,
+    normalized_text,
+    utc_now,
+)
 from .evidence import EvidenceService
 from .jobs import BudgetService, JobService, SchedulerService, compose_completion_hooks
-from .intelligent_monitoring import WatchMaintenanceService, WatchService
+from .intelligent_monitoring import (
+    WATCH_SETUP_BASE_CADENCE_SECONDS,
+    WATCH_SETUP_LOCAL_MODEL_BUDGET,
+    WATCH_SETUP_MAX_CADENCE_SECONDS,
+    WATCH_SETUP_MIN_CADENCE_SECONDS,
+    WATCH_SETUP_POLICY_NAME,
+    WATCH_SETUP_QUERY_BUDGET,
+    WatchMaintenanceService,
+    WatchService,
+)
 from .monitoring import (
     MonitorService,
     MonitoringPolicyService,
@@ -215,6 +236,8 @@ class WatchSetupCreate(StrictModel):
     interest: str = Field(min_length=1, max_length=2_000)
     name: str = Field(min_length=1, max_length=200)
     primary_terms: list[str] = Field(min_length=1, max_length=100)
+    target_type: Literal["topic", "research_question"] = "topic"
+    question: Optional[str] = Field(default=None, min_length=1, max_length=10_000)
 
 
 class PausedWatchDraft(StrictModel):
@@ -241,6 +264,35 @@ class PausedWatchDraft(StrictModel):
     category: dict[str, Any]
     topic: dict[str, Any]
     topic_terms: list[dict[str, Any]]
+    policy: dict[str, Any]
+    watch: dict[str, Any]
+
+
+class QuestionWatchDraft(StrictModel):
+    draft_type: Literal["question_watch"]
+    version: Literal[1]
+    resumed: bool
+    request_id: str
+    watch_id: str
+    research_question_id: str
+    question_created: bool
+    name: str
+    interest: str
+    question: dict[str, Any]
+    research_question: dict[str, Any]
+    gap: dict[str, Any]
+    primary_terms: list[str]
+    status: Literal["paused"]
+    target_type: Literal["research_question"]
+    target_id: str
+    discovery_enabled: Literal[False]
+    priority: Literal["normal"]
+    next_action: Literal["add_sources"]
+    policy_id: str
+    paid_budget_usd: float
+    paid_escalation_enabled: Literal[False]
+    monitor_count: int
+    job_count: int
     policy: dict[str, Any]
     watch: dict[str, Any]
 
@@ -1066,6 +1118,310 @@ def _job_api_result(job: dict[str, Any]) -> dict[str, Any]:
     projected = {key: value for key, value in job.items() if key in allowed}
     projected["orchestration"] = orchestration
     return projected
+
+
+def _decoded_json(value: Any, default: Any) -> Any:
+    try:
+        return json.loads(value) if value is not None else default
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return default
+
+
+def _question_watch_policy_payload(row: Any) -> dict[str, Any]:
+    payload = dict(row)
+    for field in ("allowed_channels", "escalation_rules", "backoff_rules", "retirement_criteria"):
+        default: Any = [] if field == "allowed_channels" else {}
+        payload[field] = _decoded_json(payload.get(field), default)
+    payload["watch_scope"] = "private"
+    return payload
+
+
+def _question_watch_policy_is_canonical(row: Any) -> bool:
+    expected_channels = ["rss", "atom", "direct_http", "page"]
+    return (
+        row["name"] == WATCH_SETUP_POLICY_NAME
+        and _decoded_json(row["allowed_channels"], []) == expected_channels
+        and row["base_cadence_seconds"] == WATCH_SETUP_BASE_CADENCE_SECONDS
+        and row["min_cadence_seconds"] == WATCH_SETUP_MIN_CADENCE_SECONDS
+        and row["max_cadence_seconds"] == WATCH_SETUP_MAX_CADENCE_SECONDS
+        and row["priority"] == "normal"
+        and row["query_budget"] == WATCH_SETUP_QUERY_BUDGET
+        and float(row["paid_budget_usd"] or 0.0) == 0.0
+        and row["local_model_budget"] == WATCH_SETUP_LOCAL_MODEL_BUDGET
+        and _decoded_json(row["escalation_rules"], {}) == {}
+        and _decoded_json(row["backoff_rules"], {}) == {}
+        and _decoded_json(row["retirement_criteria"], {}) == {}
+    )
+
+
+def _question_watch_response(
+    conn: Any,
+    *,
+    research: ResearchQuestionService,
+    request_id: str,
+    question: Any,
+    question_created: bool,
+    policy: Any,
+    watch: Any,
+    resumed: bool,
+    primary_terms: list[str],
+) -> dict[str, Any]:
+    question_payload = dict(question)
+    question_payload["criteria"] = _decoded_json(question_payload.pop("criteria_json", None), {})
+    question_payload["claims"] = [
+        dict(row)
+        for row in conn.execute(
+            "SELECT * FROM research_question_claims WHERE question_id = ? ORDER BY created_at, claim_id, relationship",
+            (question["id"],),
+        ).fetchall()
+    ]
+    question_payload["evidence"] = [
+        dict(row)
+        for row in conn.execute(
+            "SELECT * FROM research_question_evidence WHERE question_id = ? ORDER BY created_at, evidence_span_id, relationship",
+            (question["id"],),
+        ).fetchall()
+    ]
+    gap_rows = conn.execute(
+        "SELECT * FROM research_question_gaps WHERE question_id = ? ORDER BY CASE status WHEN 'open' THEN 0 WHEN 'pursuing' THEN 1 WHEN 'blocked' THEN 2 WHEN 'satisfied' THEN 3 ELSE 4 END, created_at, id",
+        (question["id"],),
+    ).fetchall()
+    question_payload["gaps"] = [research._gap_dict(row) for row in gap_rows]
+    question_payload["tasks"] = []
+    gap = question_payload["gaps"][0] if question_payload["gaps"] else None
+    if gap is None:
+        raise DomainConflict("Research Question has no canonical evidence gap")
+    watch_payload = dict(watch)
+    monitor_count = conn.execute(
+        "SELECT COUNT(*) FROM watch_sources WHERE watch_id = ?", (watch["id"],)
+    ).fetchone()[0]
+    job_count = conn.execute(
+        "SELECT COUNT(*) FROM jobs WHERE monitor_id IN (SELECT monitor_id FROM watch_sources WHERE watch_id = ?)",
+        (watch["id"],),
+    ).fetchone()[0]
+    return {
+        "draft_type": "question_watch",
+        "version": 1,
+        "resumed": resumed,
+        "request_id": request_id,
+        "watch_id": watch["id"],
+        "research_question_id": question["id"],
+        "question_created": question_created,
+        "name": watch["name"],
+        "interest": question["question"],
+        "question": question_payload,
+        "research_question": question_payload,
+        "gap": gap,
+        "primary_terms": primary_terms,
+        "status": watch["status"],
+        "target_type": watch["target_type"],
+        "target_id": watch["target_id"],
+        "discovery_enabled": bool(watch["discovery_enabled"]),
+        "priority": watch["priority"],
+        "next_action": "add_sources",
+        "policy_id": policy["id"],
+        "paid_budget_usd": float(policy["paid_budget_usd"] or 0.0),
+        "paid_escalation_enabled": False,
+        "monitor_count": int(monitor_count),
+        "job_count": int(job_count),
+        "policy": _question_watch_policy_payload(policy),
+        "watch": watch_payload,
+    }
+
+
+def _create_question_watch_setup(
+    db_path: Any,
+    data: dict[str, Any],
+    *,
+    research: ResearchQuestionService,
+    actor: str,
+) -> dict[str, Any]:
+    """Create a paused Question Watch and its canonical Gap in one transaction."""
+    request_id, _interest, name, primary_terms = WatchService._validated_paused_setup(data)
+    question_text = str(data.get("question") or data.get("interest") or "").strip()
+    if not question_text or len(question_text) > 10_000:
+        raise DomainValidation("question must be between 1 and 10000 characters")
+    canonical_question = normalized_text(question_text)
+    conn = storage.connect(db_path)
+    try:
+        with storage.write_tx(conn):
+            existing_watch = conn.execute(
+                "SELECT * FROM watches WHERE id = ?", (request_id,)
+            ).fetchone()
+            if existing_watch is not None:
+                if (
+                    existing_watch["target_type"] != "research_question"
+                    or existing_watch["status"] != "paused"
+                    or existing_watch["priority"] != "normal"
+                    or existing_watch["discovery_enabled"] != 0
+                    or existing_watch["name"] != name
+                ):
+                    raise DomainConflict("request identity is already used by another Watch")
+                existing_question = conn.execute(
+                    "SELECT * FROM research_questions WHERE id = ? AND deleted_at IS NULL",
+                    (existing_watch["target_id"],),
+                ).fetchone()
+                if existing_question is None or normalized_text(existing_question["question"]) != canonical_question:
+                    raise DomainConflict("request identity is already used by another Watch")
+                policy = conn.execute(
+                    "SELECT * FROM monitoring_policies WHERE id = ?", (existing_watch["policy_id"],)
+                ).fetchone()
+                if policy is None or not _question_watch_policy_is_canonical(policy):
+                    raise DomainConflict("request identity is already used by another Watch")
+                existing_terms = conn.execute(
+                    "SELECT term FROM watch_vocabulary WHERE watch_id = ? AND kind = 'primary' ORDER BY rowid",
+                    (request_id,),
+                ).fetchall()
+                if len(existing_terms) != len(primary_terms) or any(
+                    normalized_text(row["term"]) != normalized_text(term)
+                    for row, term in zip(existing_terms, primary_terms)
+                ):
+                    raise DomainConflict("request identity is already used by another Watch")
+                return _question_watch_response(
+                    conn,
+                    research=research,
+                    request_id=request_id,
+                    question=existing_question,
+                    question_created=False,
+                    policy=policy,
+                    watch=existing_watch,
+                    resumed=True,
+                    primary_terms=[row["term"] for row in existing_terms],
+                )
+
+            matches = [
+                row
+                for row in conn.execute(
+                    "SELECT * FROM research_questions WHERE deleted_at IS NULL ORDER BY created_at, id"
+                ).fetchall()
+                if normalized_text(row["question"]) == canonical_question
+            ]
+            if len(matches) > 1:
+                raise DomainConflict(
+                    "multiple Research Questions match that wording; refine the question before creating a Watch"
+                )
+            question_created = not matches
+            if matches:
+                question = matches[0]
+            else:
+                question_id = f"rq_{request_id.replace('-', '')}"
+                if conn.execute(
+                    "SELECT 1 FROM research_questions WHERE id = ?", (question_id,)
+                ).fetchone() is not None:
+                    raise DomainConflict("request identity is already used by another Research Question")
+                now = utc_now()
+                conn.execute(
+                    """
+                    INSERT INTO research_questions
+                        (id, question, origin_type, origin_id, status, priority,
+                         search_attempt_budget, last_attempt_at, next_attempt_at,
+                         resolution_note, created_at, updated_at, deleted_at,
+                         assessment_state, assessment_hash, assessment_explanation,
+                         assessment_at, criteria_json, pursuit_policy,
+                         pursuit_cooldown_seconds, query_budget, local_model_budget,
+                         paid_budget_usd)
+                    VALUES (?, ?, 'user', NULL, 'open', 'normal', ?, NULL, NULL,
+                            NULL, ?, ?, NULL, 'open', NULL, '', NULL, '{}',
+                            'manual', 3600, ?, ?, 0.0)
+                    """,
+                    (
+                        question_id,
+                        question_text,
+                        3,
+                        now,
+                        now,
+                        10,
+                        10,
+                    ),
+                )
+                conn.execute(
+                    """
+                    INSERT INTO research_question_history
+                        (id, question_id, from_status, to_status, reason, actor, created_at)
+                    VALUES (?, ?, NULL, 'open', 'question created for Watch', ?, ?)
+                    """,
+                    (new_id("rqh"), question_id, str(actor).strip() or "user", now),
+                )
+                research._evaluate_tx(conn, question_id)
+                question = conn.execute(
+                    "SELECT * FROM research_questions WHERE id = ?", (question_id,)
+                ).fetchone()
+
+            now = utc_now()
+            policy_id = new_id("pol")
+            allowed_channels = ["rss", "atom", "direct_http", "page"]
+            conn.execute(
+                """
+                INSERT INTO monitoring_policies(
+                    id, name, allowed_channels, base_cadence_seconds,
+                    min_cadence_seconds, max_cadence_seconds, priority, query_budget,
+                    paid_budget_usd, local_model_budget, escalation_rules, backoff_rules,
+                    retirement_criteria, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, 'normal', ?, 0.0, ?, '{}', '{}', '{}', ?, ?)
+                """,
+                (
+                    policy_id,
+                    WATCH_SETUP_POLICY_NAME,
+                    json.dumps(allowed_channels, separators=(",", ":")),
+                    WATCH_SETUP_BASE_CADENCE_SECONDS,
+                    WATCH_SETUP_MIN_CADENCE_SECONDS,
+                    WATCH_SETUP_MAX_CADENCE_SECONDS,
+                    WATCH_SETUP_QUERY_BUDGET,
+                    WATCH_SETUP_LOCAL_MODEL_BUDGET,
+                    now,
+                    now,
+                ),
+            )
+            conn.execute(
+                """
+                INSERT INTO watches(
+                    id, name, target_type, target_id, policy_id, status, priority,
+                    discovery_enabled, created_at, updated_at)
+                VALUES (?, ?, 'research_question', ?, ?, 'paused', 'normal', 0, ?, ?)
+                """,
+                (request_id, name, question["id"], policy_id, now, now),
+            )
+            for term in primary_terms:
+                conn.execute(
+                    """
+                    INSERT INTO watch_vocabulary(
+                        id, watch_id, term, term_normalized, kind, origin, status,
+                        enabled, expansion_of, rationale, created_at, reviewed_at,
+                        reviewed_by)
+                    VALUES (?, ?, ?, ?, 'primary', 'user', 'approved', 1, NULL,
+                            'Confirmed during question-first Watch setup', ?, ?, ?)
+                    """,
+                    (
+                        new_id("wv"),
+                        request_id,
+                        term,
+                        normalized_text(term),
+                        now,
+                        now,
+                        str(actor).strip() or "user",
+                    ),
+                )
+            watch = conn.execute(
+                "SELECT * FROM watches WHERE id = ?", (request_id,)
+            ).fetchone()
+            policy = conn.execute(
+                "SELECT * FROM monitoring_policies WHERE id = ?", (policy_id,)
+            ).fetchone()
+            return _question_watch_response(
+                conn,
+                research=research,
+                request_id=request_id,
+                question=question,
+                question_created=question_created,
+                policy=policy,
+                watch=watch,
+                resumed=False,
+                primary_terms=primary_terms,
+            )
+    except sqlite3.IntegrityError as exc:
+        raise DomainConflict("question-first Watch setup already exists") from exc
+    finally:
+        conn.close()
 
 
 def create_domain_router(
@@ -2510,10 +2866,19 @@ def create_domain_router(
         read_guard(request)
         return watches.list(status=status, page=page, page_size=page_size)
 
-    @router.post("/watches/setup", response_model=PausedWatchDraft, status_code=201)
+    @router.post("/watches/setup", response_model=PausedWatchDraft | QuestionWatchDraft, status_code=201)
     async def setup_watch(request: Request, payload: WatchSetupCreate, response: Response):
-        write_guard(request)
-        result = watches.create_paused_setup(payload.model_dump())
+        user = write_guard(request)
+        values = payload.model_dump()
+        if payload.target_type == "research_question":
+            result = _create_question_watch_setup(
+                service.db_path,
+                values,
+                research=research,
+                actor=user.user_id,
+            )
+        else:
+            result = watches.create_paused_setup(values)
         if result["resumed"]:
             response.status_code = 200
         else:
@@ -2528,7 +2893,27 @@ def create_domain_router(
     @router.get("/watches/{identifier}")
     async def get_watch(request: Request, identifier: str):
         read_guard(request)
-        return watches.get(identifier)
+        result = watches.get(identifier)
+        if result.get("target_type") == "research_question":
+            question = research.get(str(result["target_id"]))
+            open_gaps = [
+                gap for gap in question.get("gaps", [])
+                if gap.get("status") in {"open", "pursuing", "blocked"}
+            ]
+            result["research_question"] = question
+            result["research_context"] = {
+                "question_id": question["id"],
+                "question": question["question"],
+                "assessment_state": question.get("assessment_state", "open"),
+                "assessment_explanation": question.get("assessment_explanation", ""),
+                "gaps": question.get("gaps", []),
+                "open_gap_count": len(open_gaps),
+                "active_gap": open_gaps[0] if open_gaps else None,
+                "tasks": question.get("tasks", []),
+                "evidence_gated": True,
+                "candidate_note": "Research candidates and hypotheses remain separate until canonical evidence is verified.",
+            }
+        return result
 
     @router.post("/watches/{identifier}/story-resolution")
     async def resolve_watch_story_target(request: Request, identifier: str, payload: StoryTargetResolutionWrite):

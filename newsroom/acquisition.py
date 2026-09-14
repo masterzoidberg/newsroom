@@ -74,6 +74,13 @@ class AcquisitionPolicy:
         object.__setattr__(self, "denied_domains", frozenset(_clean_domain(item) for item in self.denied_domains))
 
     def check_url(self, url: str) -> str:
+        """Normalize and structurally allow a URL without doing network I/O.
+
+        This check is suitable for candidate persistence and request
+        construction, but it is not proof that a hostname resolves safely.
+        Callers crossing the network boundary must use the transport, which
+        re-runs ``check_resolved_url`` for the request and every redirect.
+        """
         try:
             canonical = normalize_url(url)
         except ValueError as exc:
@@ -95,7 +102,12 @@ class AcquisitionPolicy:
             raise AcquisitionTooLarge("response exceeds configured byte limit")
 
     def check_resolved_url(self, url: str) -> str:
-        """Validate the URL and reject any non-public resolved address."""
+        """Resolve the current hop and reject any non-public address.
+
+        The result must not be cached as a permanent source verification:
+        DNS, connected-peer, and redirect checks are repeated by the bounded
+        transport at each network hop.
+        """
         canonical, _parsed, _addresses = self._validated_addresses(url)
         return canonical
 

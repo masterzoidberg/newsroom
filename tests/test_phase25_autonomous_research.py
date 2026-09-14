@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import json
+import uuid
 from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -14,6 +16,7 @@ from newsroom.app import create_app
 from newsroom.config import RuntimeConfig
 from newsroom.domain import CoreService
 from newsroom.evidence import EvidenceService
+from newsroom.hypotheses import HypothesisService
 from newsroom.integrity import check_database
 from newsroom.jobs import JobService
 from newsroom.migrations import CURRENT_SCHEMA_VERSION, apply_migrations
@@ -191,6 +194,84 @@ def test_bounded_task_no_findings_is_successful_and_does_not_satisfy_gap(tmp_db)
     assert current["gaps"][0]["status"] == "open"
     assert current["tasks"][0]["limits"]["max_queries"] <= 12
     assert job["task_id"] == current["tasks"][0]["id"]
+
+
+def test_failed_bounded_task_reopens_its_question_gap(tmp_db):
+    apply_migrations(tmp_db)
+    question = _question(tmp_db)
+    service = ResearchQuestionService(tmp_db)
+    job = service.pursue(question["id"], query="temporarily unavailable material", query_units=1)
+
+    class FailingSearch:
+        def search(self, *args, **kwargs):
+            raise RuntimeError("controlled search outage")
+
+    execution = ResearchQuestionExecutionService(tmp_db, search=FailingSearch())
+    worker = WorkerProcess(
+        tmp_db,
+        execution.handlers(),
+        worker_id="phase25-failing-search",
+        queue=build_worker_queue(tmp_db),
+    )
+
+    result = worker.run_once(now=T0)
+
+    assert result["status"] == "failed"
+    current = service.get(question["id"])
+    assert current["gaps"][0]["status"] == "open"
+    assert current["tasks"][0]["id"] == job["task_id"]
+    assert current["tasks"][0]["status"] == "failed"
+    assert current["attempts"][0]["status"] == "failed"
+
+
+def test_question_watch_source_approval_pins_canonical_question_need(tmp_db):
+    apply_migrations(tmp_db)
+    core = CoreService(tmp_db)
+    question = _question(tmp_db)
+    policy = MonitoringPolicyService(tmp_db).create(
+        {
+            "name": "Phase 25 question source policy",
+            "allowed_channels": ["direct_http"],
+            "base_cadence_seconds": 3600,
+            "min_cadence_seconds": 900,
+            "max_cadence_seconds": 86400,
+            "query_budget": 4,
+        }
+    )
+    watches = WatchService(tmp_db)
+    watch = watches.create(
+        {
+            "name": "Question source Watch",
+            "target_type": "research_question",
+            "target_id": question["id"],
+            "policy_id": policy["id"],
+        }
+    )
+    source = core.create_source(
+        {
+            "name": "Question source",
+            "slug": "phase-25-question-source",
+            "source_kind": "official",
+            "default_quality": "primary",
+            "homepage_url": "https://question-source.example.test",
+        }
+    )
+    candidate = watches.add_source_candidate(
+        watch["id"],
+        {
+            "name": source["name"],
+            "homepage_url": source["homepage_url"],
+            "rationale": "Controlled source for question-bound monitoring",
+            "discovery_method": "existing_source",
+            "source_id": source["id"],
+        },
+    )
+
+    watches.review_source_candidate(watch["id"], candidate["id"], "approved", "editor")
+
+    attached = watches.get(watch["id"])["sources"][0]
+    assert attached["monitor"]["need_type"] == "research_question"
+    assert attached["monitor"]["need_id"] == question["id"]
 
 
 def test_automatic_pursuit_uses_existing_job_path_and_obeys_cooldown(tmp_db):
@@ -601,3 +682,277 @@ def test_research_question_workspace_api_exposes_bounded_assessment_gaps_and_tas
     tasks = client.get(f"/api/v1/research-questions/{identifier}/tasks").json()
     assert tasks["total"] == 1
     assert tasks["items"][0]["limits"]["max_candidates"] == 3
+
+
+def test_question_first_watch_setup_creates_one_canonical_question_and_open_gap(tmp_path):
+    config = RuntimeConfig.for_environment("dev", root=tmp_path / "dev")
+    app = create_app(config=config, frontend_dist=tmp_path / "missing-dist")
+    payload = {
+        "request_id": str(uuid.uuid4()),
+        "target_type": "research_question",
+        "interest": "Did the satellite launch occur?",
+        "question": "Did the satellite launch occur?",
+        "name": "Satellite launch question",
+        "primary_terms": ["satellite launch"],
+    }
+
+    with TestClient(app) as client:
+        assert client.post("/api/v1/watches/setup", json=payload).status_code == 401
+        assert client.post(
+            "/api/v1/auth/setup",
+            json={"username": "admin", "password": "a-long-test-password-12345"},
+        ).status_code == 201
+        assert client.post(
+            "/api/v1/auth/login",
+            json={"username": "admin", "password": "a-long-test-password-12345"},
+        ).status_code == 200
+        csrf = {"X-CSRF-Token": client.cookies.get("newsroom_csrf")}
+        assert client.post("/api/v1/watches/setup", json=payload).status_code == 403
+
+        created = client.post("/api/v1/watches/setup", headers=csrf, json=payload)
+        assert created.status_code == 201, created.text
+        body = created.json()
+        assert body["target_type"] == "research_question"
+        assert body["question"]["id"] == body["research_question_id"]
+        assert body["question"]["question"] == payload["question"]
+        assert body["gap"]["status"] == "open"
+        assert body["gap"]["question_id"] == body["research_question_id"]
+        assert body["watch"]["target_id"] == body["research_question_id"]
+
+        watch = client.get(f"/api/v1/watches/{body['watch_id']}")
+        assert watch.status_code == 200, watch.text
+        detail = watch.json()
+        assert detail["research_question"]["id"] == body["research_question_id"]
+        assert detail["research_question"]["gaps"][0]["status"] == "open"
+
+        retry = client.post("/api/v1/watches/setup", headers=csrf, json=payload)
+        assert retry.status_code == 200, retry.text
+        assert retry.json()["resumed"] is True
+        assert retry.json()["watch_id"] == body["watch_id"]
+        assert retry.json()["research_question_id"] == body["research_question_id"]
+
+    conn = storage.connect(config.database_path)
+    try:
+        assert conn.execute("SELECT COUNT(*) FROM research_questions").fetchone()[0] == 1
+        assert conn.execute("SELECT COUNT(*) FROM research_question_gaps").fetchone()[0] == 1
+        assert conn.execute("SELECT COUNT(*) FROM watches").fetchone()[0] == 1
+    finally:
+        conn.close()
+
+
+def test_question_first_watch_setup_selects_existing_question_by_normalized_text(tmp_path):
+    config = RuntimeConfig.for_environment("dev", root=tmp_path / "dev")
+    app = create_app(config=config, frontend_dist=tmp_path / "missing-dist")
+    with TestClient(app) as client:
+        assert client.post(
+            "/api/v1/auth/setup",
+            json={"username": "admin", "password": "a-long-test-password-12345"},
+        ).status_code == 201
+        assert client.post(
+            "/api/v1/auth/login",
+            json={"username": "admin", "password": "a-long-test-password-12345"},
+        ).status_code == 200
+        csrf = {"X-CSRF-Token": client.cookies.get("newsroom_csrf")}
+        existing = client.post(
+            "/api/v1/research-questions",
+            headers=csrf,
+            json={
+                "question": "Did the satellite launch occur?",
+                "search_attempt_budget": 2,
+                "query_budget": 4,
+            },
+        )
+        assert existing.status_code == 201, existing.text
+        question_id = existing.json()["id"]
+
+        selected = client.post(
+            "/api/v1/watches/setup",
+            headers=csrf,
+            json={
+                "request_id": str(uuid.uuid4()),
+                "target_type": "research_question",
+                "interest": "A question selected by its wording",
+                "question": "  did   THE satellite launch occur? ",
+                "name": "Existing launch question Watch",
+                "primary_terms": ["satellite launch"],
+            },
+        )
+        assert selected.status_code == 201, selected.text
+        body = selected.json()
+        assert body["research_question_id"] == question_id
+        assert body["question_created"] is False
+
+    conn = storage.connect(config.database_path)
+    try:
+        assert conn.execute("SELECT COUNT(*) FROM research_questions").fetchone()[0] == 1
+        assert conn.execute("SELECT COUNT(*) FROM watches").fetchone()[0] == 1
+    finally:
+        conn.close()
+
+
+def test_question_first_watch_setup_retries_concurrently_to_one_saved_identity(tmp_path):
+    config = RuntimeConfig.for_environment("dev", root=tmp_path / "dev")
+    app = create_app(config=config, frontend_dist=tmp_path / "missing-dist")
+    payload = {
+        "request_id": str(uuid.uuid4()),
+        "target_type": "research_question",
+        "interest": "Will the controlled launch happen?",
+        "question": "Will the controlled launch happen?",
+        "name": "Controlled launch question Watch",
+        "primary_terms": ["controlled launch"],
+    }
+    with TestClient(app) as bootstrap:
+        assert bootstrap.post(
+            "/api/v1/auth/setup",
+            json={"username": "admin", "password": "a-long-test-password-12345"},
+        ).status_code == 201
+
+    def submit():
+        with TestClient(app) as client:
+            assert client.post(
+                "/api/v1/auth/login",
+                json={"username": "admin", "password": "a-long-test-password-12345"},
+            ).status_code == 200
+            headers = {"X-CSRF-Token": client.cookies.get("newsroom_csrf")}
+            response = client.post("/api/v1/watches/setup", headers=headers, json=payload)
+            return response.status_code, response.json()
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        results = list(pool.map(lambda _index: submit(), range(2)))
+
+    assert sorted(status for status, _body in results) == [200, 201]
+    assert {body["watch_id"] for _status, body in results} == {payload["request_id"]}
+    assert len({body["research_question_id"] for _status, body in results}) == 1
+    conn = storage.connect(config.database_path)
+    try:
+        assert conn.execute("SELECT COUNT(*) FROM research_questions").fetchone()[0] == 1
+        assert conn.execute("SELECT COUNT(*) FROM research_question_gaps").fetchone()[0] == 1
+        assert conn.execute("SELECT COUNT(*) FROM watches").fetchone()[0] == 1
+        assert conn.execute("SELECT COUNT(*) FROM monitoring_policies").fetchone()[0] == 1
+    finally:
+        conn.close()
+
+
+def test_question_first_watch_setup_rejects_ambiguous_duplicate_question_wording(tmp_path):
+    config = RuntimeConfig.for_environment("dev", root=tmp_path / "dev")
+    app = create_app(config=config, frontend_dist=tmp_path / "missing-dist")
+    with TestClient(app) as client:
+        assert client.post(
+            "/api/v1/auth/setup",
+            json={"username": "admin", "password": "a-long-test-password-12345"},
+        ).status_code == 201
+        assert client.post(
+            "/api/v1/auth/login",
+            json={"username": "admin", "password": "a-long-test-password-12345"},
+        ).status_code == 200
+        headers = {"X-CSRF-Token": client.cookies.get("newsroom_csrf")}
+        for question in ("Is the launch ready?", "  is   the launch ready? "):
+            response = client.post(
+                "/api/v1/research-questions",
+                headers=headers,
+                json={"question": question, "search_attempt_budget": 1},
+            )
+            assert response.status_code == 201, response.text
+        response = client.post(
+            "/api/v1/watches/setup",
+            headers=headers,
+            json={
+                "request_id": str(uuid.uuid4()),
+                "target_type": "research_question",
+                "interest": "Is the launch ready?",
+                "question": "Is the launch ready?",
+                "name": "Ambiguous launch Watch",
+                "primary_terms": ["launch"],
+            },
+        )
+        assert response.status_code == 409, response.text
+        assert "multiple Research Questions" in response.json()["error"]["message"]
+
+    conn = storage.connect(config.database_path)
+    try:
+        assert conn.execute("SELECT COUNT(*) FROM watches").fetchone()[0] == 0
+        assert conn.execute("SELECT COUNT(*) FROM monitoring_policies").fetchone()[0] == 0
+    finally:
+        conn.close()
+
+
+def test_question_candidates_and_hypotheses_do_not_create_accepted_claims(tmp_db):
+    apply_migrations(tmp_db)
+    _core, ledger, story, version = _ledger_fixture(tmp_db)
+    conn = storage.connect(tmp_db)
+    try:
+        source_id = conn.execute("SELECT id FROM sources ORDER BY id LIMIT 1").fetchone()[0]
+    finally:
+        conn.close()
+    pending, _span = _claim(
+        ledger,
+        story["id"],
+        version["id"],
+        "The launch may happen",
+        "A draft report suggests the launch may happen.",
+        state="pending",
+    )
+    question = _question(tmp_db, question="Will the launch happen?")
+    hypothesis = HypothesisService(tmp_db).create(
+        question["id"], "The launch is likely after the final readiness review."
+    )
+    HypothesisService(tmp_db).review(
+        hypothesis["id"], "approved", actor="editor", reason="Reviewed as a hypothesis"
+    )
+
+    class CandidateSearch:
+        def search(self, *args, **kwargs):
+            return {
+                "items": [
+                    {
+                        "entity_type": "claim",
+                        "entity_id": pending["id"],
+                        "source_id": source_id,
+                    }
+                ]
+            }
+
+    service = ResearchQuestionService(tmp_db)
+    job = service.pursue(question["id"], query="launch readiness", query_units=1)
+    worker = WorkerProcess(
+        tmp_db,
+        ResearchQuestionExecutionService(tmp_db, search=CandidateSearch()).handlers(),
+        worker_id="phase25-candidate-boundary",
+        queue=build_worker_queue(tmp_db),
+    )
+    result = worker.run_once(now=T0)
+
+    assert result["status"] == "succeeded", result
+    current = service.get(question["id"])
+    assert current["assessment_state"] == "open"
+    assert any(item["claim_id"] == pending["id"] for item in current["claims"])
+    assert service.get_task(question["id"], job["task_id"])["status"] == "completed_with_candidates"
+    assert HypothesisService(tmp_db).get(hypothesis["id"])["status"] == "approved"
+    conn = storage.connect(tmp_db)
+    try:
+        assert conn.execute("SELECT state FROM claims WHERE id = ?", (pending["id"],)).fetchone()[0] == "pending"
+    finally:
+        conn.close()
+
+
+def test_ast41_question_first_watch_ui_keeps_question_and_evidence_context_visible():
+    root = Path(__file__).resolve().parents[1]
+    view = (root / "frontend" / "src" / "views" / "WatchManagementView.tsx").read_text(encoding="utf-8")
+    admin = (root / "frontend" / "src" / "views" / "AdminViews.tsx").read_text(encoding="utf-8")
+    types = (root / "frontend" / "src" / "lib" / "types.ts").read_text(encoding="utf-8")
+
+    for label in (
+        "Create a new Research Question",
+        "Select an existing Research Question",
+        "Research Question context",
+        "Pursue open Gap",
+        "No findings",
+        "Evidence boundary",
+        "Hypotheses remain review-only",
+    ):
+        assert label in view or label in admin
+    assert "target_type: submission.target_type" in view
+    assert "question: submission.question" in view
+    assert "target_id: submission" not in view
+    assert "QuestionWatchDraft" in types
+    assert "WatchResearchContext" in types

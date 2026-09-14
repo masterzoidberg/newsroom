@@ -2106,7 +2106,7 @@ def test_unsupported_capabilities_use_the_explicit_local_resolution(tmp_db):
     assert resolved.reason == "unsupported_capability"
 
 
-def test_unsupported_capabilities_stay_local_with_legacy_environment_present(tmp_db, monkeypatch):
+def test_vocabulary_stays_local_with_legacy_environment_present(tmp_db, monkeypatch):
     apply_migrations(tmp_db)
     monkeypatch.setenv("NEWSROOM_ANALYSIS_PROVIDER", "openai")
     monkeypatch.setenv("NEWSROOM_ANALYSIS_API_KEY", "legacy-secret-must-not-route-vocabulary")
@@ -2116,7 +2116,7 @@ def test_unsupported_capabilities_stay_local_with_legacy_environment_present(tmp
     assert resolved.config.provider == "local"
     assert resolved.provider_route == "local"
     assert resolved.source == "legacy_environment"
-    assert resolved.reason == "unsupported_capability"
+    assert resolved.reason == "legacy_environment_unsupported"
 
 
 def test_configuration_generation_persists_across_a_process_restart(tmp_db):
@@ -2144,7 +2144,7 @@ def test_configuration_generation_persists_across_a_process_restart(tmp_db):
         result_queue.close()
 
     assert process.exitcode == 0
-    assert result == (route["generation"], "managed", "unsupported_capability", "local")
+    assert result == (route["generation"], "managed", "managed_local", "local")
 
 
 def test_operation_router_records_effective_generation_and_source(tmp_db):

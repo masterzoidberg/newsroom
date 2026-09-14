@@ -231,10 +231,10 @@ export function InboxView({ openView }: { openView: (view: InboxViewKey) => void
       {error && <ErrorState error={error} retry={() => void load()} />}
       <div className="content-grid">
         <SectionCard title="1. Tell Newsroom what matters" description="Use ordinary language. You do not need Topic IDs, policy IDs, or any other internal identifier.">
-          <p className="muted">Enter an interest and a short editable Watch name. Newsroom creates the Topic and zero-paid hourly draft behind the scenes.</p>
+          <p className="muted">Enter the research prompt or interest, then give the Watch its own short name. Newsroom creates the Topic and zero-paid hourly draft behind the scenes.</p>
         </SectionCard>
         <SectionCard title="2. Confirm the primary term" description="A Topic name alone is not enough monitoring scope.">
-          <p className="muted">Newsroom will visibly seed a primary-term field from your interest. Review it, edit it if needed, and explicitly confirm at least one term before saving.</p>
+          <p className="muted">Enter an exact word or phrase that should define the Watch’s approved scope. It drives exact relevance matching and initial query variants; optional AI terminology suggestions can be reviewed after saving.</p>
         </SectionCard>
       </div>
       <SectionCard title="3. Save paused, then add Sources" description="Saving the setup does not start monitoring.">

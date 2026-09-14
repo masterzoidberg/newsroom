@@ -54,6 +54,7 @@ class RuntimeSupervisor:
         restart_limit: int = 3,
         restart_backoff_seconds: float = 0.25,
         poll_interval_seconds: float = 0.1,
+        api_readiness_cache_seconds: float = 2.0,
         popen_factory: PopenFactory = subprocess.Popen,
         api_readiness: ApiReadiness | None = None,
     ) -> None:
@@ -68,8 +69,12 @@ class RuntimeSupervisor:
         self.restart_limit = restart_limit
         self.restart_backoff_seconds = restart_backoff_seconds
         self.poll_interval_seconds = poll_interval_seconds
+        if api_readiness_cache_seconds <= 0:
+            raise ValueError("API readiness cache duration must be positive")
+        self.api_readiness_cache_seconds = float(api_readiness_cache_seconds)
         self.popen_factory = popen_factory
         self._api_readiness = api_readiness or self._default_api_readiness
+        self._api_readiness_cache: tuple[float, tuple[bool, str]] | None = None
         self._command_factory = command_factory or self._default_command
         self._children: dict[str, subprocess.Popen] = {}
         self._restart_counts = {role: 0 for role in RUNTIME_ROLES}
@@ -131,6 +136,15 @@ class RuntimeSupervisor:
             return True, "verified matching API endpoint"
         return False, f"API endpoint is {diagnosis.status.value}: {diagnosis.detail}"
 
+    def _cached_api_readiness(self) -> tuple[bool, str]:
+        now = time.monotonic()
+        cached = self._api_readiness_cache
+        if cached is not None and now - cached[0] < self.api_readiness_cache_seconds:
+            return cached[1]
+        result = self._api_readiness()
+        self._api_readiness_cache = (now, result)
+        return result
+
     def state(self, role: str) -> ComponentState:
         process = self._children.get(role)
         if process is not None and process.poll() is not None:
@@ -159,7 +173,7 @@ class RuntimeSupervisor:
             heartbeat_timeout_seconds=self.heartbeat_timeout_seconds,
         )
         if role == "api" and state.status == "healthy":
-            ready, detail = self._api_readiness()
+            ready, detail = self._cached_api_readiness()
             if not ready:
                 return ComponentState(role, "starting", detail, state.owner)
         return state
@@ -189,6 +203,8 @@ class RuntimeSupervisor:
             apply_migrations(self.config.database_path)
 
     def _spawn(self, role: str) -> None:
+        if role == "api":
+            self._api_readiness_cache = None
         process = self.popen_factory(
             list(self._command_factory(role)),
             cwd=Path(__file__).resolve().parents[1],

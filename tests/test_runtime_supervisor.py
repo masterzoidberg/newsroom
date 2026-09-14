@@ -131,6 +131,21 @@ def test_repeated_supervisor_reconciles_existing_children_without_duplicates(tmp
         _cleanup(first)
 
 
+def test_api_readiness_probe_is_cached_during_fast_supervisor_polling(tmp_path):
+    config = RuntimeConfig.for_environment("dev", root=tmp_path / "dev")
+    calls = []
+    supervisor = _supervisor(config)
+    supervisor._api_readiness = lambda: (calls.append("probe") or True, "fixture ready")
+    try:
+        states = supervisor.ensure_all()
+        assert all(state.status == "healthy" for state in states.values())
+        for _ in range(20):
+            assert supervisor.state("api").status == "healthy"
+        assert calls == ["probe"]
+    finally:
+        _cleanup(supervisor)
+
+
 def test_supervisor_process_crash_leaves_children_reconcilable_without_duplicates(tmp_path):
     config = RuntimeConfig.for_environment("dev", root=tmp_path / "dev")
     process = subprocess.Popen(

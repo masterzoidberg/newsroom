@@ -356,6 +356,15 @@ def run(url: str, output: Path) -> dict[str, Any]:
         assert page.get_by_text("Local / offline", exact=True).first.is_visible()
 
         page.get_by_role("button", name="Add provider").first.click()
+        page.get_by_label("Provider preset").select_option("minimax_token_plan")
+        assert page.get_by_label("Display name").input_value() == "MiniMax Token Plan"
+        assert page.get_by_label("Model").input_value() == "MiniMax-M3"
+        assert page.get_by_label("Base URL").input_value() == "https://api.minimax.cn/v1"
+        assert page.get_by_label("MiniMax Token Plan subscription key").count() == 1
+        assert page.get_by_role("link", name="Get a Token Plan key", exact=True).is_visible()
+        page.get_by_role("button", name="Cancel", exact=True).first.click()
+
+        page.get_by_role("button", name="Add provider").first.click()
         for field_id in (
             "ai-provider-name",
             "ai-provider-model",
@@ -446,6 +455,7 @@ def run(url: str, output: Path) -> dict[str, Any]:
         "mobile_viewport": [390, 1000],
         "journeys": [
             "settings empty state",
+            "MiniMax Token Plan preset and subscription-key guidance",
             "add provider and credential clearing",
             "explicit bounded test authorization",
             "enable, route, paid switch and typed budget",

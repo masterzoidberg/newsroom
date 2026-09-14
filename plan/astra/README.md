@@ -8,7 +8,7 @@ This directory is the canonical new completion layer requested by the owner. It 
 
 1. Read [EXECUTIVE_AUDIT.md](EXECUTIVE_AUDIT.md) and [CURRENT_STATE.md](CURRENT_STATE.md).
 2. Read [CODEX_EXECUTION_RULES.md](CODEX_EXECUTION_RULES.md), [DECISIONS.md](DECISIONS.md), and [NEXT.md](NEXT.md).
-3. Execute the first READY task in [TASKS.md](TASKS.md), currently AST-28, using its bounded contract and revalidating dependencies/current HEAD first.
+3. Execute the first READY task in [TASKS.md](TASKS.md), currently AST-41, using its bounded contract and revalidating dependencies/current HEAD first.
 4. Record evidence, update task status and the immediate queue, and stop after the primary task. No task is DONE merely because its code exists.
 
 ## Planning map

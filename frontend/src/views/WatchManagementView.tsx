@@ -1,6 +1,6 @@
-import { FormEvent, useCallback, useEffect, useState } from "react";
-import { ApiError, apiFetch, apiList, formatDate, isApiUnavailable, jsonBody, shortId } from "../lib/api";
-import type { CollectionRecord } from "../lib/types";
+import { FormEvent, ReactNode, useCallback, useEffect, useState } from "react";
+import { ApiError, apiFetch, apiList, formatDate, getAIStatus, isApiUnavailable, jsonBody, shortId } from "../lib/api";
+import type { AIStatus, CollectionRecord, ResearchQuestion, VocabularyKind, WatchResearchContext, WatchSetupResponse, WatchVocabularyTerm } from "../lib/types";
 import { Badge, EmptyState, ErrorState, LoadingState, PageHeader, SectionCard, Stat } from "../components/ViewPrimitives";
 import { queueDocumentNavigation } from "./DocumentView";
 
@@ -8,10 +8,34 @@ type Watch = CollectionRecord & {
   target_type?: string;
   target_id?: string;
   policy?: CollectionRecord;
-  vocabulary?: CollectionRecord[];
+  vocabulary?: WatchVocabularyTerm[];
   primary_terms?: CollectionRecord[];
   source_candidates?: CollectionRecord[];
-  sources?: Array<{ source?: CollectionRecord; monitor?: CollectionRecord }>;
+  sources?: WatchSource[];
+  research_context?: WatchResearchContext;
+  research_question?: ResearchQuestion;
+};
+
+type WatchSource = { source?: CollectionRecord; monitor?: CollectionRecord };
+
+type SourceActivity = CollectionRecord & {
+  outcome?: string;
+  error_code?: string | null;
+  observed_at?: string | null;
+};
+
+type SourceHealth = {
+  latest: SourceActivity | null;
+  error?: string;
+};
+
+type SourceHealthMap = Record<string, SourceHealth>;
+
+type VocabularyInput = {
+  term: string;
+  kind: VocabularyKind;
+  expansion_of?: string;
+  rationale: string;
 };
 
 type Health = {
@@ -24,6 +48,7 @@ type Health = {
   last_success?: string | null;
   next_scheduled_run?: string | null;
   last_discovery_run?: string | null;
+  last_discovery_status?: string | null;
   last_error?: string | null;
   review?: WatchReview;
   progress?: WatchProgress;
@@ -55,7 +80,10 @@ type WatchProgress = {
 
 type SetupDraft = {
   request_id: string;
+  target_type: "topic" | "research_question";
   interest: string;
+  question: string;
+  question_source: "new" | "existing";
   name: string;
   primary_terms: string[];
   term_draft: string;
@@ -67,7 +95,9 @@ type SetupDraft = {
 
 type SetupSubmission = {
   request_id: string;
+  target_type: "topic" | "research_question";
   interest: string;
+  question: string;
   name: string;
   primary_terms: string[];
   create_report: boolean;
@@ -81,16 +111,6 @@ type BriefingSchedule = {
   paused: boolean;
 };
 
-type PausedWatchDraft = {
-  resumed: boolean;
-  watch_id: string;
-  topic_id: string;
-  policy_id: string;
-  status: "paused";
-  next_action: "add_sources";
-  primary_terms: string[];
-};
-
 type SourceCandidateInput = {
   source_id?: string;
   name: string;
@@ -99,6 +119,77 @@ type SourceCandidateInput = {
   discovery_method: "manual" | "existing_source";
   rationale: string;
 };
+
+type VocabularyRouteSummary = {
+  title: string;
+  detail: string;
+  tone: "neutral" | "mint" | "amber" | "coral";
+};
+
+const VOCABULARY_KIND_OPTIONS: Array<{ value: VocabularyKind; label: string }> = [
+  { value: "alias", label: "Alias" },
+  { value: "synonym", label: "Synonym" },
+  { value: "acronym", label: "Acronym" },
+  { value: "acronym_expansion", label: "Acronym expansion" },
+  { value: "related", label: "Related term or entity" },
+  { value: "include", label: "Include" },
+  { value: "exclude", label: "Exclude / meaning to leave out" },
+  { value: "primary", label: "Primary term" },
+];
+
+function vocabularyKindLabel(kind: string): string {
+  return VOCABULARY_KIND_OPTIONS.find((option) => option.value === kind)?.label ?? kind;
+}
+
+function vocabularyEnabled(item: WatchVocabularyTerm): boolean {
+  return item.enabled === true || item.enabled === 1;
+}
+
+function errorMessage(error: unknown): string {
+  if (error instanceof ApiError) return error.message;
+  if (error instanceof Error) return error.message;
+  return "The terminology request could not be completed.";
+}
+
+function vocabularyRouteSummary(status: AIStatus | null, statusError: unknown, policy?: CollectionRecord): VocabularyRouteSummary {
+  if (statusError) {
+    return {
+      title: "Manual fallback",
+      detail: "Provider status is unavailable. Manual terms always available; retry suggestions after the local service is reachable.",
+      tone: "amber",
+    };
+  }
+  if (!status) {
+    return {
+      title: "Checking route",
+      detail: "Newsroom is checking the configured terminology route. Manual terms always available while this status loads.",
+      tone: "neutral",
+    };
+  }
+  const route = status.routes.find((item) => item.capability === "vocabulary");
+  const effective = route?.effective;
+  if (!effective || effective.provider_route === "local") {
+    const unavailable = effective?.reason === "connection_unavailable" || effective?.reason === "connection_missing";
+    return {
+      title: unavailable ? "Local fallback" : "Local / offline",
+      detail: `${unavailable ? "The managed provider is unavailable, so Newsroom uses its deterministic local fallback." : "This Watch uses the deterministic local route."} Manual terms always available and cost nothing. Suggestions remain review-only.`,
+      tone: "mint",
+    };
+  }
+  const paidBudget = Number(policy?.paid_budget_usd ?? 0);
+  if (!status?.paid_enabled || !Number.isFinite(paidBudget) || paidBudget <= 0) {
+    return {
+      title: "Managed route, paid off",
+      detail: "A managed terminology provider is configured, but background paid routing is disabled for this request or this Watch has a zero paid budget. Manual terms always available; deterministic fallback remains safe.",
+      tone: "amber",
+    };
+  }
+  return {
+    title: `Managed · ${effective.provider}`,
+    detail: `Explicit suggestion requests may use ${effective.model ?? "the configured model"} within this Watch's saved paid budget. Manual terms always available; no suggestion is active until you approve it.`,
+    tone: "amber",
+  };
+}
 
 const SETUP_DRAFT_KEY = "newsroom.watch-setup.v2";
 const SETUP_PENDING_KEY = "newsroom.watch-setup.pending.v1";
@@ -110,7 +201,10 @@ const text = (value: unknown, fallback = "—") => String(value ?? fallback);
 function freshSetupDraft(): SetupDraft {
   return {
     request_id: window.crypto.randomUUID(),
+    target_type: "topic",
     interest: "",
+    question: "",
+    question_source: "new",
     name: "",
     primary_terms: [],
     term_draft: "",
@@ -136,12 +230,20 @@ function loadStoredSetupDraft(): SetupDraft {
     if (typeof saved.request_id !== "string" || typeof saved.interest !== "string" || typeof saved.name !== "string") return freshSetupDraft();
     const primaryTerms = validPrimaryTerms(saved.primary_terms);
     if (primaryTerms === null) return freshSetupDraft();
+    const targetType = saved.target_type === "research_question" ? "research_question" : "topic";
+    const savedQuestion = typeof saved.question === "string" ? saved.question : "";
+    const savedName = saved.name_touched === true || saved.name !== saved.interest.slice(0, 200) ? saved.name : "";
+    const savedTermDraft = typeof saved.term_draft === "string" && saved.term_draft.length <= MAX_PRIMARY_TERM_LENGTH ? saved.term_draft : "";
+    const termDraft = saved.term_touched === true || savedTermDraft !== saved.interest.slice(0, MAX_PRIMARY_TERM_LENGTH) ? savedTermDraft : "";
     return {
       request_id: saved.request_id,
+      target_type: targetType,
       interest: saved.interest,
-      name: saved.name,
+      question: targetType === "research_question" ? savedQuestion || saved.interest : savedQuestion,
+      question_source: saved.question_source === "existing" ? "existing" : "new",
+      name: savedName,
       primary_terms: primaryTerms,
-      term_draft: typeof saved.term_draft === "string" && saved.term_draft.length <= MAX_PRIMARY_TERM_LENGTH ? saved.term_draft : "",
+      term_draft: termDraft,
       name_touched: saved.name_touched === true,
       term_touched: saved.term_touched === true,
       create_report: saved.create_report === true,
@@ -164,9 +266,12 @@ function loadStoredPendingSubmission(): SetupSubmission | null {
       typeof saved.name !== "string" || !saved.name.trim() ||
       primaryTerms === null || primaryTerms.length === 0
     ) return null;
+    const targetType = saved.target_type === "research_question" ? "research_question" : "topic";
     return {
       request_id: saved.request_id,
+      target_type: targetType,
       interest: saved.interest,
+      question: targetType === "research_question" && typeof saved.question === "string" ? saved.question : targetType === "research_question" ? saved.interest : "",
       name: saved.name,
       primary_terms: primaryTerms,
       create_report: saved.create_report === true,
@@ -191,7 +296,9 @@ function normalizedTerm(value: string): string {
 function submissionFromDraft(draft: SetupDraft): SetupSubmission {
   return {
     request_id: draft.request_id,
+    target_type: draft.target_type,
     interest: draft.interest.trim(),
+    question: draft.target_type === "research_question" ? draft.question.trim() : "",
     name: draft.name.trim(),
     primary_terms: draft.primary_terms.map((item) => item.trim()),
     create_report: draft.create_report,
@@ -199,12 +306,28 @@ function submissionFromDraft(draft: SetupDraft): SetupSubmission {
   };
 }
 
+function setupDraftHasContent(draft: SetupDraft): boolean {
+  return Boolean(
+    draft.interest.trim() ||
+    draft.question.trim() ||
+    draft.name.trim() ||
+    draft.primary_terms.length > 0 ||
+    draft.term_draft.trim() ||
+    draft.create_report ||
+    draft.enable_briefing
+  );
+}
+
 export function WatchManagementView() {
   const [watches, setWatches] = useState<Watch[]>([]);
   const [policies, setPolicies] = useState<CollectionRecord[]>([]);
+  const [researchQuestions, setResearchQuestions] = useState<ResearchQuestion[]>([]);
+  const [researchQuestionsLoading, setResearchQuestionsLoading] = useState(false);
+  const [researchQuestionsError, setResearchQuestionsError] = useState<unknown>(null);
   const [selectedId, setSelectedId] = useState("");
   const [selected, setSelected] = useState<Watch | null>(null);
   const [health, setHealth] = useState<Health | null>(null);
+  const [sourceHealth, setSourceHealth] = useState<SourceHealthMap>({});
   const [setupDraft, setSetupDraft] = useState<SetupDraft>(loadStoredSetupDraft);
   const [pendingSubmission, setPendingSubmission] = useState<SetupSubmission | null>(loadStoredPendingSubmission);
   const [setupError, setSetupError] = useState<unknown>(null);
@@ -216,17 +339,35 @@ export function WatchManagementView() {
   const [legacyWatchName, setLegacyWatchName] = useState("");
   const [legacyPolicyName, setLegacyPolicyName] = useState("");
   const [editName, setEditName] = useState("");
-  const [term, setTerm] = useState("");
-  const [kind, setKind] = useState("alias");
+  const [aiStatus, setAiStatus] = useState<AIStatus | null>(null);
+  const [aiStatusError, setAiStatusError] = useState<unknown>(null);
+  const [suggestionError, setSuggestionError] = useState<unknown>(null);
   const [working, setWorking] = useState(false);
   const [error, setError] = useState<unknown>(null);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    try { window.sessionStorage.setItem(SETUP_DRAFT_KEY, JSON.stringify(setupDraft)); } catch { /* Browser storage may be unavailable. */ }
+    try {
+      if (setupDraftHasContent(setupDraft)) window.sessionStorage.setItem(SETUP_DRAFT_KEY, JSON.stringify(setupDraft));
+      else window.sessionStorage.removeItem(SETUP_DRAFT_KEY);
+    } catch { /* Browser storage may be unavailable. */ }
   }, [setupDraft]);
 
   useEffect(() => { persistPendingSubmission(pendingSubmission); }, [pendingSubmission]);
+
+  const loadResearchQuestions = useCallback(async () => {
+    setResearchQuestionsLoading(true);
+    setResearchQuestionsError(null);
+    try {
+      setResearchQuestions((await apiList<ResearchQuestion>("/research-questions?page_size=100")).items);
+    } catch (caught) {
+      setResearchQuestionsError(caught);
+    } finally {
+      setResearchQuestionsLoading(false);
+    }
+  }, []);
+
+  useEffect(() => { void loadResearchQuestions(); }, [loadResearchQuestions]);
 
   const loadDetail = useCallback(async (id: string) => {
     const watch = await apiFetch<Watch>(`/watches/${id}`);
@@ -236,16 +377,35 @@ export function WatchManagementView() {
     const primaryTermsRequest = watch.target_type === "topic" && watch.target_id
       ? apiList<CollectionRecord>(`/topics/${watch.target_id}/vocabulary?page_size=100`)
       : Promise.resolve({ items: [] as CollectionRecord[] });
-    const [watchHealth, vocabulary, candidates, sources, primaryTerms, policy] = await Promise.all([
+    const aiStatusRequest = getAIStatus().catch((caught) => {
+      setAiStatusError(caught);
+      return null;
+    });
+    const [watchHealth, vocabulary, candidates, sources, primaryTerms, policy, nextAiStatus] = await Promise.all([
       apiFetch<Health>(`/watches/${id}/health`),
-      apiList<CollectionRecord>(`/watches/${id}/vocabulary?page_size=100`),
+      apiList<WatchVocabularyTerm>(`/watches/${id}/vocabulary?page_size=100`),
       apiList<CollectionRecord>(`/watches/${id}/source-candidates?page_size=100`),
-      apiList<{ source?: CollectionRecord; monitor?: CollectionRecord }>(`/watches/${id}/sources?page_size=100`),
+      apiList<WatchSource>(`/watches/${id}/sources?page_size=100`),
       primaryTermsRequest,
       policyRequest,
+      aiStatusRequest,
     ]);
+    const nextSourceHealth: SourceHealthMap = {};
+    await Promise.all(sources.items.map(async (item) => {
+      const monitorId = text(item.monitor?.id, "");
+      if (!monitorId) return;
+      try {
+        const activity = await apiList<SourceActivity>(`/monitors/${encodeURIComponent(monitorId)}/activity?page_size=1`);
+        nextSourceHealth[monitorId] = { latest: activity.items[0] ?? null };
+      } catch (caught) {
+        nextSourceHealth[monitorId] = { latest: null, error: errorMessage(caught) };
+      }
+    }));
+    setAiStatus(nextAiStatus);
+    if (nextAiStatus) setAiStatusError(null);
     setSelected({ ...watch, policy: policy ?? undefined, vocabulary: vocabulary.items, primary_terms: primaryTerms.items, source_candidates: candidates.items, sources: sources.items });
     setHealth(watchHealth);
+    setSourceHealth(nextSourceHealth);
     setEditName(text(watch.name, ""));
   }, []);
 
@@ -272,6 +432,7 @@ export function WatchManagementView() {
       } else {
         setSelected(null);
         setHealth(null);
+        setSourceHealth({});
         try { window.localStorage.removeItem(SELECTED_WATCH_KEY); } catch { /* No durable selection available. */ }
       }
     } catch (caught) { setError(caught); } finally { setLoading(false); }
@@ -332,11 +493,53 @@ export function WatchManagementView() {
     setSetupDraft((current) => ({
       ...current,
       interest: value,
-      name: current.name_touched ? current.name : value.slice(0, 200),
+      name: current.name,
       primary_terms: materialChange ? [] : current.primary_terms,
-      term_draft: materialChange ? value.slice(0, MAX_PRIMARY_TERM_LENGTH) : current.term_draft,
-      term_touched: materialChange ? false : current.term_touched,
+      term_draft: current.term_draft,
     }));
+  }
+
+  function updateQuestion(value: string) {
+    const previous = setupDraft.question || setupDraft.interest;
+    const materialChange = normalizedTerm(previous) !== normalizedTerm(value);
+    const invalidatedApproval = materialChange && setupDraft.primary_terms.length > 0;
+    setSetupError(null);
+    setSetupSaved("");
+    setSetupValidation(invalidatedApproval ? "Question changed. Reconfirm at least one primary term before saving." : "");
+    setSetupDraft((current) => ({
+      ...current,
+      interest: value,
+      question: value,
+      question_source: "new",
+      name: current.name,
+      primary_terms: materialChange ? [] : current.primary_terms,
+      term_draft: current.term_draft,
+    }));
+  }
+
+  function changeSetupTarget(value: "topic" | "research_question") {
+    setSetupError(null);
+    setSetupSaved("");
+    setSetupValidation("");
+    setSetupDraft((current) => {
+      const textValue = current.target_type === "research_question" ? current.question : current.interest;
+      return {
+        ...current,
+        target_type: value,
+        interest: textValue,
+        question: value === "research_question" ? textValue : current.question,
+        question_source: "new",
+        name: current.name,
+      };
+    });
+    if (value === "research_question" && researchQuestions.length === 0 && !researchQuestionsLoading) void loadResearchQuestions();
+  }
+
+  function chooseExistingQuestion(value: string) {
+    const question = value.trim();
+    if (!question) return;
+    updateQuestion(question);
+    setSetupDraft((current) => ({ ...current, question_source: "existing" }));
   }
 
   function addPrimaryTerm() {
@@ -360,9 +563,16 @@ export function WatchManagementView() {
   async function attemptSetup(submission: SetupSubmission) {
     setWorking(true); setSetupError(null); setSetupValidation(""); setSetupSaved("");
     try {
-      const result = await apiFetch<PausedWatchDraft>("/watches/setup", {
+      const result = await apiFetch<WatchSetupResponse>("/watches/setup", {
         method: "POST",
-        body: jsonBody({ request_id: submission.request_id, interest: submission.interest, name: submission.name, primary_terms: submission.primary_terms }),
+        body: jsonBody({
+          request_id: submission.request_id,
+          target_type: submission.target_type,
+          interest: submission.interest,
+          ...(submission.target_type === "research_question" ? { question: submission.question } : {}),
+          name: submission.name,
+          primary_terms: submission.primary_terms,
+        }),
       });
       const optionalWarnings: string[] = [];
       if (submission.create_report) {
@@ -410,14 +620,28 @@ export function WatchManagementView() {
       setSetupValidation("A previous save may already have reached Newsroom. Retry that exact submitted save before starting another.");
       return;
     }
-    if (!setupDraft.interest.trim() || !setupDraft.name.trim() || setupDraft.primary_terms.length === 0) {
-      setSetupValidation("Enter an interest and name, then explicitly confirm at least one primary term.");
+    const setupText = setupDraft.target_type === "research_question" ? setupDraft.question : setupDraft.interest;
+    if (!setupText.trim() || !setupDraft.name.trim() || setupDraft.primary_terms.length === 0) {
+      setSetupValidation(`${setupDraft.target_type === "research_question" ? "Enter a research question" : "Enter an interest"} and name, then explicitly confirm at least one primary term.`);
       return;
     }
     const submission = submissionFromDraft(setupDraft);
     persistPendingSubmission(submission);
     setPendingSubmission(submission);
     await attemptSetup(submission);
+  }
+
+  function discardSetupDraft() {
+    if (pendingSubmission || !setupDraftHasContent(setupDraft)) return;
+    if (!window.confirm("Discard this Watch draft? The question, name, and confirmed terms will be cleared, and nothing will be created.")) return;
+    try {
+      window.sessionStorage.removeItem(SETUP_DRAFT_KEY);
+      window.sessionStorage.removeItem(SETUP_PENDING_KEY);
+    } catch { /* The in-memory reset still clears the visible draft. */ }
+    setSetupDraft(freshSetupDraft());
+    setSetupError(null);
+    setSetupValidation("");
+    setSetupSaved("Watch draft discarded. Nothing was created.");
   }
 
   async function retryPendingSetup() {
@@ -459,6 +683,25 @@ export function WatchManagementView() {
     catch (caught) { setError(caught); } finally { setWorking(false); }
   }
 
+  async function pursueQuestionGap() {
+    const context = selected?.research_context;
+    const gap = context?.active_gap;
+    if (!context || !gap || gap.status !== "open" || !selected) return;
+    setWorking(true);
+    setError(null);
+    try {
+      await apiFetch(`/research-questions/${encodeURIComponent(context.question_id)}/gaps/${encodeURIComponent(gap.id)}/pursue`, {
+        method: "POST",
+        body: jsonBody({ mode: "manual", query_units: 1, limits: { max_queries: 12, max_candidates: 25, max_documents: 5 } }),
+      });
+      await loadDetail(selected.id);
+    } catch (caught) {
+      setError(caught);
+    } finally {
+      setWorking(false);
+    }
+  }
+
   async function saveName(event: FormEvent) {
     event.preventDefault(); if (!selected || !editName.trim()) return;
     setWorking(true); setError(null);
@@ -466,11 +709,40 @@ export function WatchManagementView() {
     catch (caught) { setError(caught); } finally { setWorking(false); }
   }
 
-  async function addTerm(event: FormEvent) {
-    event.preventDefault(); if (!selectedId || !term.trim()) return;
+  async function addTerm(input: VocabularyInput) {
+    if (!selectedId) return;
     setWorking(true); setError(null);
-    try { await apiFetch(`/watches/${selectedId}/vocabulary`, { method: "POST", body: jsonBody({ term: term.trim(), kind, rationale: "Added in Watch management" }) }); setTerm(""); await refresh(); }
-    catch (caught) { setError(caught); } finally { setWorking(false); }
+    try {
+      await apiFetch(`/watches/${selectedId}/vocabulary`, { method: "POST", body: jsonBody(input) });
+      await loadDetail(selectedId);
+    } catch (caught) {
+      setError(caught);
+      throw caught;
+    } finally { setWorking(false); }
+  }
+
+  async function reviewVocabulary(vocabularyId: string, status: "approved" | "rejected") {
+    if (!selectedId) return;
+    setWorking(true); setError(null);
+    try {
+      await apiFetch(`/watches/${selectedId}/vocabulary/${encodeURIComponent(vocabularyId)}/review`, { method: "POST", body: jsonBody({ status }) });
+      await loadDetail(selectedId);
+    } catch (caught) {
+      setError(caught);
+      throw caught;
+    } finally { setWorking(false); }
+  }
+
+  async function suggestVocabulary() {
+    if (!selectedId) return;
+    setWorking(true); setError(null); setSuggestionError(null);
+    try {
+      await apiFetch<{ items: WatchVocabularyTerm[] }>(`/watches/${selectedId}/vocabulary/suggest`, { method: "POST", body: jsonBody({ limit: 20 }) });
+      await loadDetail(selectedId);
+    } catch (caught) {
+      setSuggestionError(caught);
+      setError(caught);
+    } finally { setWorking(false); }
   }
 
   async function addSourceCandidate(input: SourceCandidateInput) {
@@ -498,6 +770,18 @@ export function WatchManagementView() {
     } catch (caught) { setError(caught); throw caught; } finally { setWorking(false); }
   }
 
+  async function retrySource(monitorId: string) {
+    if (!monitorId) return;
+    setWorking(true); setError(null);
+    try {
+      await apiFetch(`/monitors/${encodeURIComponent(monitorId)}`, {
+        method: "PATCH",
+        body: jsonBody({ enabled: true, next_check_at: new Date().toISOString() }),
+      });
+      await refresh();
+    } catch (caught) { setError(caught); } finally { setWorking(false); }
+  }
+
   async function review(path: string, status: "approved" | "rejected") { await action(`${path}/review`, { status }); }
 
   function openSelectedReport() {
@@ -510,20 +794,63 @@ export function WatchManagementView() {
 
   const setupTitle = watches.length ? "Create another Watch" : "What do you want Newsroom to watch?";
   const canDiscover = Boolean(selectedId && selected?.status === "active");
-  const canSubmitSetup = !working && !pendingSubmission && Boolean(setupDraft.interest.trim() && setupDraft.name.trim() && setupDraft.primary_terms.length > 0);
+  const setupText = setupDraft.target_type === "research_question" ? setupDraft.question : setupDraft.interest;
+  const canSubmitSetup = !working && !pendingSubmission && Boolean(setupText.trim() && setupDraft.name.trim() && setupDraft.primary_terms.length > 0);
+  const canDiscardSetup = !working && !pendingSubmission && setupDraftHasContent(setupDraft);
   return <>
     <PageHeader eyebrow="Configure / intelligent monitoring" title="Watches" description="Start with an interest in ordinary language. Newsroom saves the setup paused so you can review scope and Sources before collection begins." action={canDiscover ? <button className="secondary-button" type="button" onClick={() => void action("discover-sources", { limit: 25 })} disabled={working}>Discover Sources</button> : undefined} />
     {error && <ErrorState error={error} retry={() => void load(selectedId)} />}
 
-    <SectionCard title={setupTitle} description="No internal IDs are required. This step creates a Topic, confirmed primary scope, private zero-paid hourly policy, and paused Watch together.">
+    <SectionCard title={setupTitle} description="No internal IDs are required. Choose a Topic or a Research Question, confirm exact primary scope, and save a private zero-paid paused Watch. The saved Watch then opens terminology and Source review before collection.">
       <form className="stack-form" onSubmit={(event) => void submitSetup(event)} aria-busy={working}>
-        <label htmlFor="watch-interest">Interest</label>
-        <textarea id="watch-interest" rows={4} maxLength={2000} value={setupDraft.interest} onChange={(event) => updateInterest(event.target.value)} placeholder="What do you want to stay on top of?" />
+        <fieldset className="stack-form" aria-describedby="watch-target-help">
+          <legend>Watch focus</legend>
+          <label><input style={{ width: "auto", minHeight: "auto", marginRight: "8px" }} type="radio" name="watch-target-type" value="topic" checked={setupDraft.target_type === "topic"} onChange={() => changeSetupTarget("topic")} disabled={working} />Topic interest</label>
+          <label><input style={{ width: "auto", minHeight: "auto", marginRight: "8px" }} type="radio" name="watch-target-type" value="research_question" checked={setupDraft.target_type === "research_question"} onChange={() => changeSetupTarget("research_question")} disabled={working} />Research question</label>
+          <p id="watch-target-help" className="status-note">A Research Question Watch keeps its canonical evidence Gap, assessment, bounded Tasks, and evidence boundary visible beside Sources.</p>
+        </fieldset>
+        {setupDraft.target_type === "research_question" ? <>
+          <label htmlFor="watch-question-source">Research Question entry</label>
+          <select id="watch-question-source" value={setupDraft.question_source} onChange={(event) => {
+            const source = event.target.value as "new" | "existing";
+            setSetupError(null);
+            setSetupSaved("");
+            setSetupValidation("");
+            if (source === "existing") {
+              const first = researchQuestions[0]?.question ?? "";
+              setSetupDraft((current) => ({ ...current, question_source: source, question: first, interest: first, name: current.name, primary_terms: first && normalizedTerm(first) !== normalizedTerm(current.question) ? [] : current.primary_terms, term_draft: current.term_draft }));
+            } else {
+              setSetupDraft((current) => ({ ...current, question_source: source }));
+            }
+          }} disabled={working}>
+            <option value="new">Create a new Research Question</option>
+            <option value="existing">Select an existing Research Question</option>
+          </select>
+          {setupDraft.question_source === "existing" ? <>
+            {researchQuestionsLoading && <p className="status-note" role="status">Loading saved Research Questions…</p>}
+            {researchQuestionsError && <div className="state-panel error-panel" role="alert"><strong>Existing Research Questions could not be loaded.</strong><p>{errorMessage(researchQuestionsError)}</p><button className="secondary-button" type="button" onClick={() => void loadResearchQuestions()} disabled={working}>Retry questions</button></div>}
+            {!researchQuestionsLoading && !researchQuestionsError && (researchQuestions.length ? <>
+              <label htmlFor="watch-existing-question">Select by question wording</label>
+              <select id="watch-existing-question" value={setupDraft.question} onChange={(event) => chooseExistingQuestion(event.target.value)} disabled={working}>
+                <option value="">Choose a saved Research Question…</option>
+                {researchQuestions.map((item) => <option key={item.id} value={item.question}>{item.question}</option>)}
+              </select>
+              <p className="status-note">Only the displayed wording is submitted. Newsroom resolves it to the canonical Research Question; duplicate wording is rejected instead of guessed.</p>
+            </> : <EmptyState title="No saved Research Questions" description="Create a new question with the entry choice above, or refresh after another question is saved." action={<button className="secondary-button" type="button" onClick={() => void loadResearchQuestions()} disabled={working}>Refresh questions</button>} />)}
+          </> : <>
+            <label htmlFor="watch-question">Research Question</label>
+            <textarea id="watch-question" rows={4} maxLength={2000} value={setupDraft.question} onChange={(event) => updateQuestion(event.target.value)} placeholder="What evidence would answer this question?" aria-describedby="question-help" />
+            <p id="question-help" className="status-note">Newsroom creates one canonical Research Question and one open evidence Gap. A failed or empty pursuit leaves that Gap open for another bounded attempt.</p>
+          </>}
+        </> : <>
+          <label htmlFor="watch-interest">Interest</label>
+          <textarea id="watch-interest" rows={4} maxLength={2000} value={setupDraft.interest} onChange={(event) => updateInterest(event.target.value)} placeholder="What do you want to stay on top of?" />
+        </>}
         <label htmlFor="watch-setup-name">Watch name</label>
         <input id="watch-setup-name" maxLength={200} value={setupDraft.name} onChange={(event) => { setSetupSaved(""); setSetupDraft((current) => ({ ...current, name: event.target.value, name_touched: true })); }} placeholder="A short name you will recognize" />
         <label htmlFor="watch-primary-term">Primary term to confirm</label>
-        <input id="watch-primary-term" maxLength={MAX_PRIMARY_TERM_LENGTH} value={setupDraft.term_draft} onChange={(event) => { setSetupValidation(""); setSetupDraft((current) => ({ ...current, term_draft: event.target.value, term_touched: true })); }} placeholder="Seeded from your interest; edit before confirming" aria-describedby="primary-term-help" />
-        <p id="primary-term-help" className="status-note">Confirm at least one exact term. Newsroom will not invent or preapprove synonyms in this step.</p>
+        <input id="watch-primary-term" maxLength={MAX_PRIMARY_TERM_LENGTH} value={setupDraft.term_draft} onChange={(event) => { setSetupValidation(""); setSetupDraft((current) => ({ ...current, term_draft: event.target.value, term_touched: true })); }} placeholder="An exact word or phrase Newsroom should match" aria-describedby="primary-term-help" />
+        <p id="primary-term-help" className="status-note">This is approved monitoring scope: it drives exact relevance matching and the initial Watch query variants. It does not rename the Watch or summarize the question. Add at least one exact term; AI and synonym proposals remain separate review-only suggestions after setup.</p>
         <div className="button-row"><button className="secondary-button" type="button" onClick={addPrimaryTerm} disabled={working || !setupDraft.term_draft.trim() || setupDraft.primary_terms.length >= MAX_PRIMARY_TERMS}>Confirm primary term</button></div>
         {setupDraft.primary_terms.length > 0 && <div className="resource-list" aria-label="Confirmed primary terms">{setupDraft.primary_terms.map((primaryTerm, index) => <div className="resource-row" key={`${normalizedTerm(primaryTerm)}-${index}`}><span><strong>{primaryTerm}</strong><small>Confirmed primary monitoring term</small></span><button className="quiet-button" type="button" onClick={() => removePrimaryTerm(index)} disabled={working} aria-label={`Remove primary term ${primaryTerm}`}>Remove</button></div>)}</div>}
         <fieldset className="stack-form">
@@ -534,10 +861,10 @@ export function WatchManagementView() {
           <p className="status-note">Enables the zero-paid briefing schedule in your browser’s local timezone. Configure weekly cadence or another timezone in Reports.</p>
         </fieldset>
         {setupValidation && <p className="status-note" role="alert">{setupValidation}</p>}
-        {pendingSubmission && <div className="state-panel error-panel" role={setupError !== null ? "alert" : "status"}><strong>{setupError !== null ? "Could not confirm this save." : "A previous save still needs confirmation."}</strong>{setupError !== null && <p>{setupError instanceof Error ? setupError.message : "The request failed."}</p>}{isApiUnavailable(setupError) && <p>Use your installed Start Newsroom launcher to start the local service, reload this page, and retry. The exact submitted request is retained in this tab.</p>}<p>Retry will resend the original submitted Watch named <strong>{pendingSubmission.name}</strong> with the same approved scope. Later edits in this form are kept separate until that save is resolved.</p><button className="secondary-button" type="button" onClick={() => void retryPendingSetup()} disabled={working}>Retry the same save</button></div>}
+        {pendingSubmission && <div className="state-panel error-panel" role={setupError !== null ? "alert" : "status"}><strong>{setupError !== null ? "Could not confirm this save." : "A previous save still needs confirmation."}</strong>{setupError !== null && <p>{setupError instanceof Error ? setupError.message : "The request failed."}</p>}{isApiUnavailable(setupError) && <p>Use your installed Start Newsroom launcher to start the local service, reload this page, and retry. The exact submitted request is retained in this tab.</p>}<p>Retry will resend the original submitted {pendingSubmission.target_type === "research_question" ? "question Watch" : "Watch"} named <strong>{pendingSubmission.name}</strong> with the same approved scope. Later edits in this form are kept separate until that save is resolved.</p><button className="secondary-button" type="button" onClick={() => void retryPendingSetup()} disabled={working}>Retry the same save</button></div>}
         {setupError !== null && !pendingSubmission && <div className="state-panel error-panel" role="alert"><strong>Could not save this Watch.</strong><p>{setupError instanceof Error ? setupError.message : "The request failed."}</p>{isApiUnavailable(setupError) && <p>Use your installed Start Newsroom launcher to start the local service, reload this page, and retry.</p>}</div>}
         {setupSaved && <p className="status-note" role="status"><strong>{setupSaved}</strong></p>}
-        <button className="primary-button" type="submit" disabled={!canSubmitSetup}>{working ? "Saving paused Watch…" : pendingSubmission ? "Resolve previous save first" : "Save paused Watch"}</button>
+        <div className="button-row"><button className="primary-button" type="submit" disabled={!canSubmitSetup}>{working ? "Saving paused Watch…" : pendingSubmission ? "Resolve previous save first" : "Save paused Watch"}</button>{canDiscardSetup && <button className="quiet-button" type="button" onClick={discardSetupDraft}>Discard Watch draft</button>}</div>
       </form>
     </SectionCard>
 
@@ -553,7 +880,7 @@ export function WatchManagementView() {
     </details>
 
     <SectionCard title="Configured Watches" description={`${watches.length} Watch${watches.length === 1 ? "" : "es"}; select one to inspect its durable state.`}>{watches.length ? <div className="resource-list">{watches.map((watch) => <button type="button" className={`resource-row ${selectedId === watch.id ? "selected" : ""}`} key={watch.id} onClick={() => void selectWatch(watch.id)}><span><strong>{text(watch.name, text(watch.target_type))}</strong><small>{text(watch.target_type, "Watch")} · {text(watch.status, "active")}</small></span><Badge tone={watch.status === "active" ? "mint" : "neutral"}>{text(watch.status, "active")}</Badge></button>)}</div> : <EmptyState title="No Watches yet" description="Use the interest form above to save your first paused Watch." />}</SectionCard>
-    {selected && health && <WatchDetail watch={selected} health={health} name={editName} setName={setEditName} term={term} setTerm={setTerm} kind={kind} setKind={setKind} working={working} onSave={saveName} onAddTerm={addTerm} onAddSource={addSourceCandidate} onDetachSource={detachSource} onUpdateCadence={updateCadence} onAction={action} onReview={review} onOpenReport={openSelectedReport} />}
+    {selected && health && <WatchDetail watch={selected} health={health} sourceHealth={sourceHealth} aiStatus={aiStatus} aiStatusError={aiStatusError} suggestionError={suggestionError} name={editName} setName={setEditName} working={working} onSave={saveName} onSuggest={suggestVocabulary} onAddTerm={addTerm} onReviewVocabulary={reviewVocabulary} onAddSource={addSourceCandidate} onDetachSource={detachSource} onUpdateCadence={updateCadence} onRetrySource={retrySource} onAction={action} onReview={review} onOpenReport={openSelectedReport} onPursueQuestion={pursueQuestionGap} />}
   </>;
 }
 
@@ -718,7 +1045,221 @@ function SourceSetup({ working, onCreate }: { working: boolean; onCreate: (input
   </SectionCard>;
 }
 
-function WatchDetail({ watch, health, name, setName, term, setTerm, kind, setKind, working, onSave, onAddTerm, onAddSource, onDetachSource, onUpdateCadence, onAction, onReview, onOpenReport }: { watch: Watch; health: Health; name: string; setName: (value: string) => void; term: string; setTerm: (value: string) => void; kind: string; setKind: (value: string) => void; working: boolean; onSave: (event: FormEvent) => void; onAddTerm: (event: FormEvent) => Promise<void>; onAddSource: (input: SourceCandidateInput) => Promise<void>; onDetachSource: (sourceId: string) => Promise<void>; onUpdateCadence: (seconds: number) => Promise<void>; onAction: (path: string, body?: unknown) => Promise<void>; onReview: (path: string, status: "approved" | "rejected") => Promise<void>; onOpenReport: () => void }) {
+function vocabularyStatusLabel(item: WatchVocabularyTerm): string {
+  if (item.status === "suggested") return "suggested · inactive";
+  if (item.status === "approved") return vocabularyEnabled(item) ? "approved · active" : "approved · inactive";
+  if (item.status === "rejected") return "rejected · excluded";
+  return item.status;
+}
+
+function vocabularyBadgeTone(item: WatchVocabularyTerm): "neutral" | "mint" | "amber" | "coral" {
+  if (item.kind === "exclude") return item.status === "approved" ? "coral" : "amber";
+  if (item.status === "approved" && vocabularyEnabled(item)) return "mint";
+  if (item.status === "suggested") return "amber";
+  return "neutral";
+}
+
+function VocabularyRow({ item, children }: { item: WatchVocabularyTerm; children?: ReactNode }) {
+  const origin = item.origin === "ai" ? "Provider suggestion" : item.origin === "deterministic" ? "Deterministic suggestion" : text(item.origin, "Manual");
+  return <div className="resource-row">
+    <span>
+      <strong>{text(item.term)}</strong>
+      <small>{vocabularyKindLabel(item.kind)} · {origin}{item.expansion_of ? ` · Expansion of ${item.expansion_of}` : ""}</small>
+      {item.rationale && <small>Why: {item.rationale}</small>}
+    </span>
+    <div className="button-row ai-provider-actions"><Badge tone={vocabularyBadgeTone(item)}>{vocabularyStatusLabel(item)}</Badge>{children}</div>
+  </div>;
+}
+
+type TerminologyReviewProps = {
+  watch: Watch;
+  vocabulary: WatchVocabularyTerm[];
+  aiStatus: AIStatus | null;
+  aiStatusError: unknown;
+  suggestionError: unknown;
+  working: boolean;
+  onSuggest: () => Promise<void>;
+  onAdd: (input: VocabularyInput) => Promise<void>;
+  onReview: (id: string, status: "approved" | "rejected") => Promise<void>;
+};
+
+function TerminologyReview({ watch, vocabulary, aiStatus, aiStatusError, suggestionError, working, onSuggest, onAdd, onReview }: TerminologyReviewProps) {
+  const [term, setTerm] = useState("");
+  const [kind, setKind] = useState<VocabularyKind>("alias");
+  const [expansionOf, setExpansionOf] = useState("");
+  const [rationale, setRationale] = useState("Added manually by the owner.");
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editTerm, setEditTerm] = useState("");
+  const [editKind, setEditKind] = useState<VocabularyKind>("alias");
+  const [editExpansionOf, setEditExpansionOf] = useState("");
+  const [editRationale, setEditRationale] = useState("");
+  const [formError, setFormError] = useState("");
+  const route = vocabularyRouteSummary(aiStatus, aiStatusError, watch.policy);
+  const suggested = vocabulary.filter((item) => item.status === "suggested");
+  const approved = vocabulary.filter((item) => item.status === "approved");
+  const rejected = vocabulary.filter((item) => item.status === "rejected");
+
+  async function addManualTerm(event: FormEvent) {
+    event.preventDefault();
+    setFormError("");
+    if (!term.trim()) { setFormError("Enter a term before adding it to approved scope."); return; }
+    try {
+      await onAdd({ term: term.trim(), kind, expansion_of: expansionOf.trim() || undefined, rationale: rationale.trim() || "Added manually by the owner." });
+      setTerm(""); setExpansionOf(""); setRationale("Added manually by the owner.");
+    } catch (caught) { setFormError(errorMessage(caught)); }
+  }
+
+  function beginEdit(item: WatchVocabularyTerm) {
+    setFormError(""); setEditingId(item.id); setEditTerm(item.term); setEditKind(item.kind); setEditExpansionOf(item.expansion_of ?? ""); setEditRationale(item.rationale ?? "");
+  }
+
+  function cancelEdit() {
+    setEditingId(null); setEditTerm(""); setEditExpansionOf(""); setEditRationale("");
+  }
+
+  async function saveEdit(event: FormEvent, item: WatchVocabularyTerm) {
+    event.preventDefault();
+    setFormError("");
+    if (!editTerm.trim()) { setFormError("Enter a term before saving the edited suggestion."); return; }
+    const input: VocabularyInput = { term: editTerm.trim(), kind: editKind, expansion_of: editExpansionOf.trim() || undefined, rationale: editRationale.trim() || "Edited by the owner during terminology review." };
+    try { await onAdd(input); }
+    catch (caught) { setFormError(errorMessage(caught)); return; }
+    try { await onReview(item.id, "rejected"); }
+    catch (caught) { setFormError(`The edited term was saved, but the original suggestion could not be rejected: ${errorMessage(caught)}`); return; }
+    cancelEdit();
+  }
+
+  async function reviewItem(item: WatchVocabularyTerm, status: "approved" | "rejected") {
+    setFormError("");
+    try { await onReview(item.id, status); }
+    catch (caught) { setFormError(errorMessage(caught)); }
+  }
+
+  return <SectionCard title="Review terminology" description="Confirm what Newsroom should mean before you add Sources or start collection. Suggested terms are proposals only; approval is the server-side action that makes a term active." action={<button className="secondary-button" type="button" onClick={() => void onSuggest()} disabled={working}>{working ? "Working…" : "Suggest terms"}</button>}>
+    <div className="state-panel" role="status">
+      <strong>Provider route and cost</strong>
+      <p><Badge tone={route.tone}>{route.title}</Badge> {route.detail}</p>
+      <p>Every suggestion request is explicit and bounded. No provider call happens while typing, and rejected or suggested terms never enter monitoring scope.</p>
+    </div>
+    {suggestionError !== null && suggestionError !== undefined && <div className="state-panel error-panel" role="alert"><strong>Suggestions could not be loaded.</strong><p>{errorMessage(suggestionError)}</p>{isApiUnavailable(suggestionError) && <p>Use the installed Start Newsroom launcher, reload this page, and retry. Manual terms remain available.</p>}<button className="secondary-button" type="button" onClick={() => void onSuggest()} disabled={working}>Retry suggestions</button></div>}
+    <form className="stack-form" onSubmit={(event) => void addManualTerm(event)}>
+      <h3>Manual terms always available</h3>
+      <p className="muted">Add an approved term directly when the provider is disabled, unavailable, or not useful. Exclusions are explicit and remain visible in review history.</p>
+      <label htmlFor="watch-vocabulary-term">Term or meaning</label>
+      <input id="watch-vocabulary-term" value={term} onChange={(event) => setTerm(event.target.value)} maxLength={300} placeholder="Alternate name, acronym, or excluded meaning" />
+      <label htmlFor="watch-vocabulary-kind">Kind</label>
+      <select id="watch-vocabulary-kind" value={kind} onChange={(event) => setKind(event.target.value as VocabularyKind)}>
+        {VOCABULARY_KIND_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+      </select>
+      <label htmlFor="watch-vocabulary-expansion">Expansion of (optional)</label>
+      <input id="watch-vocabulary-expansion" value={expansionOf} onChange={(event) => setExpansionOf(event.target.value)} maxLength={300} placeholder="Link an acronym to its full phrase" />
+      <label htmlFor="watch-vocabulary-rationale">Why this term?</label>
+      <textarea id="watch-vocabulary-rationale" rows={2} value={rationale} onChange={(event) => setRationale(event.target.value)} maxLength={2000} />
+      {formError && <p className="status-note" role="alert">{formError}</p>}
+      <button className="secondary-button" type="submit" disabled={working || !term.trim()}>{working ? "Saving term…" : "Add approved term"}</button>
+    </form>
+    <div className="content-grid">
+      <div>
+        <h3>Suggested terminology</h3>
+        <p className="muted">Provider and deterministic proposals are inert until you approve them on the server.</p>
+        {suggested.length ? <div className="resource-list">{suggested.map((item) => editingId === item.id ? <form className="stack-form" key={item.id} onSubmit={(event) => void saveEdit(event, item)} aria-label={`Edit suggested term ${item.term}`}>
+          <label htmlFor={`edit-vocabulary-term-${item.id}`}>Term</label><input id={`edit-vocabulary-term-${item.id}`} value={editTerm} onChange={(event) => setEditTerm(event.target.value)} maxLength={300} />
+          <label htmlFor={`edit-vocabulary-kind-${item.id}`}>Kind</label><select id={`edit-vocabulary-kind-${item.id}`} value={editKind} onChange={(event) => setEditKind(event.target.value as VocabularyKind)}>{VOCABULARY_KIND_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select>
+          <label htmlFor={`edit-vocabulary-expansion-${item.id}`}>Expansion of (optional)</label><input id={`edit-vocabulary-expansion-${item.id}`} value={editExpansionOf} onChange={(event) => setEditExpansionOf(event.target.value)} maxLength={300} />
+          <label htmlFor={`edit-vocabulary-rationale-${item.id}`}>Why this term?</label><textarea id={`edit-vocabulary-rationale-${item.id}`} rows={2} value={editRationale} onChange={(event) => setEditRationale(event.target.value)} maxLength={2000} />
+          <div className="button-row"><button className="secondary-button" type="submit" disabled={working}>Save edited term</button><button className="quiet-button" type="button" onClick={cancelEdit} disabled={working}>Cancel</button></div>
+        </form> : <VocabularyRow key={item.id} item={item}><button className="secondary-button" type="button" onClick={() => beginEdit(item)} disabled={working}>Edit</button><button className="secondary-button" type="button" onClick={() => void reviewItem(item, "approved")} disabled={working}>Approve</button><button className="quiet-button" type="button" onClick={() => void reviewItem(item, "rejected")} disabled={working}>Reject</button></VocabularyRow>)}</div> : <EmptyState title="No suggestions waiting for review" description="Newsroom has no new terminology proposals. You can add an approved term manually at any time." />}
+      </div>
+      <div>
+        <h3>Approved monitoring scope</h3>
+        <p className="muted">Only terms shown as approved and active affect future Watch queries. Already acquired material keeps its original pinned scope.</p>
+        {approved.length ? <div className="resource-list">{approved.map((item) => <VocabularyRow key={item.id} item={item} />)}</div> : <EmptyState title="No additional approved terms" description="The confirmed primary Topic terms remain above. Add or approve supporting terminology only when it matches your intended meaning." />}
+      </div>
+    </div>
+    <div>
+      <h3>Rejected terminology</h3>
+      {rejected.length ? <div className="resource-list">{rejected.map((item) => <VocabularyRow key={item.id} item={item} />)}</div> : <p className="muted">No rejected terms yet. Rejections are retained so the same proposal does not silently return.</p>}
+    </div>
+  </SectionCard>;
+}
+
+function sourceCandidateMethod(item: CollectionRecord): { label: string; tone: "neutral" | "mint" | "amber" } {
+  const method = text(item.discovery_method, "manual");
+  if (method === "ai_suggestion") return { label: "Unverified recommendation", tone: "amber" };
+  if (method === "existing_source") return { label: "Existing Source", tone: "mint" };
+  if (method === "document_link" || method === "feed_discovery") return { label: "Observed corpus signal", tone: "neutral" };
+  return { label: "Manual preview", tone: "neutral" };
+}
+
+function SourceRecommendations({ candidates, health, isUnstartedDraft, working, onDiscover, onReview }: { candidates: CollectionRecord[]; health: Health; isUnstartedDraft: boolean; working: boolean; onDiscover: () => Promise<void>; onReview: (path: string, status: "approved" | "rejected") => Promise<void> }) {
+  const canDiscover = health.status === "active";
+  const lastRun = health.last_discovery_run ? formatDate(health.last_discovery_run) : "Not run yet";
+  const discoveryStatus = text(health.last_discovery_status, "not run").replace(/_/g, " ");
+  return <SectionCard title="Recommended Sources" description="Recommendations and corpus signals are previews only. One canonical URL appears once per Watch; rejected rows remain in history and are not silently re-added." action={<button className="secondary-button" type="button" onClick={() => void onDiscover()} disabled={working || !canDiscover}>{health.last_error && canDiscover ? "Retry recommendations" : "Recommend Sources"}</button>}>
+    <div className="state-panel" role="status">
+      <strong>Recommendation provenance</strong>
+      <p>Model recommendations are labeled <Badge tone="amber">unverified</Badge> and remain inactive until you approve them. The server records the source-discovery route and review state; approval does not fetch the URL or create evidence.</p>
+      <p className="status-note">Last recommendation run: {lastRun} · status: {discoveryStatus} · {health.discovery_enabled ? "bounded assistance available when the Watch is active and its information-need corpus is empty" : "recommendation route is disabled"}.</p>
+    </div>
+    {health.last_error && <div className="state-panel error-panel" role="alert"><strong>Recommendations or collection need attention.</strong><p>{health.last_error}</p>{canDiscover && <button className="secondary-button" type="button" onClick={() => void onDiscover()} disabled={working}>Retry recommendations</button>}<p className="status-note">Manual fallback remains available above, and existing successful Sources stay attached below.</p></div>}
+    {candidates.length ? <div className="resource-list" aria-label="Recommended Source previews">{candidates.map((item) => { const method = sourceCandidateMethod(item); const status = text(item.status, "suggested"); const provenance = item.provenance && typeof item.provenance === "object" ? item.provenance as Record<string, unknown> : {}; const url = text(item.homepage_url, text(item.feed_url, "No URL recorded")); return <div className="resource-row" key={item.id}><span><strong>{text(item.name, "Unnamed Source")}</strong><small>{url}</small><small><Badge tone={method.tone}>{method.label}</Badge> · {text(item.discovery_method, "manual").replace(/_/g, " ")}</small><small>{text(item.rationale, "No rationale recorded")}</small>{method.label === "Unverified recommendation" && <small>Recommendation provenance: {text(provenance.capability, "source_discovery")} · {text(provenance.trigger, "empty_corpus")} · unverified</small>}{text(item.authority_context, "") && <small>Authority context: {text(item.authority_context, "")}</small>}{text(item.limitations, "") && <small>Limitations: {text(item.limitations, "")}</small>}</span><div className="button-row"><Badge tone={status === "approved" ? "mint" : status === "rejected" ? "neutral" : method.tone === "amber" ? "amber" : "neutral"}>{status === "suggested" ? "Review needed" : status}</Badge>{status === "suggested" && <><button className="secondary-button" type="button" onClick={() => void onReview(`source-candidates/${item.id}`, "approved")} disabled={working}>Approve and attach</button><button className="quiet-button" type="button" onClick={() => void onReview(`source-candidates/${item.id}`, "rejected")} disabled={working}>Reject</button></>}</div></div>; })}</div> : <EmptyState title="No recommendations yet" description={isUnstartedDraft ? "Manual fallback: search an existing Source or preview a page/feed above. Nothing is attached until you approve it." : "Manual fallback: add or search a Source above. A bounded recommendation run may return previews only when the information-need corpus is empty."} />}
+  </SectionCard>;
+}
+
+function sourceHealthSummary(source: WatchSource, detail?: SourceHealth): { label: string; tone: "neutral" | "mint" | "amber" | "coral"; outcome: string; failure: string | null; checkedAt: string | null } {
+  const monitor = source.monitor;
+  const latest = detail?.latest ?? null;
+  const outcome = text(latest?.outcome, text(monitor?.last_result, "not_run"));
+  const failure = outcome === "error" || outcome === "retired" || Boolean(latest?.error_code) ? text(latest?.error_code, outcome.replace(/_/g, " ")) : null;
+  if (failure) return { label: "Failed", tone: "coral", outcome, failure, checkedAt: latest?.observed_at ?? (typeof monitor?.last_run_at === "string" ? monitor.last_run_at : null) };
+  if (outcome === "partial") return { label: "Partial result", tone: "amber", outcome, failure: null, checkedAt: latest?.observed_at ?? (typeof monitor?.last_run_at === "string" ? monitor.last_run_at : null) };
+  if (outcome === "not_run") return { label: "Not checked", tone: "neutral", outcome, failure: null, checkedAt: null };
+  return { label: outcome === "no_change" ? "Healthy · no change" : "Healthy · change found", tone: "mint", outcome, failure: null, checkedAt: latest?.observed_at ?? (typeof monitor?.last_run_at === "string" ? monitor.last_run_at : null) };
+}
+
+function AttachedSources({ sources, sourceHealth, working, onDetach, onRetry }: { sources: WatchSource[]; sourceHealth: SourceHealthMap; working: boolean; onDetach: (sourceId: string) => Promise<void>; onRetry: (monitorId: string) => Promise<void> }) {
+  return <SectionCard title="Attached Sources · Source health" description="Each Source is shown separately so one failed page or feed never hides a successful sibling. Detach changes only this Watch relationship; editing a shared Source in Sources affects every Watch that uses it.">{sources.length ? <div className="resource-list">{sources.map((item) => { const source = item.source; const monitor = item.monitor; const monitorId = text(monitor?.id, ""); const summary = sourceHealthSummary(item, monitorId ? sourceHealth[monitorId] : undefined); const page = text(source?.homepage_url, ""); const feed = text(source?.feed_url, ""); const detailError = monitorId ? sourceHealth[monitorId]?.error : undefined; return <div className="resource-row" key={text(source?.id, monitorId)}><span><strong>{text(source?.name, "Unnamed Source")}</strong><small>Page: {page || "not configured"}</small><small>Feed: {feed || "not configured"}</small><small>Last check: {summary.checkedAt ? formatDate(summary.checkedAt) : "Not checked yet"} · outcome: {summary.outcome.replace(/_/g, " ")}</small><small>Last failure: {summary.failure ? `${summary.failure}${summary.checkedAt ? ` · ${formatDate(summary.checkedAt)}` : ""}` : "None recorded"}</small>{detailError && <small>Health detail unavailable: {detailError}. Showing the last known monitor state.</small>}</span><div className="button-row"><Badge tone={summary.tone}>{summary.label}</Badge>{summary.failure && monitorId && <button className="secondary-button" type="button" onClick={() => void onRetry(monitorId)} disabled={working}>Retry source</button>}<button className="quiet-button" type="button" onClick={() => void onDetach(text(source?.id, ""))} disabled={working}>Detach</button></div></div>; })}</div> : <EmptyState title="No attached Sources" description="Approve a Source preview to attach it. Manual fallback remains available above; nothing is collecting until you explicitly start the Watch." />}</SectionCard>;
+}
+
+function researchAssessmentTone(state: string): "neutral" | "mint" | "amber" | "coral" {
+  if (state === "supported" || state === "resolved") return "mint";
+  if (state === "contradicted") return "coral";
+  if (state === "partially_answered") return "amber";
+  return "neutral";
+}
+
+function researchTaskLabel(status: string): string {
+  if (status === "completed_no_findings") return "No findings";
+  if (status === "completed_with_evidence") return "Evidence ready";
+  if (status === "completed_with_candidates") return "Candidates need review";
+  if (status === "failed") return "Pursuit failed";
+  if (status === "cancelled") return "Pursuit cancelled";
+  return "Pursuit in progress";
+}
+
+function QuestionResearchContext({ context, working, onPursue }: { context: WatchResearchContext; working: boolean; onPursue: () => Promise<void> }) {
+  const state = String(context.assessment_state || "open");
+  const gaps = context.gaps ?? [];
+  const activeGap = context.active_gap ?? gaps.find((gap) => gap.status === "open" || gap.status === "pursuing" || gap.status === "blocked") ?? null;
+  const tasks = context.tasks ?? [];
+  const latestTask = tasks[tasks.length - 1];
+  const taskStatus = String(latestTask?.status ?? "");
+  const outcome = latestTask?.outcome && typeof latestTask.outcome === "object" ? latestTask.outcome : {};
+  const outcomeNote = typeof outcome.outcome_note === "string" ? outcome.outcome_note : "";
+  const recovery = taskStatus === "completed_no_findings" || taskStatus === "failed" || taskStatus === "cancelled";
+  return <SectionCard title="Research Question context" description="This Watch is bound to a canonical question. Assessment, evidence Gaps, and bounded Task outcomes stay visible beside Source setup." action={<Badge tone={researchAssessmentTone(state)}>{state}</Badge>}>
+    <div className="stats-grid"><Stat label="Open evidence Gaps" value={context.open_gap_count} tone={context.open_gap_count ? "amber" : "mint"} /><Stat label="Bounded Tasks" value={tasks.length} /><Stat label="Evidence gate" value={context.evidence_gated ? "Required" : "Review"} tone={context.evidence_gated ? "amber" : "neutral"} /></div>
+    <div className="content-grid">
+      <div><h3>Question</h3><p>{context.question}</p><p className="status-note">Assessment: {state}. {context.assessment_explanation || "No assessment explanation has been recorded yet."}</p></div>
+      <div><h3>Active evidence Gap</h3>{activeGap ? <div className="state-panel" role="status"><strong>{activeGap.description}</strong><p>Status: {activeGap.status}</p>{activeGap.status === "open" && <button className="secondary-button" type="button" onClick={() => void onPursue()} disabled={working}>{working ? "Starting bounded pursuit…" : "Pursue open Gap"}</button>}{activeGap.status === "pursuing" && <p className="status-note">A bounded Task is already pursuing this Gap.</p>}{activeGap.status === "blocked" && <p className="status-note">This Gap is blocked; review the question workspace before retrying it.</p>}</div> : <p className="muted">No open evidence Gap is waiting for pursuit.</p>}</div>
+    </div>
+    {latestTask && <div className={`state-panel ${taskStatus === "failed" ? "error-panel" : ""}`} role={taskStatus === "failed" ? "alert" : "status"}><strong>Latest bounded Task: {researchTaskLabel(taskStatus)}</strong><p>{outcomeNote || (taskStatus === "completed_no_findings" ? "The bounded search completed without qualifying findings." : taskStatus === "failed" ? "The bounded pursuit failed before producing qualifying evidence." : "The latest bounded Task is recorded separately from trusted evidence.")}</p>{recovery && activeGap?.status === "open" && <p className="status-note">Gap remains open. Review the outcome and use Pursue open Gap to try another bounded attempt.</p>}</div>}
+    <p className="status-note"><strong>Evidence boundary:</strong> {context.candidate_note || "Hypotheses remain review-only until canonical evidence is verified; candidate material is not an accepted Claim."}</p>
+    {gaps.length > 1 && <div><h3>Other question Gaps</h3><ul className="compact-list">{gaps.slice(1, 10).map((gap) => <li key={gap.id}><Badge tone={gap.status === "satisfied" ? "mint" : gap.status === "dismissed" ? "neutral" : "amber"}>{gap.status}</Badge> {gap.description}</li>)}</ul></div>}
+  </SectionCard>;
+}
+
+function WatchDetail({ watch, health, sourceHealth, aiStatus, aiStatusError, suggestionError, name, setName, working, onSave, onSuggest, onAddTerm, onReviewVocabulary, onAddSource, onDetachSource, onUpdateCadence, onRetrySource, onAction, onReview, onOpenReport, onPursueQuestion }: { watch: Watch; health: Health; sourceHealth: SourceHealthMap; aiStatus: AIStatus | null; aiStatusError: unknown; suggestionError: unknown; name: string; setName: (value: string) => void; working: boolean; onSave: (event: FormEvent) => void; onSuggest: () => Promise<void>; onAddTerm: (input: VocabularyInput) => Promise<void>; onReviewVocabulary: (id: string, status: "approved" | "rejected") => Promise<void>; onAddSource: (input: SourceCandidateInput) => Promise<void>; onDetachSource: (sourceId: string) => Promise<void>; onUpdateCadence: (seconds: number) => Promise<void>; onRetrySource: (monitorId: string) => Promise<void>; onAction: (path: string, body?: unknown) => Promise<void>; onReview: (path: string, status: "approved" | "rejected") => Promise<void>; onOpenReport: () => void; onPursueQuestion: () => Promise<void> }) {
   const vocabulary = watch.vocabulary ?? [];
   const primaryTerms = watch.primary_terms ?? [];
   const candidates = watch.source_candidates ?? [];
@@ -730,11 +1271,12 @@ function WatchDetail({ watch, health, name, setName, term, setTerm, kind, setKin
   const progressTone = progress?.state === "ready" || progress?.state === "no-change" ? "mint" : progress?.state === "error" ? "coral" : progress?.state === "deferred" || progress?.state === "irrelevant" ? "amber" : "neutral";
   return <>
     {isUnstartedDraft && <SectionCard title="Setup saved" description="This Watch is paused and is not collecting yet."><div className="button-row"><Badge tone="neutral">Paused</Badge><Badge tone="amber">Next: Add Sources</Badge></div><p className="muted">Your approved primary terms are stored. Source selection is the next setup step; starting collection comes later after Sources and cadence are reviewed.</p></SectionCard>}
-    <SectionCard title={text(watch.name)} description={`${text(watch.target_type, "Watch")} monitoring intent`} action={<div className="button-row"><Badge tone={health.status === "active" ? "mint" : "neutral"}>{health.status}</Badge><button className="secondary-button" type="button" onClick={onOpenReport} disabled={working}>Open Living Report</button>{health.status === "active" && <button className="quiet-button" type="button" onClick={() => void onAction("pause")} disabled={working}>Pause</button>}{canResume && <button className="primary-button" type="button" onClick={() => void onAction("resume")} disabled={working}>{health.status === "paused" ? "Start Watch" : "Resume Watch"}</button>}{sources.length > 0 && <button className="secondary-button" type="button" onClick={() => void onAction("vocabulary/suggest", { limit: 20 })} disabled={working}>Suggest vocabulary</button>}</div>}>
+    <SectionCard title={text(watch.name)} description={`${text(watch.target_type, "Watch")} monitoring intent`} action={<div className="button-row" style={{ flexWrap: "wrap", justifyContent: "flex-end", minWidth: 0 }}><Badge tone={health.status === "active" ? "mint" : "neutral"}>{health.status}</Badge><button className="secondary-button" type="button" onClick={onOpenReport} disabled={working}>Open Living Report</button>{health.status === "active" && <button className="quiet-button" type="button" onClick={() => void onAction("pause")} disabled={working}>Pause</button>}{canResume && <button className="primary-button" type="button" onClick={() => void onAction("resume")} disabled={working}>{health.status === "paused" ? "Start Watch" : "Resume Watch"}</button>}{sources.length > 0 && <button className="secondary-button" type="button" onClick={() => void onAction("vocabulary/suggest", { limit: 20 })} disabled={working}>Suggest vocabulary</button>}</div>}>
       <div className="stats-grid"><Stat label="Active Sources" value={health.active_source_count} tone="mint" /><Stat label="Pending terms" value={health.pending_vocabulary_suggestion_count} tone="amber" /><Stat label="Pending Sources" value={health.pending_source_candidate_count} tone="amber" /><Stat label="Last successful collection" value={health.last_success ? formatDate(health.last_success) : watch.status === "paused" ? "Not started" : "None yet"} /><Stat label="Next run" value={formatDate(text(health.next_scheduled_run, "Not scheduled"))} /></div>
       <form className="inline-form" onSubmit={onSave}><label htmlFor="selected-watch-name">Edit name</label><input id="selected-watch-name" value={name} onChange={(event) => setName(event.target.value)} /><button className="secondary-button" type="submit" disabled={working}>Save</button></form>
       {health.last_error && <p className="status-note">Recent error: {health.last_error}</p>}
     </SectionCard>
+    {watch.research_context && <QuestionResearchContext context={watch.research_context} working={working} onPursue={onPursueQuestion} />}
     {review && <SectionCard title="Review before Start" description="Newsroom will start only from this saved interest, approved scope, Sources, cadence, and budget mode. Starting activates existing Monitors; it does not claim that a result is ready.">
       <div className="stats-grid"><Stat label="Saved interest" value={review.interest || "Not recorded"} /><Stat label="Approved terms" value={review.approved_terms.length} tone={review.approved_terms.length ? "mint" : "amber"} /><Stat label="Cadence" value={cadenceLabel(review.cadence.base_cadence_seconds)} /><Stat label="Budget mode" value={review.paid_mode === "zero-paid" ? "Zero-paid" : "Configured paid budget"} tone={review.paid_mode === "zero-paid" ? "mint" : "amber"} /></div>
       <div className="content-grid">
@@ -750,12 +1292,10 @@ function WatchDetail({ watch, health, name, setName, term, setTerm, kind, setKin
       {(progress.state === "error" || progress.state === "deferred") && <p className="status-note">Your setup is preserved. Review the Source configuration and use the existing Watch controls to recover; Newsroom will not label this attempt successful until backend state confirms it.</p>}
     </SectionCard>}
     {watch.target_type === "topic" && <SectionCard title="Confirmed primary scope" description="These exact Topic terms are active monitoring scope. AST-24 does not generate or preapprove additional semantics.">{primaryTerms.length ? <div className="resource-list">{primaryTerms.map((item) => <div className="resource-row" key={item.id}><span><strong>{text(item.term)}</strong><small>{text(item.term_type, "include")} · {text(item.concept_kind, "term")}</small></span><Badge tone="mint">confirmed</Badge></div>)}</div> : <EmptyState title="No primary terms" description="This Topic has no confirmed primary scope. Edit the Topic vocabulary before relying on it for monitoring." />}</SectionCard>}
+    <TerminologyReview watch={watch} vocabulary={vocabulary} aiStatus={aiStatus} aiStatusError={aiStatusError} suggestionError={suggestionError} working={working} onSuggest={onSuggest} onAdd={onAddTerm} onReview={onReviewVocabulary} />
     <SourceSetup working={working} onCreate={onAddSource} />
-    <div className="content-grid">
-      <SectionCard title="Additional vocabulary" description="Approved Watch vocabulary affects future monitoring; suggestions remain inert until reviewed."><form className="inline-form" onSubmit={onAddTerm}><label htmlFor="watch-term">Add term</label><input id="watch-term" value={term} onChange={(event) => setTerm(event.target.value)} placeholder="Additional alias or exclusion" /><select aria-label="Vocabulary kind" value={kind} onChange={(event) => setKind(event.target.value)}><option value="alias">Alias</option><option value="synonym">Synonym</option><option value="acronym">Acronym</option><option value="acronym_expansion">Acronym expansion</option><option value="include">Include</option><option value="exclude">Exclude</option></select><button className="secondary-button" type="submit" disabled={working}>Add</button></form>{vocabulary.length ? <div className="resource-list">{vocabulary.map((item) => <div className="resource-row" key={item.id}><span><strong>{text(item.term)}</strong><small>{text(item.kind)} · {text(item.origin)} · {text(item.status)}</small></span>{item.status === "suggested" && <div className="button-row"><button className="secondary-button" type="button" onClick={() => void onReview(`vocabulary/${item.id}`, "approved")} disabled={working}>Approve</button><button className="quiet-button" type="button" onClick={() => void onReview(`vocabulary/${item.id}`, "rejected")} disabled={working}>Reject</button></div>}</div>)}</div> : <EmptyState title="No additional vocabulary" description="The confirmed Topic terms above are enough for the paused draft. Additional vocabulary can be reviewed later." />}</SectionCard>
-      <SectionCard title="Source previews" description="Review each candidate before attaching it. Approval reuses an existing shared Source when possible; rejection keeps the decision without attaching anything.">{candidates.length ? <div className="resource-list">{candidates.map((item) => <div className="resource-row" key={item.id}><span><strong>{text(item.name)}</strong><small>{text(item.homepage_url)} · {text(item.discovery_method)} · {text(item.rationale)}</small></span><div className="button-row"><Badge tone={item.status === "approved" ? "mint" : item.status === "rejected" ? "neutral" : "amber"}>{item.status === "suggested" ? "preview" : text(item.status)}</Badge>{item.status === "suggested" && <><button className="secondary-button" type="button" onClick={() => void onReview(`source-candidates/${item.id}`, "approved")} disabled={working}>Approve</button><button className="quiet-button" type="button" onClick={() => void onReview(`source-candidates/${item.id}`, "rejected")} disabled={working}>Reject</button></>}</div></div>)}</div> : <EmptyState title="No Source previews" description={isUnstartedDraft ? "Search or preview a Source above. Nothing is attached or collecting yet." : "Run Source discovery when a Watch has relevant corpus state."} />}</SectionCard>
-    </div>
+    <SourceRecommendations candidates={candidates} health={health} isUnstartedDraft={isUnstartedDraft} working={working} onDiscover={() => onAction("discover-sources", { limit: 25 })} onReview={onReview} />
     <CadenceSetup watch={watch} health={health} policy={watch.policy} working={working} onSave={onUpdateCadence} />
-    <SectionCard title="Attached Sources" description="Approved Sources use the normal Monitor acquisition path. Detach removes only this Watch relationship; the shared Source and its history stay intact.">{sources.length ? <div className="resource-list">{sources.map((item) => <div className="resource-row" key={text(item.source?.id)}><span><strong>{text(item.source?.name)}</strong><small>{text(item.source?.domain)} · next {formatDate(text(item.monitor?.next_check_at, "Not scheduled"))}</small></span><div className="button-row"><Badge tone={item.monitor?.enabled ? "mint" : "neutral"}>{item.monitor?.enabled ? "enabled" : "paused"}</Badge><button className="quiet-button" type="button" onClick={() => void onDetachSource(text(item.source?.id, ""))} disabled={working}>Detach</button></div></div>)}</div> : <EmptyState title="No attached Sources" description={isUnstartedDraft ? "Your Watch is safely paused. Add Sources is next; nothing is collecting yet." : "Approve a Source candidate to start normal acquisition."} />}</SectionCard>
+    <AttachedSources sources={sources} sourceHealth={sourceHealth} working={working} onDetach={onDetachSource} onRetry={onRetrySource} />
   </>;
 }

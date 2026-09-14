@@ -9,10 +9,28 @@ import pytest
 from fastapi.testclient import TestClient
 
 from newsroom import storage
-from newsroom.ai import AIRouter, CapabilityBundle, RoutePolicy
+from newsroom.acquisition import AcquisitionPolicy
+from newsroom.ai import (
+    AIRouter,
+    CapabilityBundle,
+    OpenAICompatibleSourceDiscoveryProvider,
+    OpenAICompatibleVocabularyProvider,
+    RoutePolicy,
+    SourceDiscoveryOutput,
+    SourceDiscoveryRequest,
+    VocabularyRequest,
+)
 from newsroom.app import create_app
 from newsroom.config import RuntimeConfig
-from newsroom.domain import CoreService, DomainConflict, DomainNotFound, DomainValidation
+from newsroom.domain import (
+    AIConfigurationService,
+    CoreService,
+    DomainConflict,
+    DomainNotFound,
+    DomainValidation,
+    InMemoryCredentialStore,
+)
+from newsroom.article_analysis import AIConfigurationResolver
 from newsroom.evidence_promotion import ArticleAnalysisPromotionService
 from newsroom.integrity import check_database
 import newsroom.intelligent_monitoring as intelligent_monitoring
@@ -900,6 +918,57 @@ def test_rejected_vocabulary_is_recorded_and_not_resurrected_by_a_later_run(tmp_
         watches.review_vocabulary(watch["id"], target["id"], "approved", "editor")
 
 
+def test_ambiguous_provider_terms_remain_rejected_on_later_runs(tmp_db):
+    _core, topic, policy = _fixture(tmp_db)
+    watches = WatchService(tmp_db)
+    watch = _watch(watches, topic, policy)
+
+    def provider(_context):
+        return [
+            {
+                "term": "unidentified aerial phenomena",
+                "kind": "synonym",
+                "expansion_of": "UAP",
+                "rationale": "Historical aerial wording",
+            },
+            {
+                "term": "Jordan",
+                "kind": "related",
+                "rationale": "Ambiguous person or company homonym; review carefully",
+            },
+            {
+                "term": "Mercury",
+                "kind": "related",
+                "rationale": "Unrelated planet or element meaning",
+            },
+        ]
+
+    first = watches.suggest_vocabulary(watch["id"], limit=20, provider=provider)
+    ambiguous = [
+        item
+        for item in first
+        if item["origin"] == "ai" and item["term"] in {"Jordan", "Mercury"}
+    ]
+    assert {item["term"] for item in ambiguous} == {"Jordan", "Mercury"}
+    for item in ambiguous:
+        rejected = watches.review_vocabulary(
+            watch["id"], item["id"], "rejected", "editor"
+        )
+        assert rejected["enabled"] == 0
+
+    second = watches.suggest_vocabulary(watch["id"], limit=20, provider=provider)
+
+    for term in ("Jordan", "Mercury"):
+        matches = [item for item in second if item["term"] == term]
+        assert len(matches) == 1
+        assert matches[0]["status"] == "rejected"
+        assert matches[0]["enabled"] == 0
+    assert any(
+        item["term"] == "unidentified aerial phenomena" and item["status"] == "suggested"
+        for item in second
+    )
+
+
 def test_invalid_provider_output_leaves_the_watch_unchanged(tmp_db):
     _core, topic, policy = _fixture(tmp_db)
     watches = WatchService(tmp_db)
@@ -1391,8 +1460,11 @@ def test_discovery_job_runs_through_the_real_worker(tmp_db):
     completed = _run_worker(tmp_db, maintenance.handlers())
     assert completed["status"] == "succeeded"
     assert completed["result"]["outcome"] == "completed"
+    assert completed["result"]["corpus_state"] == "populated"
     assert completed["result"]["candidate_count"] >= 1
     assert completed["result"]["external_requests"] == 0
+    assert completed["result"]["provider_requests"] == 0
+    assert completed["result"]["fallback_reason"] is None
 
     candidates = watches.get(watch["id"])["source_candidates"]
     assert any(item["discovery_method"] == "existing_source" for item in candidates)
@@ -1488,7 +1560,48 @@ def test_empty_discovery_job_succeeds_rather_than_failing(tmp_db):
     completed = _run_worker(tmp_db, maintenance.handlers())
 
     assert completed["status"] == "succeeded"
+    assert completed["result"]["outcome"] == "manual_fallback"
+    assert completed["result"]["corpus_state"] == "empty"
     assert completed["result"]["candidate_count"] == 0
+    assert completed["result"]["provider_requests"] == 0
+    assert completed["result"]["fallback_reason"] == "route_unavailable"
+
+
+def test_discovery_job_passes_stable_work_id_and_live_cancellation_check(tmp_db):
+    _core, topic, policy = _fixture(tmp_db)
+    watches = WatchService(tmp_db)
+    maintenance = WatchMaintenanceService(tmp_db, watches=watches)
+    watch = _watch(watches, topic, policy)
+    job = maintenance.enqueue_discovery(watch["id"])
+    queue = JobService(tmp_db)
+    observed = {}
+
+    def cancelling_discover(
+        _watch_id, *, limit=25, work_id=None, cancel_check=None
+    ):
+        observed["limit"] = limit
+        observed["work_id"] = work_id
+        assert cancel_check is not None
+        queue.cancel(job["id"], reason="stop discovery")
+        assert cancel_check() is True
+        return {
+            "watch_id": watch["id"],
+            "outcome": "completed",
+            "corpus_state": "empty",
+            "methods": [],
+            "candidates": [],
+            "candidate_count": 0,
+            "external_requests": 0,
+            "provider_requests": 0,
+            "fallback_reason": None,
+        }
+
+    watches.discover_sources = cancelling_discover  # type: ignore[method-assign]
+    completed = _run_worker(tmp_db, maintenance.handlers())
+
+    assert observed == {"limit": 25, "work_id": job["id"]}
+    assert completed["status"] == "cancelled"
+    assert completed["result"] is None
 
 
 def test_discovery_job_failure_is_retryable_and_records_the_error(tmp_db):
@@ -1500,7 +1613,7 @@ def test_discovery_job_failure_is_retryable_and_records_the_error(tmp_db):
         watches, watch["id"], name="NASA News", homepage="https://www.nasa.gov/news/"
     )
 
-    def exploding(_watch_id, *, limit=25):
+    def exploding(_watch_id, *, limit=25, work_id=None, cancel_check=None):
         raise RuntimeError("search backend unavailable")
 
     watches.discover_sources = exploding  # type: ignore[method-assign]
@@ -1571,6 +1684,305 @@ class _VocabularyProvider:
         }
 
 
+def test_openai_compatible_vocabulary_provider_requests_bounded_structured_output():
+    from types import SimpleNamespace
+
+    from newsroom.article_analysis import AnalysisProviderConfig
+
+    class FakeCompletions:
+        def __init__(self):
+            self.kwargs = None
+
+        def create(self, **kwargs):
+            self.kwargs = kwargs
+            return SimpleNamespace(
+                choices=[
+                    SimpleNamespace(
+                        message=SimpleNamespace(
+                            content=json.dumps(
+                                {
+                                    "suggestions": [
+                                        {
+                                            "term": "unidentified flying object",
+                                            "kind": "synonym",
+                                            "expansion_of": "UAP",
+                                            "rationale": "Historical reporting term",
+                                        }
+                                    ],
+                                    "confidence": 0.94,
+                                }
+                            )
+                        )
+                    )
+                ],
+                usage=SimpleNamespace(total_tokens=23, prompt_tokens=17, completion_tokens=6),
+            )
+
+    completions = FakeCompletions()
+    client = SimpleNamespace(chat=SimpleNamespace(completions=completions))
+    provider = OpenAICompatibleVocabularyProvider(
+        AnalysisProviderConfig(
+            provider="openai",
+            api_key="provider-secret",
+            base_url="https://api.example.test/v1",
+            model="vocabulary-model",
+        ),
+        client_factory=lambda _config: client,
+    )
+
+    result = provider.suggest(
+        VocabularyRequest(
+            watch_name="UAP disclosure",
+            target_type="topic",
+            approved_terms=("UAP", "official reporting"),
+            max_suggestions=5,
+        )
+    )
+
+    assert result["suggestions"][0]["term"] == "unidentified flying object"
+    assert provider.last_usage == {
+        "input_tokens": 17,
+        "output_tokens": 6,
+        "token_units": 23,
+        "cost_usd": None,
+    }
+    assert completions.kwargs["model"] == "vocabulary-model"
+    assert completions.kwargs["response_format"]["type"] == "json_schema"
+    assert completions.kwargs["response_format"]["json_schema"]["name"] == "vocabulary"
+    prompt = json.dumps(completions.kwargs["messages"])
+    assert "UAP" in prompt
+    assert "provider-secret" not in prompt
+
+
+def test_managed_vocabulary_route_uses_shared_resolver_and_durable_admission(tmp_db):
+    core, topic, policy = _fixture(tmp_db)
+    core.create_vocabulary(topic["id"], {"term": "UAP", "term_type": "include"})
+    policy = MonitoringPolicyService(tmp_db).update(
+        policy["id"], {"paid_budget_usd": 0.01}
+    )
+    store = InMemoryCredentialStore()
+    configuration = AIConfigurationService(
+        tmp_db,
+        credential_store=store,
+        credential_namespace="installation-vocabulary-test",
+    )
+    connection = configuration.create_connection(
+        {
+            "display_name": "Vocabulary gateway",
+            "base_url": "https://api.example.test/v1",
+            "model": "vocabulary-model",
+        }
+    )
+    saved = configuration.set_credential(
+        connection["id"], "vocabulary-secret", expected_revision=1
+    )
+    enabled = configuration.update_connection(
+        connection["id"], {"enabled": True}, expected_revision=saved["revision"]
+    )
+    configuration.set_route(
+        "vocabulary",
+        provider_route="connection",
+        connection_id=connection["id"],
+        expected_generation=enabled["generation"],
+    )
+    BudgetService(tmp_db).set_paid_enabled(True)
+
+    class ManagedVocabularyProvider:
+        model_name = "managed-vocabulary-test"
+
+        def __init__(self):
+            self.calls = 0
+            self.request = None
+
+        def suggest(self, request):
+            self.calls += 1
+            self.request = request
+            return {
+                "suggestions": [
+                    {
+                        "term": "unidentified flying object",
+                        "kind": "synonym",
+                        "expansion_of": "UAP",
+                        "rationale": "Historical aerial reporting wording",
+                    },
+                    {
+                        "term": "UFO",
+                        "kind": "acronym",
+                        "expansion_of": "unidentified flying object",
+                        "rationale": "Common historical acronym",
+                    },
+                ],
+                "confidence": 0.96,
+            }
+
+    provider = ManagedVocabularyProvider()
+    resolver = AIConfigurationResolver(
+        tmp_db,
+        configuration_service=configuration,
+        vocabulary_provider_factory=lambda _config: provider,
+    )
+    watches = WatchService(tmp_db, configuration_resolver=resolver)
+    watch = _watch(watches, topic, policy)
+
+    suggestions = watches.suggest_vocabulary(watch["id"], limit=20, work_id="vocabulary-run-1")
+
+    assert provider.calls == 1
+    assert provider.request.watch_name == watch["name"]
+    assert provider.request.target_type == "topic"
+    assert "UAP" in provider.request.approved_terms
+    ai_suggestions = [item for item in suggestions if item["origin"] == "ai"]
+    assert {item["term"] for item in ai_suggestions} == {
+        "unidentified flying object",
+        "UFO",
+    }
+    assert all(item["status"] == "suggested" and item["enabled"] == 0 for item in ai_suggestions)
+
+    conn = storage.connect(tmp_db)
+    try:
+        reservation = conn.execute(
+            "SELECT * FROM provider_usage WHERE capability = 'vocabulary'"
+        ).fetchone()
+    finally:
+        conn.close()
+    assert reservation is not None
+    assert reservation["request_type"] == "ai:paid"
+    assert json.loads(reservation["outcome"])["status"] == "succeeded"
+
+
+def test_managed_vocabulary_provider_initialization_failure_keeps_manual_fallback(tmp_db):
+    _core, topic, policy = _fixture(tmp_db)
+    policy = MonitoringPolicyService(tmp_db).update(
+        policy["id"], {"paid_budget_usd": 0.01}
+    )
+    configuration = AIConfigurationService(tmp_db)
+    connection = configuration.create_connection(
+        {
+            "display_name": "Unavailable vocabulary gateway",
+            "base_url": "http://127.0.0.1:9000/v1",
+            "model": "vocabulary-model",
+            "credential_required": False,
+        }
+    )
+    enabled = configuration.update_connection(
+        connection["id"], {"enabled": True}, expected_revision=connection["revision"]
+    )
+    configuration.set_route(
+        "vocabulary",
+        provider_route="connection",
+        connection_id=connection["id"],
+        expected_generation=enabled["generation"],
+    )
+    BudgetService(tmp_db).set_paid_enabled(True)
+
+    def broken_factory(_config):
+        raise RuntimeError("compatible provider unavailable")
+
+    watches = WatchService(
+        tmp_db,
+        configuration_resolver=AIConfigurationResolver(
+            tmp_db,
+            configuration_service=configuration,
+            vocabulary_provider_factory=broken_factory,
+        ),
+    )
+    watch = _watch(watches, topic, policy)
+
+    suggestions = watches.suggest_vocabulary(watch["id"], limit=20)
+
+    assert suggestions
+    assert all(item["origin"] != "ai" for item in suggestions)
+    assert watches.get(watch["id"])["status"] == "active"
+
+
+def test_synchronous_vocabulary_runs_get_distinct_durable_work_ids(tmp_db):
+    _core, topic, policy = _fixture(tmp_db)
+    policy = MonitoringPolicyService(tmp_db).update(
+        policy["id"], {"paid_budget_usd": 0.02}
+    )
+    provider = _VocabularyProvider()
+    BudgetService(tmp_db).set_paid_enabled(True)
+    router = AIRouter(
+        local=CapabilityBundle(),
+        paid=CapabilityBundle(vocabulary=provider),
+        policy=RoutePolicy(
+            local_enabled=False,
+            paid_enabled=True,
+            max_paid_calls=2,
+            max_paid_cost_usd=0.02,
+            max_paid_calls_per_work=1,
+            max_paid_cost_usd_per_work=0.01,
+            paid_request_cost_usd=0.01,
+        ),
+        db_path=tmp_db,
+    )
+    watches = WatchService(tmp_db, router=router)
+    watch = _watch(watches, topic, policy)
+
+    watches.suggest_vocabulary(watch["id"], limit=20)
+    watches.suggest_vocabulary(watch["id"], limit=20)
+
+    assert provider.calls == 2
+    conn = storage.connect(tmp_db)
+    try:
+        reservations = conn.execute(
+            "SELECT outcome FROM provider_usage WHERE capability = 'vocabulary' "
+            "AND request_type = 'ai:paid' ORDER BY created_at, id"
+        ).fetchall()
+    finally:
+        conn.close()
+    assert len(reservations) == 2
+    work_ids = {json.loads(row["outcome"])["work_id"] for row in reservations}
+    assert len(work_ids) == 2
+    assert all(work_id.startswith(f"watch:{watch['id']}:") for work_id in work_ids)
+
+
+def test_managed_vocabulary_receives_approved_watch_terms_as_context(tmp_db):
+    _core, topic, policy = _fixture(tmp_db)
+    policy = MonitoringPolicyService(tmp_db).update(
+        policy["id"], {"paid_budget_usd": 0.01}
+    )
+
+    class ContextProvider:
+        def __init__(self):
+            self.request = None
+
+        def suggest(self, request):
+            self.request = request
+            return {"suggestions": [], "confidence": 1.0}
+
+    provider = ContextProvider()
+    BudgetService(tmp_db).set_paid_enabled(True)
+    router = AIRouter(
+        local=CapabilityBundle(),
+        paid=CapabilityBundle(vocabulary=provider),
+        policy=RoutePolicy(
+            local_enabled=False,
+            paid_enabled=True,
+            max_paid_calls=1,
+            max_paid_cost_usd=0.01,
+            max_paid_calls_per_work=1,
+            max_paid_cost_usd_per_work=0.01,
+            paid_request_cost_usd=0.01,
+        ),
+        db_path=tmp_db,
+    )
+    watches = WatchService(tmp_db, router=router)
+    watch = _watch(watches, topic, policy)
+    watches.add_vocabulary(
+        watch["id"],
+        {
+            "term": "unidentified aerial phenomena",
+            "kind": "synonym",
+            "rationale": "Approved historical wording",
+        },
+    )
+
+    watches.suggest_vocabulary(watch["id"], limit=20)
+
+    assert provider.request is not None
+    assert "unidentified aerial phenomena" in provider.request.approved_terms
+
+
 def test_provider_vocabulary_uses_airouter_and_existing_paid_controls(tmp_db):
     _core, topic, policy = _fixture(tmp_db)
     policy = MonitoringPolicyService(tmp_db).update(
@@ -1619,6 +2031,50 @@ def test_provider_vocabulary_is_not_called_when_paid_budget_is_disabled(tmp_db):
     assert provider.calls == 0
     assert suggestions
     assert all(item["origin"] != "ai" for item in suggestions)
+
+
+def test_low_confidence_structured_vocabulary_preserves_manual_configuration(tmp_db):
+    _core, topic, policy = _fixture(tmp_db)
+    policy = MonitoringPolicyService(tmp_db).update(
+        policy["id"], {"paid_budget_usd": 0.01}
+    )
+
+    class LowConfidenceProvider:
+        def suggest(self, _request):
+            return {
+                "suggestions": [
+                    {
+                        "term": "unrelated homonym",
+                        "kind": "related",
+                        "rationale": "uncertain interpretation",
+                    }
+                ],
+                "confidence": 0.2,
+            }
+
+    BudgetService(tmp_db).set_paid_enabled(True)
+    router = AIRouter(
+        local=CapabilityBundle(),
+        paid=CapabilityBundle(vocabulary=LowConfidenceProvider()),
+        policy=RoutePolicy(
+            local_enabled=False,
+            paid_enabled=True,
+            max_paid_calls=1,
+            max_paid_cost_usd=0.01,
+            max_paid_calls_per_work=1,
+            max_paid_cost_usd_per_work=0.01,
+            paid_request_cost_usd=0.01,
+        ),
+        db_path=tmp_db,
+    )
+    watches = WatchService(tmp_db, router=router)
+    watch = _watch(watches, topic, policy)
+
+    suggestions = watches.suggest_vocabulary(watch["id"], limit=20, work_id="low-confidence")
+
+    assert suggestions
+    assert all(item["origin"] != "ai" for item in suggestions)
+    assert all(item["status"] == "suggested" and item["enabled"] == 0 for item in suggestions)
 
 
 def test_watch_query_plan_is_bounded_and_excludes_pending_terms(tmp_db):
@@ -1757,6 +2213,11 @@ def test_watch_management_api_exposes_health_and_bounded_collections(tmp_path):
             f"/api/v1/watches/{watch_id}/vocabulary?page_size=1"
         )
         plan = client.get(f"/api/v1/watches/{watch_id}/query-plan?limit=100")
+        discovery = client.post(
+            f"/api/v1/watches/{watch_id}/discover-sources",
+            json={"limit": 25},
+            headers=csrf,
+        )
 
         assert health.status_code == 200
         assert health.json()["watch_id"] == watch_id
@@ -1764,6 +2225,11 @@ def test_watch_management_api_exposes_health_and_bounded_collections(tmp_path):
         assert vocabulary.json()["page_size"] == 1
         assert plan.status_code == 200
         assert plan.json()["variant_count"] <= 12
+        assert discovery.status_code == 200
+        assert discovery.json()["watch_id"] == watch_id
+        assert discovery.json()["outcome"] == "manual_fallback"
+        assert discovery.json()["corpus_state"] == "empty"
+        assert discovery.json()["provider_requests"] == 0
 
 
 def test_concurrent_candidate_creation_and_approval_converge(tmp_db):
@@ -2081,3 +2547,608 @@ def test_watch_source_preserves_phase23_evidence_story_report_alert_chain(tmp_db
     assert alert_outcome["stage_status"] == "completed"
     assert len(alert_outcome["alert_ids"]) == len(alert_outcome["delivery_ids"]) == 1
     assert check_database(tmp_db).ok
+
+
+# ---------------------------------------------------------------------------
+# AST-31: bounded fresh-corpus source candidates
+# ---------------------------------------------------------------------------
+
+
+class _SourceDiscoveryProvider:
+    model_name = "source-discovery-test-model"
+
+    def __init__(self, payload=None, error=None):
+        self.payload = payload or {"candidates": []}
+        self.error = error
+        self.calls = 0
+        self.requests = []
+
+    def suggest(self, request):
+        self.calls += 1
+        self.requests.append(request)
+        if self.error is not None:
+            raise self.error
+        return self.payload
+
+
+def _source_discovery_router(
+    db_path,
+    provider,
+    *,
+    max_paid_calls=1,
+    max_paid_cost_usd=0.01,
+    max_paid_calls_per_work=1,
+    max_paid_cost_usd_per_work=0.01,
+):
+    return AIRouter(
+        local=CapabilityBundle(),
+        paid=CapabilityBundle(source_discovery=provider),
+        policy=RoutePolicy(
+            local_enabled=False,
+            paid_enabled=True,
+            max_paid_calls=max_paid_calls,
+            max_paid_cost_usd=max_paid_cost_usd,
+            max_paid_calls_per_work=max_paid_calls_per_work,
+            max_paid_cost_usd_per_work=max_paid_cost_usd_per_work,
+            paid_request_cost_usd=0.01,
+        ),
+        db_path=db_path,
+    )
+
+
+def test_source_discovery_request_and_output_are_strictly_bounded():
+    request = SourceDiscoveryRequest(
+        watch_name="UAP disclosure",
+        target_type="topic",
+        approved_terms=("UAP",),
+        excluded_terms=("fiction",),
+        max_candidates=10,
+    )
+    assert request.max_candidates == 10
+
+    with pytest.raises(ValueError):
+        SourceDiscoveryRequest(
+            watch_name="UAP disclosure",
+            target_type="topic",
+            approved_terms=("UAP",),
+            excluded_terms=(),
+            max_candidates=11,
+        )
+
+    with pytest.raises(Exception):
+        SourceDiscoveryOutput.model_validate(
+            {
+                "candidates": [
+                    {
+                        "name": "Unsafe extra-field candidate",
+                        "homepage_url": "https://example.test/",
+                        "rationale": "Candidate rationale",
+                        "limitations": "Unverified",
+                        "unexpected": "must be rejected",
+                    }
+                ]
+            }
+        )
+
+    with pytest.raises(Exception):
+        SourceDiscoveryOutput.model_validate(
+            {
+                "candidates": [
+                    {
+                        "name": "Missing URL candidate",
+                        "rationale": "Candidate rationale",
+                        "limitations": "Unverified",
+                    }
+                ]
+            }
+        )
+
+
+def test_openai_compatible_source_discovery_provider_requests_bounded_structured_output():
+    from types import SimpleNamespace
+
+    from newsroom.article_analysis import AnalysisProviderConfig
+
+    class FakeCompletions:
+        def __init__(self):
+            self.kwargs = None
+
+        def create(self, **kwargs):
+            self.kwargs = kwargs
+            return SimpleNamespace(
+                choices=[
+                    SimpleNamespace(
+                        message=SimpleNamespace(
+                            content=json.dumps(
+                                {
+                                    "candidates": [
+                                        {
+                                            "name": "UAP Research Center",
+                                            "homepage_url": "https://research.example.test/",
+                                            "rationale": "Specialist reporting source.",
+                                            "limitations": "Unverified model suggestion.",
+                                        }
+                                    ]
+                                }
+                            )
+                        )
+                    )
+                ],
+                usage=SimpleNamespace(
+                    total_tokens=23, prompt_tokens=17, completion_tokens=6
+                ),
+            )
+
+    completions = FakeCompletions()
+    client = SimpleNamespace(chat=SimpleNamespace(completions=completions))
+    provider = OpenAICompatibleSourceDiscoveryProvider(
+        AnalysisProviderConfig(
+            provider="openai",
+            api_key="provider-secret",
+            base_url="https://api.example.test/v1",
+            model="source-model",
+        ),
+        client_factory=lambda _config: client,
+    )
+
+    result = provider.suggest(
+        SourceDiscoveryRequest(
+            watch_name="UAP disclosure",
+            target_type="topic",
+            approved_terms=("UAP",),
+            excluded_terms=("fiction",),
+            max_candidates=5,
+        )
+    )
+
+    assert result["candidates"][0]["name"] == "UAP Research Center"
+    assert provider.last_usage == {
+        "input_tokens": 17,
+        "output_tokens": 6,
+        "token_units": 23,
+        "cost_usd": None,
+    }
+    assert completions.kwargs["model"] == "source-model"
+    assert completions.kwargs["response_format"]["type"] == "json_schema"
+    assert (
+        completions.kwargs["response_format"]["json_schema"]["name"]
+        == "source_discovery"
+    )
+    prompt = json.dumps(completions.kwargs["messages"])
+    assert "UAP" in prompt
+    assert "fiction" in prompt
+    assert "provider-secret" not in prompt
+
+
+@pytest.mark.parametrize(
+    ("global_paid_enabled", "watch_budget", "fallback_reason"),
+    [
+        (False, 0.01, "paid_disabled"),
+        (True, 0.0, "budget_exhausted"),
+    ],
+)
+def test_source_discovery_falls_back_without_call_when_route_is_unavailable(
+    tmp_db, global_paid_enabled, watch_budget, fallback_reason
+):
+    core, topic, policy = _fixture(tmp_db)
+    core.create_vocabulary(topic["id"], {"term": "UAP", "term_type": "include"})
+    policy = MonitoringPolicyService(tmp_db).update(
+        policy["id"], {"paid_budget_usd": watch_budget}
+    )
+    provider = _SourceDiscoveryProvider(
+        {
+            "candidates": [
+                {
+                    "name": "Must not be called",
+                    "homepage_url": "https://unused.example.test/",
+                    "rationale": "This route is blocked before invocation.",
+                    "limitations": "Unverified.",
+                }
+            ]
+        }
+    )
+    BudgetService(tmp_db).set_paid_enabled(global_paid_enabled)
+    watches = WatchService(tmp_db, router=_source_discovery_router(tmp_db, provider))
+    watch = _watch(watches, topic, policy)
+
+    result = watches.discover_sources(watch["id"])
+
+    assert provider.calls == 0
+    assert result["outcome"] == "manual_fallback"
+    assert result["fallback_reason"] == fallback_reason
+    assert result["provider_requests"] == 0
+    assert result["candidate_count"] == 0
+    conn = storage.connect(tmp_db)
+    try:
+        assert conn.execute("SELECT COUNT(*) FROM source_candidates").fetchone()[0] == 0
+        assert conn.execute("SELECT COUNT(*) FROM watch_sources").fetchone()[0] == 0
+        assert conn.execute("SELECT COUNT(*) FROM documents").fetchone()[0] == 0
+    finally:
+        conn.close()
+
+
+@pytest.mark.parametrize(
+    ("homepage_url", "fallback_reason"),
+    [
+        ("https://bad path.example.test/", "provider_failed"),
+        ("http://127.0.0.1/admin", "no_candidates"),
+        ("https://blocked.example.test/news", "no_candidates"),
+    ],
+)
+def test_source_discovery_rejects_malformed_private_and_denied_provider_urls(
+    tmp_db, homepage_url, fallback_reason
+):
+    core, topic, policy = _fixture(tmp_db)
+    core.create_vocabulary(topic["id"], {"term": "UAP", "term_type": "include"})
+    policy = MonitoringPolicyService(tmp_db).update(
+        policy["id"], {"paid_budget_usd": 0.01}
+    )
+    provider = _SourceDiscoveryProvider(
+        {
+            "candidates": [
+                {
+                    "name": "Unsafe recommendation",
+                    "homepage_url": homepage_url,
+                    "rationale": "The URL must not activate collection.",
+                    "limitations": "Unverified.",
+                }
+            ]
+        }
+    )
+    BudgetService(tmp_db).set_paid_enabled(True)
+    watches = WatchService(
+        tmp_db,
+        router=_source_discovery_router(tmp_db, provider),
+        acquisition_policy=AcquisitionPolicy(
+            denied_domains={"blocked.example.test"}
+        ),
+    )
+    watch = _watch(watches, topic, policy)
+
+    result = watches.discover_sources(watch["id"])
+
+    assert provider.calls == 1
+    assert result["outcome"] == "manual_fallback"
+    assert result["fallback_reason"] == fallback_reason
+    assert result["provider_requests"] == 1
+    assert result["candidate_count"] == 0
+    conn = storage.connect(tmp_db)
+    try:
+        assert conn.execute("SELECT COUNT(*) FROM source_candidates").fetchone()[0] == 0
+        assert conn.execute("SELECT COUNT(*) FROM sources").fetchone()[0] == 0
+        assert conn.execute("SELECT COUNT(*) FROM documents").fetchone()[0] == 0
+    finally:
+        conn.close()
+
+
+def test_managed_source_discovery_route_uses_resolver_factory_and_durable_admission(
+    tmp_db,
+):
+    core, topic, policy = _fixture(tmp_db)
+    core.create_vocabulary(topic["id"], {"term": "UAP", "term_type": "include"})
+    policy = MonitoringPolicyService(tmp_db).update(
+        policy["id"], {"paid_budget_usd": 0.01}
+    )
+    configuration = AIConfigurationService(
+        tmp_db,
+        credential_store=InMemoryCredentialStore(),
+        credential_namespace="installation-source-discovery-test",
+    )
+    connection = configuration.create_connection(
+        {
+            "display_name": "Source discovery gateway",
+            "base_url": "https://api.example.test/v1",
+            "model": "source-model",
+        }
+    )
+    saved = configuration.set_credential(
+        connection["id"], "source-discovery-secret", expected_revision=1
+    )
+    enabled = configuration.update_connection(
+        connection["id"], {"enabled": True}, expected_revision=saved["revision"]
+    )
+    routed = configuration.set_route(
+        "source_discovery",
+        provider_route="connection",
+        connection_id=connection["id"],
+        expected_generation=enabled["generation"],
+    )
+    BudgetService(tmp_db).set_paid_enabled(True)
+
+    class ManagedSourceProvider:
+        model_name = "managed-source-test"
+
+        def __init__(self):
+            self.calls = 0
+            self.request = None
+
+        def suggest(self, request):
+            self.calls += 1
+            self.request = request
+            return {
+                "candidates": [
+                    {
+                        "name": "Managed UAP Research",
+                        "homepage_url": "https://managed.example.test/",
+                        "rationale": "Bounded managed recommendation.",
+                        "authority_context": "Potential specialist publication.",
+                        "limitations": "Unverified until review and acquisition.",
+                    }
+                ]
+            }
+
+    provider = ManagedSourceProvider()
+    resolver = AIConfigurationResolver(
+        tmp_db,
+        configuration_service=configuration,
+        source_discovery_provider_factory=lambda _config: provider,
+    )
+    watches = WatchService(tmp_db, configuration_resolver=resolver)
+    watch = _watch(watches, topic, policy)
+
+    result = watches.discover_sources(watch["id"])
+
+    assert provider.calls == 1
+    assert provider.request.watch_name == watch["name"]
+    assert "UAP" in provider.request.approved_terms
+    assert result["outcome"] == "completed"
+    candidate = result["candidates"][0]
+    assert candidate["provenance"]["provider_route"] == "paid"
+    assert candidate["provenance"]["config_generation"] == routed["generation"]
+    conn = storage.connect(tmp_db)
+    try:
+        usage = conn.execute(
+            "SELECT * FROM provider_usage WHERE capability = 'source_discovery'"
+        ).fetchone()
+    finally:
+        conn.close()
+    assert usage is not None
+    assert usage["request_type"] == "ai:paid"
+    assert json.loads(usage["outcome"])["status"] == "succeeded"
+
+
+def test_empty_corpus_uses_bounded_source_discovery_and_server_provenance(tmp_db):
+    core, topic, policy = _fixture(tmp_db)
+    core.create_vocabulary(topic["id"], {"term": "UAP", "term_type": "include"})
+    policy = MonitoringPolicyService(tmp_db).update(
+        policy["id"], {"paid_budget_usd": 0.01}
+    )
+    provider = _SourceDiscoveryProvider(
+        {
+            "candidates": [
+                {
+                    "name": "UAP Research Center",
+                    "homepage_url": "https://research.example.test/news/",
+                    "feed_url": "https://research.example.test/feed.xml",
+                    "rationale": "Publishes reporting related to the approved need.",
+                    "authority_context": "Potential specialist publication.",
+                    "limitations": "The model did not independently verify this source.",
+                }
+            ]
+        }
+    )
+    BudgetService(tmp_db).set_paid_enabled(True)
+    watches = WatchService(tmp_db, router=_source_discovery_router(tmp_db, provider))
+    watch = _watch(watches, topic, policy)
+
+    result = watches.discover_sources(watch["id"])
+
+    assert provider.calls == 1
+    assert result["outcome"] == "completed"
+    assert result["corpus_state"] == "empty"
+    assert result["provider_requests"] == 1
+    assert result["external_requests"] == 0
+    assert result["fallback_reason"] is None
+    assert "ai_suggestion" in result["methods"]
+    assert result["candidate_count"] == 1
+    request = provider.requests[0]
+    assert request.watch_name == watch["name"]
+    assert request.target_type == "topic"
+    assert "UAP" in request.approved_terms
+    assert request.excluded_terms == ()
+    assert request.max_candidates == 10
+
+    candidate = result["candidates"][0]
+    assert candidate["status"] == "suggested"
+    assert candidate["source_id"] is None
+    assert candidate["homepage_url"] == "https://research.example.test/news"
+    assert "unverified" in candidate["limitations"].casefold()
+    assert candidate["provenance"]["kind"] == "ai_suggestion"
+    assert candidate["provenance"]["capability"] == "source_discovery"
+    assert candidate["provenance"]["trigger"] == "empty_corpus"
+    assert candidate["provenance"]["work_id"].startswith(f"watch:{watch['id']}:")
+    assert "response" not in candidate["provenance"]
+    assert "prompt" not in candidate["provenance"]
+
+    conn = storage.connect(tmp_db)
+    try:
+        assert conn.execute("SELECT COUNT(*) FROM watch_sources").fetchone()[0] == 0
+        assert conn.execute("SELECT COUNT(*) FROM documents").fetchone()[0] == 0
+        usage = conn.execute(
+            "SELECT * FROM provider_usage WHERE capability = 'source_discovery'"
+        ).fetchone()
+    finally:
+        conn.close()
+    assert usage is not None
+    assert usage["request_type"] == "ai:paid"
+    assert json.loads(usage["outcome"])["status"] == "succeeded"
+
+
+def test_populated_corpus_short_circuits_source_provider(tmp_db):
+    core, topic, policy = _fixture(tmp_db)
+    watches = WatchService(tmp_db)
+    watch = _watch(watches, topic, policy, name="Populated UAP")
+    attached = _attach_source(
+        watches, watch["id"], name="NASA News 2", homepage="https://nasa.example.test/news/"
+    )
+    other = core.create_source(
+        {
+            "name": "AARO",
+            "slug": "aaro-populated",
+            "homepage_url": "https://aaro.example.test/",
+            "source_kind": "official",
+        }
+    )
+    _relevant_document(
+        tmp_db,
+        monitor_id=attached["monitor"]["id"],
+        source_id=other["id"],
+        canonical_url="https://aaro.example.test/report-1",
+        title="AARO report",
+    )
+    provider = _SourceDiscoveryProvider(
+        {
+            "candidates": [
+                {
+                    "name": "Must not be called",
+                    "homepage_url": "https://never.example.test/",
+                    "rationale": "No provider call is allowed.",
+                    "limitations": "Unverified.",
+                }
+            ]
+        }
+    )
+    BudgetService(tmp_db).set_paid_enabled(True)
+    watches.router = _source_discovery_router(tmp_db, provider)
+
+    result = watches.discover_sources(watch["id"])
+
+    assert provider.calls == 0
+    assert result["outcome"] == "completed"
+    assert result["corpus_state"] == "populated"
+    assert result["provider_requests"] == 0
+    assert result["candidate_count"] >= 1
+    assert result["fallback_reason"] is None
+
+
+def test_feed_only_candidate_uses_feed_as_homepage_identity(tmp_db):
+    _core, topic, policy = _fixture(tmp_db)
+    watches = WatchService(tmp_db)
+    watch = _watch(watches, topic, policy)
+
+    candidate = watches.add_source_candidate(
+        watch["id"],
+        {
+            "name": "Feed-only source",
+            "feed_url": "https://feed.example.test/rss.xml",
+            "rationale": "Owner supplied feed",
+            "discovery_method": "manual",
+        },
+    )
+
+    assert candidate["homepage_url"] == "https://feed.example.test/rss.xml"
+    assert candidate["feed_url"] == "https://feed.example.test/rss.xml"
+    assert candidate["normalized_url"] == "https://feed.example.test/rss.xml"
+
+
+def test_repeated_ai_discovery_retains_rejected_candidate_identity(tmp_db):
+    _core, topic, policy = _fixture(tmp_db)
+    policy = MonitoringPolicyService(tmp_db).update(
+        policy["id"], {"paid_budget_usd": 0.02}
+    )
+    provider = _SourceDiscoveryProvider(
+        {
+            "candidates": [
+                {
+                    "name": "Retained source",
+                    "homepage_url": "https://retained.example.test/",
+                    "rationale": "First run rationale",
+                    "authority_context": "First run context",
+                    "limitations": "Unverified.",
+                }
+            ]
+        }
+    )
+    BudgetService(tmp_db).set_paid_enabled(True)
+    watches = WatchService(
+        tmp_db,
+        router=_source_discovery_router(
+            tmp_db,
+            provider,
+            max_paid_calls=2,
+            max_paid_cost_usd=0.02,
+        ),
+    )
+    watch = _watch(watches, topic, policy)
+
+    first = watches.discover_sources(watch["id"])
+    rejected = watches.review_source_candidate(
+        watch["id"], first["candidates"][0]["id"], "rejected", "editor"
+    )
+    second = watches.discover_sources(watch["id"])
+
+    assert provider.calls == 2
+    assert second["candidates"][0]["id"] == rejected["id"]
+    assert second["candidates"][0]["status"] == "rejected"
+    assert second["candidates"][0]["rationale"] == "First run rationale"
+    assert second["candidates"][0]["provenance"] == rejected["provenance"]
+    conn = storage.connect(tmp_db)
+    try:
+        count = conn.execute(
+            "SELECT COUNT(*) FROM source_candidates WHERE watch_id = ?",
+            (watch["id"],),
+        ).fetchone()[0]
+    finally:
+        conn.close()
+    assert count == 1
+
+
+def test_source_discovery_failure_is_honest_and_not_retried_by_worker(tmp_db):
+    _core, topic, policy = _fixture(tmp_db)
+    policy = MonitoringPolicyService(tmp_db).update(
+        policy["id"], {"paid_budget_usd": 0.01}
+    )
+    provider = _SourceDiscoveryProvider(error=RuntimeError("provider secret must not leak"))
+    BudgetService(tmp_db).set_paid_enabled(True)
+    watches = WatchService(tmp_db, router=_source_discovery_router(tmp_db, provider))
+    watch = _watch(watches, topic, policy)
+
+    result = watches.discover_sources(watch["id"])
+
+    assert provider.calls == 1
+    assert result["outcome"] == "manual_fallback"
+    assert result["corpus_state"] == "empty"
+    assert result["provider_requests"] == 1
+    assert result["fallback_reason"] == "provider_failed"
+    assert "secret" not in json.dumps(result).casefold()
+    conn = storage.connect(tmp_db)
+    try:
+        usage = conn.execute(
+            "SELECT outcome FROM provider_usage WHERE capability = 'source_discovery'"
+        ).fetchone()
+    finally:
+        conn.close()
+    assert usage is not None
+    assert json.loads(usage["outcome"])["status"] == "failed"
+
+
+def test_source_discovery_cancellation_before_provider_call_is_side_effect_free(tmp_db):
+    _core, topic, policy = _fixture(tmp_db)
+    provider = _SourceDiscoveryProvider(
+        {
+            "candidates": [
+                {
+                    "name": "Cancelled source",
+                    "homepage_url": "https://cancelled.example.test/",
+                    "rationale": "Must not be persisted.",
+                    "limitations": "Unverified.",
+                }
+            ]
+        }
+    )
+    BudgetService(tmp_db).set_paid_enabled(True)
+    watches = WatchService(tmp_db, router=_source_discovery_router(tmp_db, provider))
+    watch = _watch(watches, topic, policy)
+
+    result = watches.discover_sources(watch["id"], cancel_check=lambda: True)
+
+    assert provider.calls == 0
+    assert result["outcome"] == "manual_fallback"
+    assert result["fallback_reason"] == "cancelled"
+    assert result["provider_requests"] == 0
+    conn = storage.connect(tmp_db)
+    try:
+        assert conn.execute("SELECT COUNT(*) FROM source_candidates").fetchone()[0] == 0
+        assert conn.execute("SELECT COUNT(*) FROM provider_usage").fetchone()[0] == 0
+    finally:
+        conn.close()

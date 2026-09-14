@@ -9,7 +9,7 @@ This is a source-grounded UX audit and desired experience, not a new browser acc
 | Auth → Home | login mode first, setup toggle; inbox after auth | no welcome/first actionable Watch | AST-24 |
 | Watches | target type/ID, separate policy; seeded UAP name | users must know domain structure; example looks configured | AST-23–27 |
 | Sources | mostly list/inspect; corpus-only discovery | empty-corpus bootstrap dead end | AST-25,30–32 |
-| Vocabulary | approve/reject/edit proposals and query plan | useful boundary, but no semantic default suggestions | AST-28–29 |
+| Vocabulary | approve/reject/edit proposals and query plan | local/default path has no semantic provider suggestions; managed bounded suggestions now need understandable review UX | AST-29 |
 | Home | manual daily briefing, six attention rows, render-time Last checked | weak returning-user summary; timestamp overstates collection | AST-27,33–34 |
 | Reports | canonical target ID; manual generate | no contextual setup or briefing cadence | AST-36–38 |
 | Alerts | Important by default; All/history and rule scope/threshold controls | keep authoritative in-app history when browser permission is denied; no OS-push promise when closed | AST-39 |

@@ -56,6 +56,8 @@ from .ai import (
     ArticleAnalysisRequest,
     CapabilityBundle,
     LocalArticleAnalysisProvider,
+    OpenAICompatibleSourceDiscoveryProvider,
+    OpenAICompatibleVocabularyProvider,
     RoutePolicy,
     SQLiteTelemetrySink,
     TelemetryEvent,
@@ -84,6 +86,11 @@ from .worker import RetryableJobFailure
 
 
 ARTICLE_ANALYSIS_CAPABILITY = "article_analysis"
+VOCABULARY_CAPABILITY = "vocabulary"
+SOURCE_DISCOVERY_CAPABILITY = "source_discovery"
+_MANAGED_CAPABILITIES = frozenset(
+    {ARTICLE_ANALYSIS_CAPABILITY, VOCABULARY_CAPABILITY, SOURCE_DISCOVERY_CAPABILITY}
+)
 ANALYSIS_SCHEMA_VERSION = "article_analysis_schema_v1"
 ANALYSIS_PROMPT_VERSION = "article_analysis_v1"
 ANALYSIS_PROVIDER_LOCAL = "local"
@@ -429,11 +436,17 @@ class AIConfigurationResolver:
         configuration_service: AIConfigurationService | None = None,
         explicit_config: AnalysisProviderConfig | None = None,
         environ: Mapping[str, str] | None = None,
+        vocabulary_provider_factory: Any | None = None,
+        source_discovery_provider_factory: Any | None = None,
     ):
         self.db_path = Path(db_path)
         self.configuration_service = configuration_service or AIConfigurationService(self.db_path)
         self.explicit_config = explicit_config
         self.environ = environ
+        self.vocabulary_provider_factory = vocabulary_provider_factory or OpenAICompatibleVocabularyProvider
+        self.source_discovery_provider_factory = (
+            source_discovery_provider_factory or OpenAICompatibleSourceDiscoveryProvider
+        )
 
     def _generation(self) -> int:
         return int(self.configuration_service.list_connections()["generation"])
@@ -514,7 +527,7 @@ class AIConfigurationResolver:
         snapshot: Mapping[str, Any],
     ) -> AIConfigurationResolution:
         generation = int(snapshot["generation"])
-        if capability not in {ARTICLE_ANALYSIS_CAPABILITY}:
+        if capability not in _MANAGED_CAPABILITIES:
             return self._resolution(
                 self._local_config(),
                 generation=generation,
@@ -609,7 +622,7 @@ class AIConfigurationResolver:
     def resolve(self, capability: str) -> AIConfigurationResolution:
         if self.explicit_config is not None:
             generation = self._generation()
-            if capability not in {ARTICLE_ANALYSIS_CAPABILITY}:
+            if capability not in _MANAGED_CAPABILITIES:
                 return self._resolution(
                     self._local_config(),
                     generation=generation,
@@ -628,7 +641,7 @@ class AIConfigurationResolver:
 
         snapshot = self.configuration_service.list_connections()
         generation = int(snapshot["generation"])
-        if capability not in {ARTICLE_ANALYSIS_CAPABILITY}:
+        if capability not in _MANAGED_CAPABILITIES:
             values = os.environ if self.environ is None else self.environ
             source = (
                 "legacy_environment"
@@ -643,9 +656,20 @@ class AIConfigurationResolver:
                 provider_route="local",
             )
         # Generation 1 with no connection is the untouched migration default;
-        # it is the only state where a legacy environment route is honored.
-        if generation == 1 and not snapshot.get("items"):
+        # it is the only state where a legacy environment route is honored,
+        # and that historical environment contract is Article-Analysis only.
+        if generation == 1 and not snapshot.get("items") and capability == ARTICLE_ANALYSIS_CAPABILITY:
             return self._legacy_resolution(generation)
+        if generation == 1 and not snapshot.get("items"):
+            values = os.environ if self.environ is None else self.environ
+            source = "legacy_environment" if self._LEGACY_ENV_KEYS.intersection(values) else "default_local"
+            return self._resolution(
+                self._local_config(),
+                generation=generation,
+                source=source,
+                reason="legacy_environment_unsupported" if source == "legacy_environment" else "default_local",
+                provider_route="local",
+            )
         return self._managed_resolution(capability, snapshot)
 
     def local_router(
@@ -656,10 +680,10 @@ class AIConfigurationResolver:
     ) -> AIRouter:
         """Build a local-only router from one operation-boundary snapshot.
 
-        Non-Article-Analysis capabilities are intentionally local-only today.
-        Resolving immediately before construction keeps their generation and
-        source metadata aligned with the operation without creating a paid
-        provider path that the managed authority does not support.
+        This is the intentionally local-only compatibility path used by
+        capabilities that do not opt into a managed connection. Resolving
+        immediately before construction keeps generation and source metadata
+        aligned with the operation.
         """
         resolution = self.resolve(capability)
         if resolution.provider_route != "local":
@@ -668,6 +692,72 @@ class AIConfigurationResolver:
             )
         return AIRouter(
             local=CapabilityBundle.local_defaults(),
+            telemetry=telemetry if telemetry is not None else SQLiteTelemetrySink(self.db_path),
+            config_generation=resolution.generation,
+            config_source=resolution.source,
+        )
+
+    def operation_router(
+        self,
+        capability: str,
+        *,
+        telemetry: list[Any] | TelemetrySink | None = None,
+        max_paid_cost_usd: float | None = None,
+    ) -> AIRouter:
+        """Build the provider-neutral router for one managed operation.
+
+        Vocabulary and source discovery use the same managed compatible
+        adapter boundary. Their generic AIRouter reservation is the durable
+        admission authority; a Watch may narrow the cost ceiling to its own
+        paid policy before invoking it.
+        """
+        resolution = self.resolve(capability)
+        if resolution.provider_route != "connection":
+            return AIRouter(
+                local=CapabilityBundle.local_defaults(),
+                telemetry=telemetry if telemetry is not None else SQLiteTelemetrySink(self.db_path),
+                config_generation=resolution.generation,
+                config_source=resolution.source,
+            )
+        provider_factories = {
+            VOCABULARY_CAPABILITY: self.vocabulary_provider_factory,
+            SOURCE_DISCOVERY_CAPABILITY: self.source_discovery_provider_factory,
+        }
+        provider_factory = provider_factories.get(capability)
+        if provider_factory is None:
+            raise AIConfigurationError(
+                f"capability {capability!r} does not have a compatible operation router"
+            )
+        config = resolution.config
+        try:
+            provider = provider_factory(config)
+        except Exception as exc:  # provider construction is an optional boundary
+            raise AIProviderError(
+                f"{capability} provider could not be initialized"
+            ) from exc
+        paid_cost = config.max_paid_cost_usd
+        paid_cost_per_work = config.max_paid_cost_usd_per_work
+        if max_paid_cost_usd is not None:
+            paid_cost = min(paid_cost, max(0.0, float(max_paid_cost_usd)))
+            paid_cost_per_work = min(paid_cost_per_work, max(0.0, float(max_paid_cost_usd)))
+        policy = RoutePolicy(
+            local_enabled=False,
+            paid_enabled=True,
+            timeout_seconds=config.timeout_seconds + 10.0,
+            min_confidence=0.0,
+            max_paid_calls=config.max_paid_calls,
+            max_paid_cost_usd=paid_cost,
+            max_paid_calls_per_work=config.max_paid_calls_per_work,
+            max_paid_cost_usd_per_work=paid_cost_per_work,
+            paid_request_cost_usd=config.request_cost_usd,
+        )
+        return AIRouter(
+            local=CapabilityBundle.local_defaults(),
+            paid=CapabilityBundle(
+                vocabulary=provider if capability == VOCABULARY_CAPABILITY else None,
+                source_discovery=provider if capability == SOURCE_DISCOVERY_CAPABILITY else None,
+            ),
+            policy=policy,
             telemetry=telemetry if telemetry is not None else SQLiteTelemetrySink(self.db_path),
             config_generation=resolution.generation,
             config_source=resolution.source,
@@ -1574,6 +1664,8 @@ __all__ = [
     "ANALYSIS_SCHEMA_VERSION",
     "ARTIFACT_INPUT_VIEW_VERSION",
     "ARTICLE_ANALYSIS_CAPABILITY",
+    "VOCABULARY_CAPABILITY",
+    "SOURCE_DISCOVERY_CAPABILITY",
     "AIProviderValidationService",
     "AnalysisProviderConfig",
     "ArticleAnalysisService",

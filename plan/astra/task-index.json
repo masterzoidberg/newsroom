@@ -152,7 +152,7 @@
     "accept": "Fake provider supplies useful varied synonyms/acronyms/aliases with rationale without automatic approval; malformed/paid-disabled/uncertain responses preserve configuration; unrelated ambiguous meanings can be rejected and stay rejected.",
     "tests": "UAP variants including historical aerial wording, company/person homonyms and unrelated niche fixtures; request count/budget/validation/approval-scope regressions.",
     "tier": "3",
-    "status": "READY",
+    "status": "DONE",
     "prompt": null
   },
   {
@@ -164,7 +164,7 @@
     "accept": "Approve/edit/reject changes only intended terms; unavailable/disabled provider explains manual fallback; approved versus suggested scope is visibly distinct after reload.",
     "tests": "Browser fake suggestions/empty/error/edit/rejection/reload/keyboard/390px; scope payload inspection.",
     "tier": "2",
-    "status": "NOT_STARTED",
+    "status": "DONE",
     "prompt": null
   },
   {
@@ -172,11 +172,11 @@
     "title": "Decide and freeze fresh-corpus source recommendation contract",
     "deps": "AST-29",
     "files": "plan/astra/DECISIONS.md; plan/astra/AI_PROVIDER_SETTINGS.md; newsroom/intelligent_monitoring.py; newsroom/acquisition.py",
-    "approach": "Tier A reviews a bounded candidate-suggestion capability using the managed compatible adapter, followed by existing safe URL/feed validation. Separate model-proposed unverified URLs from corpus-derived observed URLs. Decide whether an external search adapter is actually necessary using empty-corpus fixtures; if so record one provider/transport/cost contract and human preference only if materially needed. Deliver a small schema/API contract and refined AST-31 prompt before coding; do not promise exhaustive web discovery.",
-    "accept": "Candidate provenance, reason, validation and rejection semantics are fixed; no automatic source attachment or evidence creation; AST-31 has no unresolved provider/schema decisions.",
+    "approach": "Tier A freezes a bounded source_discovery candidate-suggestion capability on the existing OpenAI-compatible structured adapter, operation-boundary resolver and durable budget authority. The contract separates model-proposed unverified URLs from corpus-observed URLs, defines strict bounded request/output shapes, staged structural/acquisition validation, server-owned provenance, explicit review/dedupe/rejection and honest fallback/cancellation semantics. Empty information-need corpus cases use the model-only lane; no external search adapter, migration, crawler, SDK or second ledger is required, and exhaustive web discovery is not promised.",
+    "accept": "Candidate provenance, reason, validation, fallback, cancellation and rejection semantics are fixed; no automatic source attachment, fetch, Document, Claim or Evidence creation; the existing API/job result shape remains compatible; AST-31 has no unresolved provider/schema/ledger decisions.",
     "tests": "Design review against empty UAP/person/event cases, SSRF limits, source approval and zero-paid fallback; no paid calls.",
     "tier": "A",
-    "status": "NOT_STARTED",
+    "status": "DONE",
     "prompt": null
   },
   {
@@ -184,11 +184,11 @@
     "title": "Implement bounded fresh-corpus source candidates",
     "deps": "AST-30",
     "files": "newsroom/intelligent_monitoring.py; newsroom/ai.py; newsroom/domain_api.py; tests/test_phase24_intelligent_monitoring.py",
-    "approach": "Implement exactly AST-30 approved adapter/contract using existing candidate persistence and durable limits. Model suggestions are unverified until safe transport validation; enrich accepted candidates with rationale, discovery provenance and limitations. Preserve corpus discovery and rejection/dedupe. Stop if adapter requires another provider or unanticipated schema.",
-    "accept": "Empty corpus can return bounded explained candidates through a fake supported capability; bad/unsafe/hallucinated URLs never activate collection or become Evidence; paid-disabled mode returns honest manual/corpus fallback.",
-    "tests": "Fake discovery, invalid URL/redirect/private destinations, repeated/rejected candidates, budget/cancellation and no mutation before approval.",
+    "approach": "Implement AST-30's provider-neutral SourceDiscoveryRequest/SourceDiscoveryOutput schemas with strict bounds in newsroom/ai.py; register only source_discovery on the existing OpenAI-compatible adapter/resolver and durable provider_usage. Extend WatchService/existing authenticated routes to call only for empty information-need corpora, preserve deterministic proposals, validate every model URL with structural AcquisitionPolicy rules before persistence, write inert server-provenance ai_suggestion rows, and keep the explicit review/dedupe/attachment boundary. No migration, external search adapter, auto-fetch, auto-approval or Evidence path.",
+    "accept": "Empty corpus returns bounded explained candidates through a fake source_discovery route; deterministic corpus proposals short-circuit without provider calls; malformed, structurally unsafe, private, redirect-unsafe or hallucinated URLs never activate collection or become a Document, Claim or Evidence; repeated and rejected candidates retain identity/history; disabled, unavailable, budget-blocked, failed and cancelled runs return honest manual/corpus fallback with no unintended mutation; approved candidates still require the existing explicit review path.",
+    "tests": "Fake source-discovery adapter; strict schema/extra-field/bounds, empty/populated corpus, invalid/private URL, acquisition redirect/peer checks, repeated/rejected dedupe, durable budget/cancellation/uncertain-call accounting, API/job result and no mutation before approval.",
     "tier": "3",
-    "status": "NOT_STARTED",
+    "status": "DONE",
     "prompt": null
   },
   {
@@ -200,7 +200,7 @@
     "accept": "Empty-corpus user sees working manual fallback; recommendation approval is understandable and deduped; failed source is actionable without hiding successful siblings.",
     "tests": "Browser populated/empty/unsafe/unavailable discovery and partial-source failure at desktop/390px; network responses and approved-source counts.",
     "tier": "2",
-    "status": "NOT_STARTED",
+    "status": "DONE",
     "prompt": null
   },
   {
@@ -308,7 +308,7 @@
     "accept": "Question entry creates/selects the correct canonical need without IDs and retries safely; unsuccessful pursuit leaves the gap open; question/hypothesis material never becomes an accepted Claim without existing evidence verification.",
     "tests": "API question-target/retry tests; browser question/gap/no-findings/failure/phone; phase25 approval chain.",
     "tier": "3",
-    "status": "NOT_STARTED",
+    "status": "READY",
     "prompt": null
   },
   {

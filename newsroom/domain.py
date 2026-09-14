@@ -94,7 +94,7 @@ def _as_dict(row: sqlite3.Row | None) -> dict[str, Any] | None:
     return dict(row) if row is not None else None
 
 
-AI_SUPPORTED_CAPABILITIES = ("article_analysis",)
+AI_SUPPORTED_CAPABILITIES = ("article_analysis", "vocabulary", "source_discovery")
 AI_ADAPTER_OPENAI_COMPATIBLE = "openai_compatible"
 AI_LOCAL_ROUTE = "local"
 AI_CONNECTION_ROUTE = "connection"

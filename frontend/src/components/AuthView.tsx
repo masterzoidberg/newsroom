@@ -1,6 +1,8 @@
 import { FormEvent, useState } from "react";
 import { apiFetch, ApiError, jsonBody } from "../lib/api";
 
+const MIN_PASSWORD_LENGTH = 12;
+
 export function AuthView({ onAuthenticated }: { onAuthenticated: (username: string) => void }) {
   const [mode, setMode] = useState<"login" | "setup">("login");
   const [username, setUsername] = useState("admin");
@@ -10,8 +12,8 @@ export function AuthView({ onAuthenticated }: { onAuthenticated: (username: stri
 
   async function submit(event: FormEvent) {
     event.preventDefault();
-    if (!username.trim() || password.length < 8) {
-      setError("Enter a username and a password of at least 8 characters.");
+    if (!username.trim() || password.length < MIN_PASSWORD_LENGTH) {
+      setError(`Enter a username and a password of at least ${MIN_PASSWORD_LENGTH} characters.`);
       return;
     }
     setWorking(true);
@@ -38,7 +40,7 @@ export function AuthView({ onAuthenticated }: { onAuthenticated: (username: stri
           <label htmlFor="auth-username">Username</label>
           <input id="auth-username" name="username" value={username} onChange={(event) => setUsername(event.target.value)} autoComplete="username" spellCheck={false} />
           <label htmlFor="auth-password">Password</label>
-          <input id="auth-password" name="password" value={password} onChange={(event) => setPassword(event.target.value)} type="password" autoComplete={mode === "setup" ? "new-password" : "current-password"} />
+          <input id="auth-password" name="password" value={password} onChange={(event) => setPassword(event.target.value)} type="password" minLength={MIN_PASSWORD_LENGTH} autoComplete={mode === "setup" ? "new-password" : "current-password"} />
           {error && <p className="form-error" role="alert">{error}</p>}
           <button className="primary-button" type="submit" disabled={working}>{working ? "Working…" : mode === "setup" ? "Create workspace" : "Sign in"}</button>
         </form>

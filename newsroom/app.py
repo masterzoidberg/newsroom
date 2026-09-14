@@ -34,7 +34,7 @@ from .evidence import EvidenceService
 from .integrity import check_database
 from .migrations import apply_migrations
 from .runtime_status import RuntimeControlAction, RuntimeControlUnavailable, RuntimeStatusService
-from .security import RequestLimiter, subsystem_for_path
+from .security import RateLimitDecision, RequestLimiter, subsystem_for_path
 from .telemetry import OperationalTelemetry
 
 
@@ -143,16 +143,21 @@ def create_app(
         supplied = request.headers.get("X-Request-ID", "")
         request.state.request_id = supplied if _REQUEST_ID.fullmatch(supplied) else uuid.uuid4().hex
         client_host = request.client.host if request.client else "unknown"
+        is_api_route = request.url.path.startswith("/api/")
         is_auth_route = request.url.path in {"/api/v1/auth/setup", "/api/v1/auth/login"}
         is_metrics_route = request.url.path == "/api/v1/metrics"
-        if is_auth_route:
-            rate_bucket, rate_limit = "auth", AUTH_REQUESTS_PER_MINUTE
-        elif is_metrics_route:
-            rate_bucket, rate_limit = "metrics", METRICS_REQUESTS_PER_MINUTE
-        else:
-            rate_bucket, rate_limit = "api", GENERAL_REQUESTS_PER_MINUTE
-        decision = request_limiter.check(f"{client_host}:{rate_bucket}", rate_limit)
-        if not decision.allowed:
+        rate_bucket: str | None = None
+        rate_limit: int | None = None
+        decision: RateLimitDecision | None = None
+        if is_api_route:
+            if is_auth_route:
+                rate_bucket, rate_limit = "auth", AUTH_REQUESTS_PER_MINUTE
+            elif is_metrics_route:
+                rate_bucket, rate_limit = "metrics", METRICS_REQUESTS_PER_MINUTE
+            else:
+                rate_bucket, rate_limit = "api", GENERAL_REQUESTS_PER_MINUTE
+            decision = request_limiter.check(f"{client_host}:{rate_bucket}", rate_limit)
+        if decision is not None and not decision.allowed:
             response = JSONResponse(
                 status_code=429,
                 content=_error_payload(request, "rate_limited", "request rate limit exceeded"),
@@ -169,7 +174,8 @@ def create_app(
             )
             return response
         declared_length = request.headers.get("Content-Length")
-        if declared_length:
+        if declared_length and is_api_route:
+            assert decision is not None and rate_limit is not None
             try:
                 too_large = int(declared_length) > MAX_REQUEST_BYTES
             except ValueError:
@@ -189,7 +195,8 @@ def create_app(
                     duration_ms=(time.perf_counter() - started) * 1000,
                 )
                 return response
-        elif request.method in {"POST", "PUT", "PATCH"}:
+        elif is_api_route and request.method in {"POST", "PUT", "PATCH"}:
+            assert decision is not None and rate_limit is not None
             received = 0
             chunks: list[bytes] = []
             original_receive = request._receive
@@ -240,8 +247,9 @@ def create_app(
                 subsystem=subsystem_for_path(request.url.path),
             )
             raise
-        response.headers["X-RateLimit-Limit"] = str(rate_limit)
-        response.headers["X-RateLimit-Remaining"] = str(decision.remaining)
+        if decision is not None and rate_limit is not None:
+            response.headers["X-RateLimit-Limit"] = str(rate_limit)
+            response.headers["X-RateLimit-Remaining"] = str(decision.remaining)
         _security_headers(response, request.state.request_id, request)
         app.state.telemetry.observe(
             method=request.method,

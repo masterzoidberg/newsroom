@@ -395,6 +395,32 @@ export type Timeline = { events?: Array<Record<string, unknown>>; revisions?: Ar
 
 export type CollectionRecord = Record<string, unknown> & { id: string; name?: string; title?: string; status?: string; enabled?: boolean };
 
+export type VocabularyKind =
+  | "primary"
+  | "alias"
+  | "synonym"
+  | "acronym"
+  | "acronym_expansion"
+  | "related"
+  | "include"
+  | "exclude";
+
+export type WatchVocabularyTerm = {
+  id: string;
+  watch_id?: string;
+  term: string;
+  term_normalized?: string;
+  kind: VocabularyKind;
+  origin: "user" | "ai" | "deterministic" | "topic" | "subject" | string;
+  status: "suggested" | "approved" | "rejected" | string;
+  enabled: boolean | number;
+  expansion_of?: string | null;
+  rationale?: string | null;
+  reviewed_at?: string | null;
+  reviewed_by?: string | null;
+  created_at?: string;
+};
+
 export type ResearchQuestionClaim = {
   claim_id: string;
   relationship: "supports" | "contradicts" | "contextualizes" | "resolves";
@@ -434,6 +460,78 @@ export type ResearchQuestionDetail = ResearchQuestion & {
   hypotheses?: Hypothesis[];
   assessment_history?: Array<Record<string, unknown>>;
 };
+
+export type WatchResearchContext = {
+  question_id: string;
+  question: string;
+  assessment_state: ResearchQuestion["assessment_state"] | string;
+  assessment_explanation: string;
+  gaps: ResearchQuestionGap[];
+  open_gap_count: number;
+  active_gap?: ResearchQuestionGap | null;
+  tasks: ResearchTask[];
+  evidence_gated: boolean;
+  candidate_note: string;
+};
+
+export type PausedWatchDraft = {
+  draft_type: "paused_watch";
+  version: 1;
+  resumed: boolean;
+  request_id: string;
+  category_id: string;
+  topic_id: string;
+  policy_id: string;
+  watch_id: string;
+  name: string;
+  interest: string;
+  primary_terms: string[];
+  status: "paused";
+  target_type: "topic";
+  discovery_enabled: false;
+  priority: "normal";
+  next_action: "add_sources";
+  paid_budget_usd: number;
+  paid_escalation_enabled: false;
+  monitor_count: number;
+  job_count: number;
+  category: CollectionRecord;
+  topic: CollectionRecord;
+  topic_terms: CollectionRecord[];
+  policy: CollectionRecord;
+  watch: CollectionRecord;
+};
+
+export type QuestionWatchDraft = {
+  draft_type: "question_watch";
+  version: 1;
+  resumed: boolean;
+  request_id: string;
+  watch_id: string;
+  research_question_id: string;
+  question_created: boolean;
+  name: string;
+  interest: string;
+  question: ResearchQuestionDetail;
+  research_question: ResearchQuestionDetail;
+  gap: ResearchQuestionGap;
+  primary_terms: string[];
+  status: "paused";
+  target_type: "research_question";
+  target_id: string;
+  discovery_enabled: false;
+  priority: "normal";
+  next_action: "add_sources";
+  policy_id: string;
+  paid_budget_usd: number;
+  paid_escalation_enabled: false;
+  monitor_count: number;
+  job_count: number;
+  policy: CollectionRecord;
+  watch: CollectionRecord;
+};
+
+export type WatchSetupResponse = PausedWatchDraft | QuestionWatchDraft;
 
 export type Hypothesis = {
   id: string;
