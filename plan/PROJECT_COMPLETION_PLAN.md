@@ -1,5 +1,8 @@
 # Newsroom v2 — project assessment and completion plan
 
+Status: **historical assessment; current execution cursor is `plan/ACTIVE.md`**.
+Retain this document for its baseline assessment and release-gate evidence.
+
 Assessment date: 2026-09-06  
 Repository: `G:\Projects\Newsroom -v2`  
 Inspected branch: `main`  

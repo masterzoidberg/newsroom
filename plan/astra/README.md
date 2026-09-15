@@ -1,8 +1,10 @@
 # Astra completion plan
 
+Status: **historical execution ledger; superseded for current implementation by `plan/rework-v2/`**. Retain this directory for AST completion evidence and prior decisions. Do not take its READY task as the active queue unless `plan/ACTIVE.md` explicitly promotes it.
+
 Audit baseline: `aad7d17ec91b56b68e1252c70bdf6521060c0bd1`, branch `main`, 2026-09-06 America/New_York (work continued after midnight UTC). The audit and planning baseline is retained; implementation now continues on the isolated `astra/AST-25-27-first-watch` branch.
 
-This directory is the canonical new completion layer requested by the owner. It supersedes historical task ordering, not evidence/provenance invariants, migration history, or frozen trial protocols. `plan/astra` existed but was empty when inspected. Unrelated `.kilo/` and `Newsroom -v2.zip` were preserved.
+This directory was the canonical completion layer for the Astra execution lane. It superseded earlier task ordering, not evidence/provenance invariants, migration history, or frozen trial protocols. Its records remain useful historical implementation evidence. Unrelated `.kilo/` and ZIP snapshots are preserved.
 
 ## Start here
 
@@ -25,4 +27,4 @@ This directory is the canonical new completion layer requested by the owner. It 
 | [DELETE_DEFER_KEEP.md](DELETE_DEFER_KEEP.md) | Safe simplification decisions |
 | [AUDIT_EVIDENCE.md](AUDIT_EVIDENCE.md) | Checks, limitations, source map, current observations |
 
-Future-session instruction: **Read plan/astra and execute the current READY task.** This audit itself does not authorize paid calls, changing the frozen trial, publishing a release, or beginning implementation during the audit session.
+Historical-session instruction: read this directory to understand prior AST work and evidence. Current execution starts from `plan/ACTIVE.md` and `plan/rework-v2/`; this directory does not authorize paid calls, changing the frozen trial, publishing a release, or beginning implementation.

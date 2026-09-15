@@ -10,8 +10,9 @@ A first-time user describes an interest, confirms scope and sources, starts a re
 - [x] Owner decisions: honest no-credential mode; linked article retrieval in MVP; retain historical knowledge after detach.
 - [x] Architecture challenge, invariant pass, schema necessity and final adversarial review.
 - [x] Planning documents and acceptance matrix drafted and cross-checked.
+- [x] Managed migration-authority prerequisite implemented; focused authority tests pass.
 - [ ] Owner authorizes implementation.
-- [ ] M0.1 Scope and membership history.
+- [ ] M0.1 Scope and membership history — schema-40 foundation landed; service integration and acceptance evidence remain.
 - [ ] M0.2 Observations and unchanged manifests.
 - [ ] M0.3 Contextual processing and recovery.
 - [ ] M0.4 Evidence projection.
@@ -25,7 +26,9 @@ A first-time user describes an interest, confirms scope and sources, starts a re
 - [ ] M6 Interpretability, feedback, visual and Settings cleanup.
 - [ ] M7 Integrated qualification and migration/recovery rehearsal.
 
-No unchecked milestone is implemented or verified by this planning session.
+Unchecked milestones are not acceptance-complete. M0.1 contains partially
+landed migration scaffolding, but its runtime integration and acceptance gate
+remain open; no later milestone is implemented or verified here.
 
 ## Surprises & Discoveries
 
@@ -40,21 +43,28 @@ No unchecked milestone is implemented or verified by this planning session.
 
 ## Decision Log
 
-Binding decisions D01–D26 are in [DECISIONS.md](DECISIONS.md). Any change here must reference a new/superseding entry. Key choices: Watch identity; contextual processing tuple; interval/observation history; shared existing acquisition; Runs plus causal joins; Watch target in existing LivingReport; strict common read boundary; no equivalent no-credential AI promise.
+Binding decisions D01–D31 are in [DECISIONS.md](DECISIONS.md). Any change here must reference a new/superseding entry. Key choices: Watch identity; contextual processing tuple; interval/observation history; shared existing acquisition; Runs plus causal joins; Watch target in existing LivingReport; strict common read boundary; no equivalent no-credential AI promise; managed migration authority; per-hop acquisition safety.
 
 ## Outcomes & Retrospective
 
-Planning outcome: an executable staged design with migration/backfill and adversarial acceptance requirements. Production outcome: none yet. Initial audit evidence includes 19 focused existing tests and a fake-transport reproduction; no full-suite, live-provider or release qualification claim. Append actual milestone outcomes here during implementation, including unexpected compatibility problems and remaining owner gates.
+Planning outcome: an executable staged design with migration/backfill and adversarial acceptance requirements. Current implementation outcome: managed migration authority and schema-40 additive M0.1 scaffolding landed through `9d8077c`, but M0.1 is not closed. The focused authority tests pass; the full suite currently has 1,016 passed, 2 failed, and 1 skipped. No live-provider or release qualification claim is made. Append actual milestone outcomes here during implementation, including unexpected compatibility problems and remaining owner gates.
 
 Planning validation on 2026-09-14: nine expected Markdown documents present; local document links resolve; code fences balanced; 114 distinct acceptance case IDs; every explicit milestone acceptance reference/range resolves. Final code challenge added the cross-domain provenance proof and corrected endpoint migration ordering. These checks validate the plan's structure, not implementation behavior. Only `plan/rework-v2` files were authored in this continuation.
 
 ## Context / Orientation
 
-Backend is Python/FastAPI/SQLite with direct SQL services. Frontend is React 18/TypeScript/Vite, no router dependency. Current schema 39; current working tree includes unfinished/uncommitted Astra work. See TECHNICAL_FINDINGS for exact symbols. Preserve `plan/STANDALONE_NEWSROOM_PRODUCT_SPEC.md` evidence/private/runtime invariants and frozen trial boundaries. `plan/astra` is historical execution evidence for reused work, not this rework's task queue.
+Backend is Python/FastAPI/SQLite with direct SQL services. Frontend is React 18/TypeScript/Vite, no router dependency. Current branch schema authority is version 40; the schema-40 M0.1 foundation is present, while contextual runtime work remains incomplete. See TECHNICAL_FINDINGS for exact symbols. Preserve `plan/STANDALONE_NEWSROOM_PRODUCT_SPEC.md` evidence/private/runtime invariants and frozen trial boundaries. `plan/astra` is historical execution evidence for reused work, not this rework's task queue.
 
 ### Execution method
 
-Execute one bounded milestone slice at a time. Each milestone below contains several deliverables; split its commits by the numbered steps without weakening its exit gate. Do not launch a monolithic Phase 0 refactor. New files listed below are **proposed**, existing paths are verified. Keep old APIs working through explicit compatibility adapters; do not let adapters become competing authorities. Do not add framework/dependency/environment choices without a proven requirement.
+Execute one bounded milestone slice at a time. Within an authorized slice,
+continue through all of its numbered deliverables until the stated stop/exit
+gate; an individual file, test, or subtask is not a handoff boundary. Split
+commits by the numbered steps without weakening the exit gate. Do not launch a
+monolithic Phase 0 refactor. New files listed below are **proposed**, existing
+paths are verified. Keep old APIs working through explicit compatibility
+adapters; do not let adapters become competing authorities. Do not add
+framework/dependency/environment choices without a proven requirement.
 
 All migration slices include integrity checks, explicit export/import handling, upgrade tests and a writer cutover. Never allocate a migration number from this document. Inspect latest migrations first. Backups and test DBs stay outside repository. Quiesce workers for upgrades; no old/new mixed writer process. Backfill is offline, deterministic, bounded and zero-paid. Missing legacy history is reported, not guessed.
 

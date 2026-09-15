@@ -1,6 +1,6 @@
 # Newsroom Research rework
 
-Status: **planning complete; implementation not authorized**. Owner decisions incorporated 2026-09-14. Latest adversarial review integrated against branch `astra/AST-25-27-first-watch` at commit `2b367356d56a02acff9138792a772b938e087a68`; later plan-only commits may advance HEAD without changing that reviewed runtime baseline. This is not a release-qualified baseline.
+Status: **planning complete; implementation partially started, M0.1 not acceptance-complete**. Owner decisions incorporated 2026-09-14. The adversarial review was performed against commit `2b367356d56a02acff9138792a772b938e087a68`; subsequent commits added the managed migration-authority prerequisite and schema-40 M0.1 foundation. This is not a release-qualified baseline.
 
 Newsroom currently asks the user to configure its machinery before it gives them useful research. Some problems are presentational, but shared-source processing, Research evidence isolation, source discovery, first-check semantics, and managed migration authority need real backend corrections. A navigation rename alone cannot fix them.
 

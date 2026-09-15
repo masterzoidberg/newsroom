@@ -7,10 +7,11 @@ Target workspace: `G:\Projects\Newsroom -v2`
 This repository is the standalone successor to the completed Hermes Newsroom
 reference implementation. **Hermes is not a runtime dependency.**
 
-Current completion execution is governed by `plan/astra/`. The phase summaries
-below are retained as historical implementation evidence; they are not the
-current task-order authority. See `docs/reviews/ASTRA_EXECUTION_BASELINE.md` for
-the isolated development target and current reproducibility record.
+Current execution is tracked by `plan/ACTIVE.md` and currently follows
+`plan/rework-v2/`. The Astra and phase summaries below are retained as
+historical implementation evidence; they are not the current task-order
+authority. See `docs/reviews/ASTRA_EXECUTION_BASELINE.md` for the isolated
+development target and reproducibility record for that earlier execution lane.
 
 ## Current state
 
@@ -84,8 +85,10 @@ provenance chain, reconstructs the exact analyzed slice, verifies candidate
 excerpts by unique exact code-point match, and atomically persists immutable
 verified EvidenceSpans, pending Claims, and ClaimEvidence links. Ambiguous,
 fabricated, and out-of-slice candidates fail closed; model offsets are never
-trusted, and legacy/manual spans remain distinct. The current applied schema
-is migration 0039 / schema version 39. Migration 0037 adds the durable
+trusted, and legacy/manual spans remain distinct. The Astra baseline described
+here was migration 0039 / schema version 39. The current branch adds a partial
+schema-40 M0.1 foundation; it is not release-qualified and its remaining
+integration is tracked in `plan/ACTIVE.md`. Migration 0037 adds the durable
 owner-selected briefing schedule, migration 0038 adds typed non-secret AI
 connection metadata and supported Article Analysis routing, and migration 0039
 adds only a non-secret credential-cleanup marker. AST-07 now stores write-only
@@ -136,13 +139,15 @@ user-approved subject and Source set; those inputs must not be invented.
 ## Authority
 
 1. `plan/STANDALONE_NEWSROOM_PRODUCT_SPEC.md` — product invariants and intended product contract.
-2. `plan/astra/README.md` — current completion execution layer and reading order.
-3. `plan/astra/TASKS.md` and `plan/astra/NEXT.md` — canonical task states and immediate queue.
-4. `docs/ARCHITECTURE.md` — architecture overview.
-5. `docs/PORTING_AUDIT.md` — what was reused, redesigned, or rejected from v1.
+2. `plan/ACTIVE.md` — durable current-plan and resume cursor.
+3. `plan/rework-v2/README.md` and `plan/rework-v2/EXECUTION_PLAN.md` — current
+   rework authority and sequence.
+4. `docs/ARCHITECTURE.md` and `docs/adr/` — architecture and durable decisions.
+5. `plan/astra/`, `plan/phases-v2/`, and `plan/plan-rework/` — historical
+   implementation evidence unless promoted by `plan/ACTIVE.md`.
 
 Historical phase plans and `plan/MASTER_PLAN.md` remain evidence and migration
-history; they do not override Astra task ordering.
+history; they do not override the current rework-v2 sequence.
 
 ## Bootstrap validation
 

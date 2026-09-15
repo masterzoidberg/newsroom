@@ -1,6 +1,12 @@
 # Newsroom completion plan rework
 
-Prepared 2026-09-09 for adoption after the active backend-acceptance task finishes. This directory is a proposed successor execution plan. Until the transition checklist is completed, `plan/astra/TASKS.md` remains the status authority.
+Status: **historical transition proposal; superseded by `plan/rework-v2/`**.
+Retain this directory for its runbook and transition rationale; it is not the
+current execution authority.
+
+Prepared 2026-09-09 for adoption after the active backend-acceptance task
+finished. The proposal was superseded by the 2026-09-14 rework-v2 package.
+`plan/astra/TASKS.md` remains historical status evidence, not the active queue.
 
 ## Purpose
 
@@ -21,6 +27,8 @@ This rework:
 - [AUTONOMOUS_EXECUTION_RUNBOOK](AUTONOMOUS_EXECUTION_RUNBOOK.md): the minimum-handoff sequence for Codex to execute multiple bounded tasks per run.
 - [TRANSITION_CHECKLIST](TRANSITION_CHECKLIST.md): how to adopt the rework safely after backend acceptance finishes.
 
-## Authority rule
+## Historical authority rule
 
-Do not execute from this directory while the current backend task is still running. After transition, create one canonical status ledger from this plan and archive or clearly supersede conflicting `NEXT` instructions. Historical evidence must remain unchanged.
+Do not execute from this directory. Its autonomous-execution guidance remains
+reference material; the current cursor and active plan are `plan/ACTIVE.md` and
+`plan/rework-v2/`. Historical evidence must remain unchanged.

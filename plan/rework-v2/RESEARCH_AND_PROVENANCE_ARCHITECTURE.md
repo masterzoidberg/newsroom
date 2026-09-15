@@ -1,6 +1,6 @@
 # Research and provenance architecture
 
-Status: proposed binding implementation contracts, not implemented schema. Read with PRODUCT_MODEL invariants. Names below are implementation targets; migration numbers are deliberately unallocated.
+Status: binding implementation contracts. The schema-40 scope/membership foundation is partially implemented; contextual processing, observation, projection, and the remaining contracts below are still implementation targets. Read with PRODUCT_MODEL invariants and do not infer completion from migration presence alone.
 
 ## A. Durable identity and scope
 

@@ -1,6 +1,9 @@
 # Standalone Newsroom — Master Build Plan
 
-Status: **Execution planning authority after acceptance**  
+Status: **historical architecture/build baseline; current execution sequence is
+`plan/rework-v2/EXECUTION_PLAN.md`**. Product invariants remain authoritative
+through `plan/STANDALONE_NEWSROOM_PRODUCT_SPEC.md`.
+
 Product authority: `plan/STANDALONE_NEWSROOM_PRODUCT_SPEC.md`  
 Porting evidence: `docs/PORTING_AUDIT.md`  
 Target source workspace: `G:\Projects\Newsroom -v2`

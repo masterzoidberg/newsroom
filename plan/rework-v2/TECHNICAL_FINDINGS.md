@@ -1,6 +1,10 @@
 # Technical findings
 
-Audit scope: current working files, not only committed HEAD or historical plans. Paths below are repository-relative. VERIFIED means read in code, or reproduced where explicitly stated. It does not mean the whole subsystem was live-qualified.
+Audit scope: the pre-M0.1 implementation baseline plus current working files,
+not only historical plans. The audit baseline was schema 39; the current branch
+adds a schema-40 M0.1 foundation whose runtime integration is not yet verified.
+Paths below are repository-relative. VERIFIED means read in code, or reproduced
+where explicitly stated. It does not mean the whole subsystem was live-qualified.
 
 ## Evidence map
 
@@ -62,7 +66,13 @@ The challenge pass reconfirmed version-only active guards, contextual analysis i
 
 Existing relevant suites: phases 06 acquisition, 07 jobs, 08 monitors, 11 reports/briefings, 14 Ask, 18 artifacts, 19 processing, 20 relevance, 21 analysis/invocation, 22 promotion/trust, 23 Story/report/alert chain, 24 Watches, 25 Questions, 28 attention/robustness, 29 temporal; scheduler/monitor coalescing and worker lease suites. Frontend pytest checks are largely source-contract assertions. `scripts/ast32_source_smoke.py` and other Astra smoke scripts already use Python Playwright; reuse that harness rather than adding a second browser stack.
 
-Current schema is 39. New relations require `migrations.py`, `integrity.py`, `operations.py` explicit export/import columns and recovery tests together. Legacy CHECK constraints for Ask/report targets require controlled SQLite table rebuilds, not rewriting old migrations. Installed rollback must restore a verified database backup with matching code, never launch old binaries against new writer contracts.
+The audit baseline was schema 39; the current branch adds schema 40 for the
+M0.1 foundation. New relations still require `integrity.py`, `operations.py`
+explicit export/import handling and recovery tests together. Legacy CHECK
+constraints for Ask/report targets require controlled SQLite table rebuilds, not
+rewriting old migrations. Installed rollback must restore a verified database
+backup with matching code, never launch old binaries against new writer
+contracts.
 
 INFERRED: globally scoped Story/report text could leak unrelated Research context if reused directly; scope must constrain both included IDs and rendered text. Historical ownership may sometimes be reconstructed from Monitor need + relevance records, but absence of historical attachment intervals prevents universal reconstruction.
 

@@ -1,5 +1,9 @@
 # Active Phase Plan
 
+Status: **historical phase-plan archive; current implementation sequence is
+`plan/rework-v2/`**. Phase 29 value/release gates remain relevant when the
+current plan references them, but this README is not the active task queue.
+
 Phase 27 — Advanced Story Intelligence is complete.
 
 Phase 28.5, Phase 28.75, and Phase 28.875 completed and accepted the
@@ -22,7 +26,7 @@ the intelligence-value decision gate.
 The live repository is implementation authority. Preserve unrelated work;
 never reset, clean, rewrite history, or push as part of phase closure.
 
-## Authority
+## Historical authority
 
 1. `plan/STANDALONE_NEWSROOM_PRODUCT_SPEC.md` — product contract.
 2. `plan/MASTER_PLAN.md` — implementation sequence and gates.
